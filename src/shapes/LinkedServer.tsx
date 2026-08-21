@@ -41,6 +41,7 @@ import { CookieJar } from 'tough-cookie';
 import { lincdServer } from '../ontologies/lincd-server.js';
 import { linkedShape } from '../package.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
+import { isViteSsrSourceCss } from '../utils/viteSsrCss.js';
 import { LincdAPI } from './LincdAPI.js';
 import type { RoutesConfig, RouteConfig } from '../types/RouteConfig.js';
 
@@ -1561,7 +1562,7 @@ export class LinkedServer extends Shape {
         any
       >) {
         if (seen.has(id)) continue;
-        if (!/\.(module\.)?css(\?(?!.*inline)[^?]*)?$/.test(id)) continue;
+        if (!isViteSsrSourceCss(id)) continue;
         seen.add(id);
         try {
           const inlineUrl = id + (id.includes('?') ? '&' : '?') + 'inline';
