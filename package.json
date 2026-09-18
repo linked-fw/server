@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/linked-cm/server.git"
+    "url": "git+https://github.com/linked-fw/server.git"
   },
   "version": "2.3.0",
   "linkedPackage": true,
