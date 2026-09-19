@@ -120,3 +120,62 @@ describe('LocalFileStore.saveFile options', () => {
     );
   });
 });
+
+// The end-to-end path: core's LinkedFileStorage forwards an unspecified
+// preventDuplicates as undefined, and this store turns that into its own
+// default. A two-argument saveFile() therefore has to keep behaving exactly as
+// it did before options existed.
+describe('LinkedFileStorage.saveFile through LocalFileStore', () => {
+  let LinkedFileStorage: any;
+
+  beforeAll(async () => {
+    ({ LinkedFileStorage } = await import(
+      '@_linked/core/utils/LinkedFileStorage'
+    ));
+    LinkedFileStorage.setDefaultStore(store);
+  });
+
+  it('suffixes the name when the caller passes no options at all', async () => {
+    const first = await LinkedFileStorage.saveFile(
+      'two-args.txt',
+      Buffer.from('first')
+    );
+    const second = await LinkedFileStorage.saveFile(
+      'two-args.txt',
+      Buffer.from('second')
+    );
+
+    const suffixed = /^http:\/\/localhost:4000\/uploads\/two-args_[a-z0-9]{6}\.txt$/;
+    expect(first).toMatch(suffixed);
+    expect(second).toMatch(suffixed);
+    // the second save must not have overwritten the first
+    expect(second).not.toBe(first);
+
+    const nameOf = (url: string) => url.substring(url.lastIndexOf('/') + 1);
+    expect(
+      await fs.readFile(path.join(tmpDir, UPLOAD_DIR, nameOf(first)), 'utf8')
+    ).toBe('first');
+    expect(
+      await fs.readFile(path.join(tmpDir, UPLOAD_DIR, nameOf(second)), 'utf8')
+    ).toBe('second');
+  });
+
+  it('overwrites when the caller explicitly sets preventDuplicates to false', async () => {
+    const first = await LinkedFileStorage.saveFile(
+      'overwrite-me.txt',
+      Buffer.from('first'),
+      { mimeType: 'text/plain', preventDuplicates: false }
+    );
+    const second = await LinkedFileStorage.saveFile(
+      'overwrite-me.txt',
+      Buffer.from('second'),
+      { mimeType: 'text/plain', preventDuplicates: false }
+    );
+
+    expect(first).toBe('http://localhost:4000/uploads/overwrite-me.txt');
+    expect(second).toBe(first);
+    expect(
+      await fs.readFile(path.join(tmpDir, UPLOAD_DIR, 'overwrite-me.txt'), 'utf8')
+    ).toBe('second');
+  });
+});

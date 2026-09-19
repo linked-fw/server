@@ -9,8 +9,8 @@ export * from './shapes/quadstores/BackendAPIStoreProvider.js';
 
 export default class LincdServerBackendProvider extends BackendProvider {
   async setupBeforeControllers() {
-    if (!LinkedFileStorage.getDefaultDataset()) {
-      LinkedFileStorage.setDefaultDataset(
+    if (!LinkedFileStorage.getDefaultStore()) {
+      LinkedFileStorage.setDefaultStore(
         new LocalFileStore(process.env.NODE_ENV + '-filestore')
       );
     }

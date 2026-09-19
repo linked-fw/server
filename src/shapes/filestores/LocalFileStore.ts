@@ -123,21 +123,19 @@ export class LocalFileStore extends Shape implements IFileStore {
     options?: SaveFileOptions | string,
     preventDuplicates?: boolean
   ): Promise<string> {
-    const { mimeType } = normalizeSaveFileOptions(options, preventDuplicates);
-    // normalizeSaveFileOptions() defaults preventDuplicates to false, but this
-    // store has always let getUploadTarget append its random suffix, so only an
-    // explicit `false` turns that off.
-    const explicitPreventDuplicates =
-      (typeof options === 'string' ? undefined : options?.preventDuplicates) ??
-      preventDuplicates;
+    const normalized = normalizeSaveFileOptions(options, preventDuplicates);
+    // Core reports an unspecified preventDuplicates as undefined, leaving the
+    // default to each store. This one has always let getUploadTarget append its
+    // random suffix, so only an explicit `false` turns that off.
+    const suffixDuplicates = normalized.preventDuplicates ?? true;
 
     const { publicURL, targetFilePath } = getUploadTarget(
       filePath,
-      mimeType,
+      normalized.mimeType,
       null,
       '',
       this.accessURL,
-      explicitPreventDuplicates ?? true
+      suffixDuplicates
     );
 
     //make sure the target folder exists
