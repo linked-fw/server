@@ -134,6 +134,152 @@ describe('LocalFileStore.saveFile options', () => {
   });
 });
 
+describe('LocalFileStore key handling', () => {
+  it('stores a mixed-case key verbatim and reads it back by that key', async () => {
+    // a Vite content hash: lowercasing it would make the asset unfetchable
+    const name = 'main-hwqwrAvA.css';
+    const contents = 'body{color:red}';
+
+    const publicURL = await store.saveFile(name, Buffer.from(contents), {
+      mimeType: 'text/css',
+      preventDuplicates: false,
+    });
+
+    expect(publicURL).toBe('http://localhost:4000/uploads/main-hwqwrAvA.css');
+    expect(await store.fileExists(name)).toBe(true);
+    expect((await store.getFile(name))!.toString()).toBe(contents);
+
+    const stat = await statFileOf(store)(name);
+    expect(stat).not.toBeNull();
+    expect(stat!.sha256).toBe(
+      createHash('sha256').update(Buffer.from(contents)).digest('hex')
+    );
+
+    // and the bytes really are under the mixed-case name on disk
+    const onDisk = await fs.readdir(path.join(tmpDir, UPLOAD_DIR));
+    expect(onDisk).toContain(name);
+  });
+
+  it('still replaces characters that are unsafe in a file name', async () => {
+    const publicURL = await store.saveFile(
+      'My File (2).TXT',
+      Buffer.from('sanitised'),
+      { mimeType: 'text/plain', preventDuplicates: false }
+    );
+
+    expect(publicURL).toBe('http://localhost:4000/uploads/My-File-2-.TXT');
+    expect(await store.fileExists('My-File-2-.TXT')).toBe(true);
+  });
+
+  it('reports the stored path alongside the URL, suffix included', async () => {
+    const { LocalFileStore } = await import(
+      '../shapes/filestores/LocalFileStore.js'
+    );
+    const saving = store as InstanceType<typeof LocalFileStore>;
+
+    const saved = await saving.saveFileWithPath(
+      'Round-Trip.txt',
+      Buffer.from('round trip')
+    );
+
+    // unspecified preventDuplicates: the name gained a suffix, and storedPath
+    // is the only place that name is reported
+    expect(saved.storedPath).toMatch(/^Round-Trip_[a-z0-9]{6}\.txt$/);
+    expect(saved.publicURL).toBe(
+      'http://localhost:4000/uploads/' + saved.storedPath
+    );
+    // the whole point: what saveFile gives you goes straight into statFile
+    expect(await statFileOf(store)(saved.storedPath)).not.toBeNull();
+    expect((await store.getFile(saved.storedPath))!.toString()).toBe(
+      'round trip'
+    );
+  });
+
+  it('overwrites in place when preventDuplicates is false', async () => {
+    const opts = { mimeType: 'text/plain', preventDuplicates: false };
+
+    const first = await store.saveFile(
+      'In-Place.txt',
+      Buffer.from('first'),
+      opts
+    );
+    const second = await store.saveFile(
+      'In-Place.txt',
+      Buffer.from('second'),
+      opts
+    );
+
+    expect(second).toBe(first);
+    expect((await store.getFile('In-Place.txt'))!.toString()).toBe('second');
+    expect(
+      (await fs.readdir(path.join(tmpDir, UPLOAD_DIR))).filter((f) =>
+        f.startsWith('In-Place')
+      )
+    ).toEqual(['In-Place.txt']);
+  });
+});
+
+describe('LocalFileStore with a custom basePath', () => {
+  let customStore: IFileStore;
+  let customBase: string;
+
+  beforeAll(async () => {
+    const { LocalFileStore } = await import(
+      '../shapes/filestores/LocalFileStore.js'
+    );
+    customBase = path.join(tmpDir, 'my-file-store');
+    customStore = new LocalFileStore('custom-filestore', customBase);
+  });
+
+  it('writes into the custom folder, not the default upload folder', async () => {
+    const contents = 'in the custom folder';
+
+    await customStore.saveFile('Asset-AbC123.js', Buffer.from(contents), {
+      mimeType: 'text/javascript',
+      preventDuplicates: false,
+    });
+
+    // the folder is created on demand
+    expect(await fs.readdir(customBase)).toEqual(['Asset-AbC123.js']);
+    expect(
+      await fs.readFile(path.join(customBase, 'Asset-AbC123.js'), 'utf8')
+    ).toBe(contents);
+    // and nothing leaked into the default upload folder
+    expect(await fs.readdir(path.join(tmpDir, UPLOAD_DIR))).not.toContain(
+      'Asset-AbC123.js'
+    );
+  });
+
+  it('round-trips save -> statFile/getFile/fileExists/deleteFile', async () => {
+    const contents = 'round trip in a custom base';
+    const { LocalFileStore } = await import(
+      '../shapes/filestores/LocalFileStore.js'
+    );
+    const saved = await (
+      customStore as InstanceType<typeof LocalFileStore>
+    ).saveFileWithPath('nested/Deep-File.txt', Buffer.from(contents), {
+      mimeType: 'text/plain',
+      preventDuplicates: false,
+    });
+
+    expect(saved.storedPath).toBe('nested/Deep-File.txt');
+    expect(await customStore.fileExists(saved.storedPath)).toBe(true);
+    expect((await customStore.getFile(saved.storedPath))!.toString()).toBe(
+      contents
+    );
+
+    const stat = await statFileOf(customStore)(saved.storedPath);
+    expect(stat!.size).toBe(Buffer.byteLength(contents));
+    expect(stat!.sha256).toBe(
+      createHash('sha256').update(Buffer.from(contents)).digest('hex')
+    );
+
+    await customStore.deleteFile(saved.storedPath);
+    expect(await customStore.fileExists(saved.storedPath)).toBe(false);
+    expect(await statFileOf(customStore)(saved.storedPath)).toBeNull();
+  });
+});
+
 // The end-to-end path: core's LinkedFileStorage forwards an unspecified
 // preventDuplicates as undefined, and this store turns that into its own
 // default. A two-argument saveFile() therefore has to keep behaving exactly as

@@ -342,7 +342,8 @@ LinkedFileStorage.setDefaultStore(store);
 ```
 
 `accessURL` comes from `SITE_ROOT`, and every path you pass to `saveFile`, `getFile`, `fileExists`, `deleteFile` and
-`statFile` is relative to that base folder.
+`statFile` is relative to that base folder. Note that the URL `saveFile` returns is only meaningful when the base folder
+is the server's own upload folder — that is the only folder the server serves.
 
 Registering stores per purpose (`LinkedFileStorage.setStore`, `getStore`, `registerPurpose`) is core's concern — see
 [`@_linked/core`](https://github.com/linked-cm/core), `utils/LinkedFileStorage` and `interfaces/IFileStore`.
@@ -370,6 +371,33 @@ following it.
 ```ts
 await store.saveFile('report.pdf', fileBuffer, 'application/pdf', true);
 ```
+
+##### The key you pass is the key that is stored
+
+Characters that are unsafe in a file name are still replaced with a dash, and a missing extension is still added from
+`mimeType`, but the **case of the name is preserved**. A build asset named `main-hwqwrAvA.css` is stored under exactly
+that name. (Lowercasing belongs to HTTP upload handling, where a browser hands over whatever the user's filesystem had —
+`getUploadTarget`/`uploadSingleFileFromFormData` in `@_linked/server-utils` still do it there, before a store is ever
+called.)
+
+##### Getting the stored key back: `saveFileWithPath`
+
+`saveFile` returns a URL, but `statFile`, `getFile`, `fileExists` and `deleteFile` take a *key*. `saveFileWithPath`
+returns both, so verify-after-upload never has to guess a name back out of a URL:
+
+```ts
+const { storedPath, publicURL } = await store.saveFileWithPath(
+  'main-hwqwrAvA.css',
+  fileBuffer,
+  { mimeType: 'text/css', preventDuplicates: false }
+);
+
+const stat = await store.statFile(storedPath); // always resolves
+```
+
+With `preventDuplicates: false`, `storedPath` equals the path you passed, verbatim, as long as it needs no sanitising
+and already has an extension. With `preventDuplicates` left unspecified the random suffix is added and `storedPath` is
+the only place the resulting name is reported.
 
 ##### LocalFileStore suffixes by default
 
