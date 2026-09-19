@@ -2,8 +2,14 @@ import {
   relativeFileSystemUploadPath,
   getUploadTarget,
 } from '@_linked/server-utils/utils/Upload';
-import { IFileStore } from '@_linked/core/interfaces/IFileStore';
+import {
+  FileStat,
+  IFileStore,
+  SaveFileOptions,
+  normalizeSaveFileOptions,
+} from '@_linked/core/interfaces/IFileStore';
 import { Shape } from '@_linked/core/shapes/Shape';
+import { createHash } from 'node:crypto';
 import * as fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -104,19 +110,32 @@ export class LocalFileStore extends Shape implements IFileStore {
    * Save a file to the local filesystem
    * @param filePath The path to save the file to, relative to the base upload folder
    * @param fileContent The contents of the file as a buffer
+   * @param options Save options, or a string read as the old positional mimeType.
+   *   A local file has no headers to attach, so only `mimeType` (used to add a
+   *   missing extension) and `preventDuplicates` mean anything here;
+   *   `cacheControl` and `metadata` are accepted and ignored.
+   * @param preventDuplicates Only honoured when `options` is a string
    * @returns A promise that resolves to the public URL of the file
    */
   async saveFile(
     filePath: string,
     fileContent: Buffer,
-    mimeType?: string
+    options?: SaveFileOptions | string,
+    preventDuplicates?: boolean
   ): Promise<string> {
+    const normalized = normalizeSaveFileOptions(options, preventDuplicates);
+    // Core reports an unspecified preventDuplicates as undefined, leaving the
+    // default to each store. This one has always let getUploadTarget append its
+    // random suffix, so only an explicit `false` turns that off.
+    const suffixDuplicates = normalized.preventDuplicates ?? true;
+
     const { publicURL, targetFilePath } = getUploadTarget(
       filePath,
-      mimeType,
+      normalized.mimeType,
       null,
       '',
-      this.accessURL
+      this.accessURL,
+      suffixDuplicates
     );
 
     //make sure the target folder exists
@@ -126,5 +145,37 @@ export class LocalFileStore extends Shape implements IFileStore {
     await fs.writeFile(targetFilePath, fileContent);
 
     return publicURL;
+  }
+
+  /**
+   * Read back the metadata of a stored file, for verify-after-upload.
+   *
+   * The path is resolved exactly like getFile/fileExists/deleteFile do, against
+   * the base upload folder, which by default is the same folder saveFile writes
+   * into, so a file that was just saved can be stat'ed by its stored name.
+   *
+   * The sha256 is computed on demand from the bytes: statFile is only called
+   * during publish verification, not on every upload.
+   *
+   * @param filePath The path to the file, relative to the base upload folder
+   * @returns The size and sha256 of the file, or null if it does not exist
+   */
+  async statFile(filePath: string): Promise<FileStat | null> {
+    const fileToStat = path.join(this.basePath, filePath);
+
+    let stat: fsSync.Stats;
+    try {
+      stat = await fs.stat(fileToStat);
+    } catch (err) {
+      return null;
+    }
+    if (!stat.isFile()) {
+      return null;
+    }
+
+    const contents = await fs.readFile(fileToStat);
+    const sha256 = createHash('sha256').update(contents).digest('hex');
+
+    return { size: stat.size, sha256 };
   }
 }

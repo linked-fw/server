@@ -35,7 +35,7 @@
   ],
   "dependencies": {
     "@_linked/cli": "^1.2",
-    "@_linked/core": "^2.18.1",
+    "@_linked/core": "^2.20.0",
     "@_linked/server-utils": "^1.2.0",
     "adm-zip": "^0.5.16",
     "archiver": "^7.0.1",
