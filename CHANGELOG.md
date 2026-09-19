@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.3.1
+
+### Patch Changes
+
+- [#40](https://github.com/linked-fw/server/pull/40) [`804851d`](https://github.com/linked-fw/server/commit/804851d16f005b56893c73561aaf72ad64a78434) Thanks [@flyon](https://github.com/flyon)! - Point `repository.url` at the linked-fw organisation, so npm provenance verification matches the repository that builds the package.
+
 ## 2.3.0
 
 ### Minor Changes
