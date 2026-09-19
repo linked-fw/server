@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import type { IFileStore } from '@_linked/core/interfaces/IFileStore';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -13,7 +14,18 @@ const UPLOAD_DIR = path.join('data', 'uploads');
 
 let tmpDir: string;
 let cwdBefore: string;
-let store: any;
+// Typed as the interface, not `any`, so a signature regression in saveFile or
+// statFile fails the build instead of passing silently. statFile is optional on
+// IFileStore, so every call here goes through statFileOf(), which asserts the
+// store actually implements it.
+let store: IFileStore;
+
+function statFileOf(fileStore: IFileStore) {
+  if (!fileStore.statFile) {
+    throw new Error('the store under test must implement statFile');
+  }
+  return fileStore.statFile.bind(fileStore);
+}
 
 beforeAll(async () => {
   cwdBefore = process.cwd();
@@ -44,18 +56,18 @@ describe('LocalFileStore.statFile', () => {
     const contents = 'the quick brown fox\n';
     await writeUpload('stat-me.txt', contents);
 
-    const stat = await store.statFile('stat-me.txt');
+    const stat = await statFileOf(store)('stat-me.txt');
 
     expect(stat).not.toBeNull();
-    expect(stat.size).toBe(Buffer.byteLength(contents));
+    expect(stat!.size).toBe(Buffer.byteLength(contents));
     // hashed independently of the implementation
-    expect(stat.sha256).toBe(
+    expect(stat!.sha256).toBe(
       createHash('sha256').update(Buffer.from(contents)).digest('hex')
     );
   });
 
   it('returns null for a file that does not exist', async () => {
-    expect(await store.statFile('nothing-here.txt')).toBeNull();
+    expect(await statFileOf(store)('nothing-here.txt')).toBeNull();
   });
 
   it('stats a file that saveFile just wrote, by its stored name', async () => {
@@ -65,10 +77,11 @@ describe('LocalFileStore.statFile', () => {
       preventDuplicates: false,
     });
 
-    const stat = await store.statFile('verify-me.txt');
+    const stat = await statFileOf(store)('verify-me.txt');
 
-    expect(stat.size).toBe(Buffer.byteLength(contents));
-    expect(stat.sha256).toBe(
+    expect(stat).not.toBeNull();
+    expect(stat!.size).toBe(Buffer.byteLength(contents));
+    expect(stat!.sha256).toBe(
       createHash('sha256').update(Buffer.from(contents)).digest('hex')
     );
   });
