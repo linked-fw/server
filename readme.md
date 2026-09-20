@@ -319,8 +319,8 @@ shape.
 
 ### LocalFileStore
 
-This is the default file store for LINCD. It is a simple file store that stores files in a local directory. Its usage
-follows the general pattern of other file stores in LINCD:
+An `IFileStore` that stores files in a local directory. Its usage follows the general pattern of other file stores in
+LINCD:
 
 - Define all storage locations when the server or application starts up
 - Access methods of the file store through the `LinkedFileStorage` class
@@ -330,14 +330,98 @@ It's important to note that this file store is not suitable for frontend usage -
 environment that has access to the [`fs` module](https://nodejs.org/api/fs.html).
 
 ```ts
-import { LinkedFileStorage } from '@_linked/core/lib/utils/LinkedFileStorage';
-import { LocalFileStore } from 'lincd-server/lib/shapes/LocalFileStore';
+import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
+import { LocalFileStore } from '@_linked/server/shapes/filestores/LocalFileStore';
 import path from 'path';
 
+// the second argument is the base folder on disk; it defaults to the server's
+// upload folder (`./data/uploads`, relative to the working directory)
 const pathToStore = path.join(process.cwd(), 'my-file-store');
 const store = new LocalFileStore('my-file-store', pathToStore);
 LinkedFileStorage.setDefaultStore(store);
 ```
+
+`accessURL` comes from `SITE_ROOT`, and every path you pass to `saveFile`, `getFile`, `fileExists`, `deleteFile` and
+`statFile` is relative to that base folder. Note that the URL `saveFile` returns is only meaningful when the base folder
+is the server's own upload folder — that is the only folder the server serves.
+
+Registering stores per purpose (`LinkedFileStorage.setStore`, `getStore`, `registerPurpose`) is core's concern — see
+[`@_linked/core`](https://github.com/linked-cm/core), `utils/LinkedFileStorage` and `interfaces/IFileStore`.
+
+#### Saving files
+
+`saveFile` takes core's `SaveFileOptions` as its third argument:
+
+```ts
+await store.saveFile('report.pdf', fileBuffer, {
+  mimeType: 'application/pdf',
+  preventDuplicates: true,
+});
+```
+
+A local file has no headers to attach, so only two of the options do anything here:
+
+- `mimeType` — used to add a missing file extension.
+- `preventDuplicates` — see below.
+- `cacheControl` and `metadata` are accepted (so the same call works against an S3-backed store) and ignored.
+
+The old positional form still works: a plain string third argument is read as the mime type, with `preventDuplicates`
+following it.
+
+```ts
+await store.saveFile('report.pdf', fileBuffer, 'application/pdf', true);
+```
+
+##### The key you pass is the key that is stored
+
+Characters that are unsafe in a file name are still replaced with a dash, and a missing extension is still added from
+`mimeType`, but the **case of the name is preserved**. A build asset named `main-hwqwrAvA.css` is stored under exactly
+that name. (Lowercasing belongs to HTTP upload handling, where a browser hands over whatever the user's filesystem had —
+`getUploadTarget`/`uploadSingleFileFromFormData` in `@_linked/server-utils` still do it there, before a store is ever
+called.)
+
+##### Getting the stored key back: `saveFileWithPath`
+
+`saveFile` returns a URL, but `statFile`, `getFile`, `fileExists` and `deleteFile` take a *key*. `saveFileWithPath`
+returns both, so verify-after-upload never has to guess a name back out of a URL:
+
+```ts
+const { storedPath, publicURL } = await store.saveFileWithPath(
+  'main-hwqwrAvA.css',
+  fileBuffer,
+  { mimeType: 'text/css', preventDuplicates: false }
+);
+
+const stat = await store.statFile(storedPath); // always resolves
+```
+
+With `preventDuplicates: false`, `storedPath` equals the path you passed, verbatim, as long as it needs no sanitising
+and already has an extension. With `preventDuplicates` left unspecified the random suffix is added and `storedPath` is
+the only place the resulting name is reported.
+
+##### LocalFileStore suffixes by default
+
+`preventDuplicates` left unspecified means `true` **here**. A second save of the same name does **not** overwrite the
+first: the store appends a random suffix, so `report.pdf` becomes `report_a1b2c3.pdf`. Only an explicit `false`
+overwrites.
+
+Core supplies no default of its own — an unspecified `preventDuplicates` reaches the store as `undefined` and each store
+decides. Do not assume this store's choice holds elsewhere: `S3FileStore` in `@_linked/s3` overwrites by default.
+
+#### Reading file metadata
+
+`statFile(filePath)` returns `{size, sha256}` for a stored file, or `null` when it does not exist (or is not a regular
+file). The `sha256` is a hex digest computed from the file's bytes on demand, so a caller can verify an upload it just
+made:
+
+```ts
+const stat = await store.statFile('report.pdf');
+if (stat === null) throw new Error('upload went missing');
+if (stat.sha256 !== expectedSha256) throw new Error('content mismatch');
+```
+
+`statFile` is optional on `IFileStore`, so a caller holding an `IFileStore` rather than a `LocalFileStore` must check
+that it exists before calling it.
 
 ## TODO
 

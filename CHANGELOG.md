@@ -1,5 +1,54 @@
 # @\_linked/server
 
+## 2.5.0
+
+### Minor Changes
+
+- [#44](https://github.com/linked-fw/server/pull/44) [`616f019`](https://github.com/linked-fw/server/commit/616f0195e0c263ccb6240d65c9c94435319649a0) Thanks [@flyon](https://github.com/flyon)! - Fix `LocalFileStore.saveFile`: preserve the key, honour `basePath`, and report where the file landed.
+
+  `saveFile` went through `getUploadTarget`, which lowercases the name and always resolves against the server's upload
+  folder. Two consequences: a key whose case matters (a Vite content hash such as `main-hwqwrAvA.css`) was corrupted, and
+  a store built with a custom `basePath` wrote to the upload folder while `getFile`, `fileExists`, `deleteFile` and
+  `statFile` all read from `basePath` — so it could never read back what it wrote.
+
+  `saveFile` now resolves the target against the store's own `basePath`, like every other method, and keeps the name's
+  case. Unsafe characters are still replaced and a missing extension is still added from `mimeType`; lowercasing stays
+  where it belongs, in `@_linked/server-utils`' upload handling, which already sanitises a browser-supplied filename
+  before any store sees it.
+
+  New `saveFileWithPath()` returns `{storedPath, publicURL}`, so a caller can hand `storedPath` straight to
+  `statFile`/`getFile`. With `preventDuplicates: false` that path equals the path given, verbatim.
+
+  Minor rather than patch because behaviour changes for existing callers in two ways:
+
+  - a name containing uppercase characters is now stored with its case intact instead of lowercased. Callers that pass an
+    already-lowercased name (which is what the HTTP upload path does) are unaffected.
+  - a store constructed with a custom `basePath` now writes into that folder instead of `./data/uploads`.
+
+  Unchanged: the default `basePath`, the suffixing default when `preventDuplicates` is unspecified, the returned URL, and
+  the two-argument `LinkedFileStorage.saveFile(path, buffer)` path.
+
+## 2.4.0
+
+### Minor Changes
+
+- [#38](https://github.com/linked-fw/server/pull/38) [`bf1e83c`](https://github.com/linked-fw/server/commit/bf1e83cdfc949baec88a645c2750479bc33f1637) Thanks [@flyon](https://github.com/flyon)! - `LocalFileStore` accepts the new `SaveFileOptions` third argument of `saveFile`
+  (still accepting a positional mime-type string) and gains `statFile()`, which
+  returns the size and a sha256 of a stored file, or `null` when it does not
+  exist, for verify-after-upload. A local file has no headers, so `cacheControl`
+  and `metadata` are accepted and ignored.
+
+  Core reports an unspecified `preventDuplicates` as `undefined` and applies no
+  default of its own, so this store keeps applying its own: a caller that says
+  nothing still gets the random file-name suffix, and only an explicit
+  `preventDuplicates: false` overwrites an existing name.
+
+## 2.3.1
+
+### Patch Changes
+
+- [#40](https://github.com/linked-fw/server/pull/40) [`804851d`](https://github.com/linked-fw/server/commit/804851d16f005b56893c73561aaf72ad64a78434) Thanks [@flyon](https://github.com/flyon)! - Point `repository.url` at the linked-fw organisation, so npm provenance verification matches the repository that builds the package.
+
 ## 2.3.0
 
 ### Minor Changes
