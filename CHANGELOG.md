@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.5.1
+
+### Patch Changes
+
+- [#39](https://github.com/linked-fw/server/pull/39) [`dfdc27b`](https://github.com/linked-fw/server/commit/dfdc27b8a09f127d553c08a0e86ec67da784183c) Thanks [@flyon](https://github.com/flyon)! - Declare npm as the package manager for this repo and mark `package-lock.json` as a generated file.
+
 ## 2.5.0
 
 ### Minor Changes
