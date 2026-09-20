@@ -23,6 +23,16 @@ export class BackendAPIStoreProvider extends ShapeProvider {
     return LinkedStorage.askQuery(fromJSON(json) as any);
   }
 
+  // There is deliberately no `countQuery` handler yet. The client store implements
+  // `IDataset.countQuery` (core is making it required), but the backend half has
+  // nothing to route to: `LinkedStorage` exposes no `countQuery`, `setQueryDispatch`
+  // does not register one, and no concrete store (FusekiStore, rdf-mem-store)
+  // implements it. A handler here could only answer by rewriting the count as a
+  // select and counting rows — which `resolveCount` exists to forbid, since a wrong
+  // count is a plausible number rather than a visible failure. Until core lands the
+  // storage-side count, a `countQuery` call rejects with a ServerCallError naming
+  // the missing provider method, which is the honest answer.
+
   updateQuery(store: BackendAPIStore, json: any) {
     return LinkedStorage.updateQuery(fromJSON(json) as any);
   }

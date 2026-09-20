@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { AskBuilder } from '@_linked/core/queries/AskBuilder';
+import { CountBuilder } from '@_linked/core/queries/CountBuilder';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
@@ -56,5 +57,29 @@ describe('BackendAPIStoreProvider.askQuery', () => {
     expect(received).toHaveLength(1);
     expect(received[0].__queryKind).toBe('ask');
     expect(received[0].toJSON()).toEqual(json);
+  });
+});
+
+describe('BackendAPIStore.countQuery', () => {
+  it('forwards the count as DSL-JSON via Server.call', async () => {
+    const calls: any[] = [];
+    (Server as any).call = async (...args: any[]) => {
+      calls.push(args);
+      return 3;
+    };
+    const store = new BackendAPIStore({ id: 'http://example.org/store' });
+    const query = CountBuilder.fromJSON({
+      op: 'count',
+      shape: (BackendAPIStore as any).shape.id,
+    });
+
+    await expect(store.countQuery(query)).resolves.toBe(3);
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe(store);
+    expect(calls[0][1]).toEqual({ method: 'countQuery', rejectOnError: true });
+    expect(calls[0][2]).toEqual(query.toJSON());
+    // The envelope keeps its discriminator, so a backend that predates count
+    // rejects it instead of reading it as a select and answering with rows.
+    expect(calls[0][2].op).toBe('count');
   });
 });

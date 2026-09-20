@@ -5,6 +5,7 @@ import { Server } from '@_linked/server-utils/utils/Server';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
 import type { AskQuery } from '@_linked/core/queries/AskQuery';
+import type { CountQuery } from '@_linked/core/queries/CountQuery';
 import type { UpdateQuery } from '@_linked/core/queries/UpdateQuery';
 import type { CreateQuery } from '@_linked/core/queries/CreateQuery';
 import type {
@@ -72,6 +73,21 @@ export class BackendAPIStore extends Shape implements IDataset {
 
   askQuery(query: AskQuery): Promise<boolean> {
     return this.callBackend('askQuery', query.toJSON());
+  }
+
+  /**
+   * A count crosses the wire like every other query kind — `toJSON()` out,
+   * `fromJSON()` on the backend. Its envelope carries `op: 'count'`, so an older
+   * backend rejects it loudly rather than reinterpreting it as a select (which
+   * would answer with rows where the caller expected a total).
+   *
+   * Nothing here rewrites a count as a select and counts the rows: `resolveCount`
+   * requires a finite, non-negative integer, and `0` is a plausible count — a
+   * wrong answer would read as an empty result set rather than as a failure. The
+   * call therefore rejects (see `callBackend`) unless the backend really counted.
+   */
+  countQuery(query: CountQuery): Promise<number> {
+    return this.callBackend('countQuery', query.toJSON());
   }
 
   updateQuery(query: UpdateQuery): Promise<UpdateResult> {
