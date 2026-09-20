@@ -11,6 +11,7 @@
     "url": "git+https://github.com/linked-fw/server.git"
   },
   "version": "2.5.0",
+  "packageManager": "npm@11.19.1",
   "linkedPackage": true,
   "type": "module",
   "main": "lib/esm/index.js",
@@ -19,9 +20,9 @@
   "scripts": {
     "start": "npm exec linked dev",
     "test": "NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs",
-    "build": "rimraf ./lib && yarn build-esm && yarn copy-to-lib",
-    "build-esm": "echo \"compiling ESM\" && rimraf ./lib/esm && yarn tsc -p tsconfig-esm.json",
-    "copy-to-lib": "echo 'copying CSS + JSON assets to lib folder' && yarn copyfiles -u 1 'src/**/*.css' 'src/**/*.json' lib/esm"
+    "build": "rimraf ./lib && npm run build-esm && npm run copy-to-lib",
+    "build-esm": "echo \"compiling ESM\" && rimraf ./lib/esm && tsc -p tsconfig-esm.json",
+    "copy-to-lib": "echo 'copying CSS + JSON assets to lib folder' && copyfiles -u 1 'src/**/*.css' 'src/**/*.json' lib/esm"
   },
   "keywords": [
     "lincd",
