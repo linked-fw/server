@@ -69,6 +69,12 @@ An app with no release manifest behaves exactly as before. A manifest that is mi
 `schemaVersion`, or without a published destination (a Capacitor build records an empty one) is ignored with a
 warning and the server falls through to step 4 — a broken manifest never stops a server from booting.
 
+That base covers **every** URL the build produced, not just the entry tags. A route's `preloadChunks` are resolved
+per request from the bundle manifest and rendered as `<base>/public/bundles/<file>` — the same composition the entry
+tags use, since Vite manifest paths are relative to the bundle directory. A page therefore never mixes a CDN-hosted
+`main.js` with route chunks requested from the app server. With an empty base the URLs stay origin-relative
+(`/public/bundles/…`), which is where `express.static('./public')` is mounted.
+
 ## Calling methods on the backend
 
 When you use LincdServer, you can also implement backend methods that you can access from the frontend.
