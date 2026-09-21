@@ -119,6 +119,13 @@ export class LinkedServer extends Shape {
    * serving its own bundles).
    */
   private staticAccessURL: string = '';
+  /**
+   * Whether `assets['main.js']` came from a Vite build. Vite always emits the
+   * entry as an ES module, so it has to be bootstrapped with
+   * `bootstrapModules`; a legacy webpack bundle is a classic script and must
+   * keep `bootstrapScripts`.
+   */
+  private mainEntryIsModule = false;
   protected server: ExpressServer;
   protected httpServer: HttpServer;
   private package: any;
@@ -318,6 +325,7 @@ export class LinkedServer extends Shape {
           Object.values(viteManifest).find((e: any) => e?.isEntry);
         if (mainEntry?.file) {
           this.assets['main.js'] = staticAsset(`/bundles/${mainEntry.file}`);
+          this.mainEntryIsModule = true;
         }
         if (mainEntry?.css?.[0]) {
           this.assets['main.css'] = staticAsset(`/bundles/${mainEntry.css[0]}`);
@@ -1744,8 +1752,14 @@ export class LinkedServer extends Shape {
         //   defining $RefreshReg$/$RefreshSig$ — without it, the first
         //   React module throws "can't detect preamble" and hydration
         //   blows up. Inline via bootstrapScriptContent.
-        // - Production: bootstrapScripts with the hashed main.js from the
-        //   Vite (or legacy webpack) build manifest.
+        // - Production, Vite build: bootstrapModules with the hashed main.js
+        //   from the Vite manifest. Vite always emits the entry as an ES
+        //   module, and React renders bootstrapScripts as a plain
+        //   `<script src async>` — the browser then refuses the file with
+        //   "Cannot use import statement outside a module" and the app never
+        //   boots. bootstrapModules is the same tag with type="module".
+        // - Production, legacy webpack build: bootstrapScripts, because that
+        //   bundle is a classic script and a module tag would break it.
         ...((this.config.server as any)?.vite
           ? {
               bootstrapScriptContent: `
@@ -1759,7 +1773,9 @@ export class LinkedServer extends Shape {
                 });
               `,
             }
-          : {bootstrapScripts: [this.assets['main.js']]}),
+          : this.mainEntryIsModule
+            ? {bootstrapModules: [this.assets['main.js']]}
+            : {bootstrapScripts: [this.assets['main.js']]}),
         onShellReady: function () {
           res.statusCode = didError ? 500 : 200;
           res.setHeader('Content-type', 'text/html');
