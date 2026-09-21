@@ -160,6 +160,21 @@ describe('LocalFileStore key handling', () => {
     expect(onDisk).toContain(name);
   });
 
+  it('keeps a doubled dash, as a Vite hash starting with one produces', async () => {
+    // rollup's default base64 hash alphabet includes '-', so an entry name and
+    // a hash that starts with one meet as '--'. Collapsing that run rewrites
+    // the key, and the URL baked into the bundle then points at nothing.
+    const name = 'shapeCodeGenerator--2JmNvrO.js';
+
+    const publicURL = await store.saveFile(name, Buffer.from('export{}'), {
+      mimeType: 'text/javascript',
+      preventDuplicates: false,
+    });
+
+    expect(publicURL).toBe(`http://localhost:4000/uploads/${name}`);
+    expect(await store.fileExists(name)).toBe(true);
+  });
+
   it('still replaces characters that are unsafe in a file name', async () => {
     const publicURL = await store.saveFile(
       'My File (2).TXT',

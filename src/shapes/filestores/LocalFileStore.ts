@@ -142,10 +142,15 @@ export class LocalFileStore extends Shape implements IFileStore {
     mimeType: string | undefined,
     suffixDuplicates: boolean
   ): SavedFileLocation {
-    // same character class as getUploadTarget: alphanumerics, dot, underscore
-    // and the path separator survive, a run of anything else becomes one dash.
-    // Case is deliberately preserved.
-    let sanitisedName = filePath.replace(/[^A-Za-z0-9\._\/]+/gi, '-');
+    // alphanumerics, dot, underscore, dash and the path separator survive; a
+    // run of anything else becomes one dash. Case is deliberately preserved.
+    //
+    // The dash has to be in that set. Without it a run of dashes collapsed to
+    // one, so a Vite base64 content hash that happens to start with a dash —
+    // `shapeCodeGenerator--2JmNvrO.js` — came back as
+    // `shapeCodeGenerator-2JmNvrO.js`, a different key from the one the caller
+    // asked for and from the one baked into the bundle.
+    let sanitisedName = filePath.replace(/[^A-Za-z0-9\._\/-]+/g, '-');
 
     if (sanitisedName.indexOf('.') === -1) {
       //auto add an extension if none is present, based on the mimetype
