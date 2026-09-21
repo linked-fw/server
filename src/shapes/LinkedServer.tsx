@@ -45,6 +45,7 @@ import {
   resolveStaticAccessURL,
   staticAssetURL,
 } from '../utils/releaseManifest.js';
+import { resolveRouteAssets } from '../utils/routeAssets.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
 import {
   installSpaFallback,
@@ -111,6 +112,13 @@ export class LinkedServer extends Shape {
     manifest?: Record<string, string>;
   };
   private latestManifest: Record<string, string> | null = null;
+  /**
+   * Base URL every asset this build produced is served from — resolved once in
+   * `start()` and kept so per-request route chunks land on the same base as
+   * the entry tags. Empty means origin-relative (development, and any app
+   * serving its own bundles).
+   */
+  private staticAccessURL: string = '';
   protected server: ExpressServer;
   protected httpServer: HttpServer;
   private package: any;
@@ -282,6 +290,7 @@ export class LinkedServer extends Shape {
       appRoot: process.cwd(),
       fileStoreAccessURL: LinkedFileStorage.accessURL,
     });
+    this.staticAccessURL = staticAccessURL;
     const staticAsset = (assetPath: string) =>
       staticAssetURL(staticAccessURL, assetPath);
 
@@ -1691,48 +1700,16 @@ export class LinkedServer extends Shape {
           matchedRoute?.preloadChunks &&
           Array.isArray(matchedRoute.preloadChunks)
         ) {
-          const resolveJs = (chunkName: string): string | null => {
-            // Vite shape: keyed by source path. Look up by source-path keys
-            // that match the chunk name's tail.
-            const viteEntry =
-              manifest[`src/pages/${chunkName}.tsx`] ||
-              manifest[`src/pages/${chunkName}.ts`] ||
-              Object.values(manifest as any).find(
-                (e: any) =>
-                  e?.src?.endsWith(`${chunkName}.tsx`) ||
-                  e?.src?.endsWith(`${chunkName}.ts`),
-              );
-            if (viteEntry && typeof viteEntry === 'object' && (viteEntry as any).file) {
-              return `/bundles/${(viteEntry as any).file}`;
-            }
-            // Webpack shape: keyed by output name.
-            return (
-              manifest[`${chunkName}.js`] ||
-              manifest[`${chunkName}.bundle.js`] ||
-              manifest[`${chunkName}.mjs`] ||
-              null
-            );
-          };
-          const resolveCss = (chunkName: string): string[] => {
-            const viteEntry =
-              manifest[`src/pages/${chunkName}.tsx`] ||
-              manifest[`src/pages/${chunkName}.ts`] ||
-              Object.values(manifest as any).find(
-                (e: any) =>
-                  e?.src?.endsWith(`${chunkName}.tsx`) ||
-                  e?.src?.endsWith(`${chunkName}.ts`),
-              );
-            if (viteEntry && typeof viteEntry === 'object' && Array.isArray((viteEntry as any).css)) {
-              return (viteEntry as any).css.map((c: string) => `/bundles/${c}`);
-            }
-            const webpackCss = manifest[`${chunkName}.css`];
-            return webpackCss ? [webpackCss] : [];
-          };
-          preloadScripts = matchedRoute.preloadChunks
-            .map(resolveJs)
-            .filter(Boolean) as string[];
-          preloadStyles = matchedRoute.preloadChunks
-            .flatMap(resolveCss);
+          // Both lists are built on the base the entry tags use, so a release
+          // served from a CDN preloads its route chunks from that release
+          // rather than from this app server. See utils/routeAssets.
+          const routeAssets = resolveRouteAssets(
+            manifest,
+            matchedRoute.preloadChunks,
+            this.staticAccessURL,
+          );
+          preloadScripts = routeAssets.scripts;
+          preloadStyles = routeAssets.styles;
         }
       } catch (err) {
         console.warn('Failed to resolve preload chunks:', err);

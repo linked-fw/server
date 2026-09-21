@@ -196,3 +196,19 @@ export const staticAssetURL = (
   staticAccessURL: string,
   assetPath: string,
 ): string => `${trimTrailingSlashes(staticAccessURL)}/public${assetPath}`;
+
+/**
+ * Build the URL of one file inside the client bundle directory.
+ *
+ * Vite manifest paths (`assets/Page-abc123.js`, and the entries of `css`) are
+ * relative to the bundle directory — the same directory `vite build` writes to
+ * and `linked build-app` hands Vite as its `base`. Everything the build emitted
+ * therefore has to be addressed as `<base>/public/bundles/<path>`, exactly the
+ * way the entry tags are, so a page never mixes the release host with the app's
+ * own origin.
+ */
+export const bundleAssetURL = (
+  staticAccessURL: string,
+  bundlePath: string,
+): string =>
+  staticAssetURL(staticAccessURL, `/bundles/${bundlePath.replace(/^\/+/, '')}`);
