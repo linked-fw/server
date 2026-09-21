@@ -13,6 +13,7 @@ If you want to further adjust the functionality of LincdServer yourself, either 
 ## Table of contents
 
 - [Environment Variables](#environment-variables)
+  - [Where asset URLs come from](#where-asset-urls-come-from)
 - [Calling methods on the backend](#calling-methods-on-the-backend)
   - [Shape providers](#shape-providers)
   - [Generic backend providers](#generic-backend-providers)
@@ -43,7 +44,30 @@ SITE_ROOT=http://localhost:3000  # or https://app.my-site.com
 
 # "development" or "production"
 NODE_ENV=development
+
+# Optional. Base URL the HTML entry tags (main.js / main.css) are served from.
+# Usually no longer needed: see "Where asset URLs come from" below.
+STATIC_ACCESS_URL=https://cdn.my-site.com/releases/1.5.0-2a77e89f
 ```
+
+### Where asset URLs come from
+
+The server renders its own `<script>` and `<link rel="stylesheet">` entry tags, so it has to know the base URL the
+client bundle is served from. It resolves that base once at boot, in this order:
+
+1. **Development** (`NODE_ENV=development`) — a relative path, so the tags work on whatever port the dev server bound
+   to and Vite keeps serving the assets itself.
+2. **`STATIC_ACCESS_URL`** — an explicit deployment decision always wins.
+3. **The release manifest** — `linked build-app` (`@_linked/cli` 1.19+) publishes a release under
+   `releases/<version>-<revision>/` and writes `public/bundles/linked-release.json` describing it. Its
+   `destination.baseURL` is the value the bundle itself was built with as Vite's `base`, so deriving the entry tags
+   from it guarantees the tags and the bundle's own chunk URLs point at the same release. **This removes the manual
+   step of setting `STATIC_ACCESS_URL` to `<accessURL>/<releasePrefix>` on every release.**
+4. **`LinkedFileStorage.accessURL`**, then an empty base — the historical fallback.
+
+An app with no release manifest behaves exactly as before. A manifest that is missing, unparsable, of an unknown
+`schemaVersion`, or without a published destination (a Capacitor build records an empty one) is ignored with a
+warning and the server falls through to step 4 — a broken manifest never stops a server from booting.
 
 ## Calling methods on the backend
 

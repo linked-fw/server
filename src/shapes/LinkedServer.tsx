@@ -41,6 +41,10 @@ import { Transform } from 'stream';
 import { CookieJar } from 'tough-cookie';
 import { lincdServer } from '../ontologies/lincd-server.js';
 import { linkedShape } from '../package.js';
+import {
+  resolveStaticAccessURL,
+  staticAssetURL,
+} from '../utils/releaseManifest.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
 import {
   installSpaFallback,
@@ -264,21 +268,22 @@ export class LinkedServer extends Shape {
   async start() {
     this.initPackage();
     // Static assets should come from the static store URL (versioned path),
-    // not the upload store URL. storage-config sets STATIC_ACCESS_URL accordingly.
+    // not the upload store URL. An explicit STATIC_ACCESS_URL still wins;
+    // otherwise the release manifest `linked build-app` wrote next to the
+    // bundle says which published release this build is, so a deployment no
+    // longer has to repeat that URL by hand. See utils/releaseManifest.
     // In development we deliberately use a relative path so bundle URLs work
     // regardless of which PORT the dev server bound to (browsers resolve
     // relative URLs against window.location.origin). Hardcoding SITE_ROOT
     // baked :4000 into every SSR'd HTML page.
     const isDevAssets = process.env.NODE_ENV === 'development';
-    const staticAccessURL = isDevAssets
-      ? ''
-      : (
-          process.env.STATIC_ACCESS_URL ||
-          LinkedFileStorage.accessURL ||
-          ''
-        ).replace(/\/$/, '');
+    const staticAccessURL = resolveStaticAccessURL({
+      isDevAssets,
+      appRoot: process.cwd(),
+      fileStoreAccessURL: LinkedFileStorage.accessURL,
+    });
     const staticAsset = (assetPath: string) =>
-      `${staticAccessURL}/public${assetPath}`;
+      staticAssetURL(staticAccessURL, assetPath);
 
     // Bundle/manifest read (plan-011: Vite is the only supported build).
     // Vite manifest lives at public/bundles/.vite/manifest.json.
