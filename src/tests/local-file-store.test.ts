@@ -47,6 +47,23 @@ afterAll(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
+describe('LocalFileStore is not a Shape', () => {
+  // Pins the decision from core 0e8c86e ("datasets are not shapes"), so a future
+  // refactor cannot silently re-inherit. Shape's instantiation guard is currently
+  // deferred naming this class as the reason; re-enabling it requires this to hold.
+  it('does not extend Shape', async () => {
+    const { Shape } = await import('@_linked/core/shapes/Shape');
+    expect(store instanceof Shape).toBe(false);
+  });
+
+  it('still satisfies IFileStore', () => {
+    for (const method of ['saveFile', 'getFile', 'deleteFile', 'fileExists', 'listFiles']) {
+      expect(typeof (store as never as Record<string, unknown>)[method]).toBe('function');
+    }
+    expect(typeof store.accessURL).toBe('string');
+  });
+});
+
 async function writeUpload(name: string, contents: string) {
   await fs.writeFile(path.join(tmpDir, UPLOAD_DIR, name), contents);
 }

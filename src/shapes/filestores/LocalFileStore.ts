@@ -6,7 +6,6 @@ import {
   SaveFileOptions,
   normalizeSaveFileOptions,
 } from '@_linked/core/interfaces/IFileStore';
-import { Shape } from '@_linked/core/shapes/Shape';
 import { createHash } from 'node:crypto';
 import * as fsSync from 'node:fs';
 import fs from 'node:fs/promises';
@@ -27,22 +26,33 @@ export interface SavedFileLocation {
   publicURL: string;
 }
 
-export class LocalFileStore extends Shape implements IFileStore {
+/**
+ * A file store is not a Shape.
+ *
+ * This class used to `extends Shape`, but used nothing from it: no `this.id`, no
+ * `this.uri`, no `nodeShape`, no Shape statics, no property decorators, and no
+ * caller that treated it as a Shape. The only inherited behaviour was `super({id})`
+ * writing an id that nothing ever read.
+ *
+ * Datasets and stores stopped being Shapes deliberately (core `0e8c86e`,
+ * "datasets are not shapes"), and `Shape`'s instantiation guard is currently
+ * DEFERRED naming this very class as the reason. Dropping the inheritance removes
+ * one of the last obstacles to re-enabling it.
+ */
+export class LocalFileStore implements IFileStore {
   private readonly basePath: string;
 
   public readonly accessURL: string;
 
+  /**
+   * `n` names the store. It was previously also accepted as `{id}` because that is
+   * `Shape`'s constructor signature; both forms are still taken so existing callers
+   * keep working, but neither is stored as a node id any more.
+   */
   constructor(
     n: string | { id: string },
     basePath: string = relativeFileSystemUploadPath
   ) {
-    if (typeof n === 'string') {
-      const uri = `${process.env.DATA_ROOT}/local-filestore/${n}`;
-      super({ id: uri });
-    } else {
-      super(n);
-    }
-
     this.accessURL = process.env.SITE_ROOT;
     this.basePath = basePath;
   }
