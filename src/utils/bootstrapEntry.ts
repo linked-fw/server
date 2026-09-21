@@ -27,6 +27,36 @@ export const resolveViteMainEntry = (
   return entry && typeof entry === 'object' ? (entry as ViteManifestEntry) : null;
 };
 
+/**
+ * Is a live Vite dev server serving this request?
+ *
+ * Two decisions hang off this answer — how the client entry is bootstrapped
+ * (dev preamble vs. the built entry) and whether route preload tags are
+ * emitted — and they have to agree. Asking `config.server.vite` alone is not
+ * enough: a *production* Vite build can be run from a config that still
+ * carries `server.vite`, and answering "dev" there hands the browser an
+ * inline preamble importing `/@vite/client`, which does not exist in
+ * production, so nothing hydrates.
+ *
+ * The build manifest is what actually separates the two. Once a manifest has
+ * been loaded the built assets are on disk and must be used, `server.vite`
+ * notwithstanding. Keep both call sites on this one function so they cannot
+ * drift apart again.
+ */
+export const isViteDevServer = ({
+  viteConfig,
+  buildOutput,
+}: {
+  /** `config.server.vite` — present whenever the app is a Vite app at all. */
+  viteConfig: unknown;
+  /**
+   * Evidence that `vite build` has run: the latest build manifest, or the
+   * entry resolved out of it. Falsy means there is nothing built to serve,
+   * which is the one thing only dev mode is true of.
+   */
+  buildOutput: unknown;
+}): boolean => !!viteConfig && !buildOutput;
+
 /** The subset of `renderToPipeableStream` options that boots the client. */
 export interface BootstrapEntryOptions {
   bootstrapScriptContent?: string;

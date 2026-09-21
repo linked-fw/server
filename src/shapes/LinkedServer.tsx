@@ -46,6 +46,7 @@ import {
   staticAssetURL,
 } from '../utils/releaseManifest.js';
 import {
+  isViteDevServer,
   resolveBootstrapEntry,
   resolveViteMainEntry,
 } from '../utils/bootstrapEntry.js';
@@ -338,7 +339,14 @@ export class LinkedServer extends Shape {
     // Vite dev marker: when Vite is in use AND no Vite manifest exists yet
     // (= dev mode, no `vite build` run), the HTML renderer skips
     // pre-built CSS/JS link tags. Vite handles asset injection itself.
-    if ((this.config.server as any)?.vite && !(this.assets.manifest as any)?.['src/index.tsx']) {
+    // Same test as the entry bootstrap and the route preloads — see
+    // utils/bootstrapEntry.
+    if (
+      isViteDevServer({
+        viteConfig: (this.config.server as any)?.vite,
+        buildOutput: resolveViteMainEntry(this.assets.manifest ?? {}),
+      })
+    ) {
       this.assets['__viteDev'] = '1';
     }
 
@@ -1672,8 +1680,10 @@ export class LinkedServer extends Shape {
     // chunks to preload, and the webpack-shape fallback would pick up
     // stale bundles on disk (public/bundles/*.bundle.js from a prior
     // webpack build) and link them, breaking hydration.
-    const usingViteDev =
-      !!(this.config.server as any)?.vite && !this.latestManifest;
+    const usingViteDev = isViteDevServer({
+      viteConfig: (this.config.server as any)?.vite,
+      buildOutput: this.latestManifest,
+    });
 
     // Load routes config if available and extract preload chunks for the current route
     if (this.config.server?.loadRoutes) {
@@ -1748,7 +1758,7 @@ export class LinkedServer extends Shape {
         // How the client entry boots — dev preamble, ES module, or classic
         // script. See utils/bootstrapEntry.
         ...resolveBootstrapEntry({
-          viteDevServer: !!(this.config.server as any)?.vite,
+          viteDevServer: usingViteDev,
           mainEntryIsModule: this.mainEntryIsModule,
           mainEntry: this.assets['main.js'],
         }),

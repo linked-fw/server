@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 import {
+  isViteDevServer,
   resolveBootstrapEntry,
   resolveViteMainEntry,
   VITE_DEV_BOOTSTRAP_CONTENT,
@@ -123,6 +124,98 @@ describe('resolveBootstrapEntry', () => {
     expect(VITE_DEV_BOOTSTRAP_CONTENT.indexOf('$RefreshReg$')).toBeLessThan(
       VITE_DEV_BOOTSTRAP_CONTENT.indexOf('import("/src/index.tsx")'),
     );
+  });
+});
+
+describe('isViteDevServer', () => {
+  const VITE_CONFIG = { createServer: () => {} };
+
+  it('is dev when Vite is configured and nothing has been built', () => {
+    expect(
+      isViteDevServer({ viteConfig: VITE_CONFIG, buildOutput: null }),
+    ).toBe(true);
+  });
+
+  it('is not dev once a build manifest exists, Vite config or not', () => {
+    // A production Vite build can be served from a config that still carries
+    // server.vite. Answering "dev" there hands the browser a preamble
+    // importing /@vite/client, which production does not serve.
+    expect(
+      isViteDevServer({ viteConfig: VITE_CONFIG, buildOutput: VITE_MANIFEST }),
+    ).toBe(false);
+  });
+
+  it('is not dev without a Vite config', () => {
+    expect(isViteDevServer({ viteConfig: undefined, buildOutput: null })).toBe(
+      false,
+    );
+    expect(
+      isViteDevServer({ viteConfig: undefined, buildOutput: WEBPACK_MANIFEST }),
+    ).toBe(false);
+  });
+});
+
+describe('one Vite-dev test drives the entry and the route assets', () => {
+  // The bug this guards: the bootstrap asked `!!server.vite` while the route
+  // preloads asked `!!server.vite && !manifest`. A production Vite build
+  // whose config still had server.vite got route preload tags AND the dev
+  // preamble instead of the entry script, so nothing hydrated.
+  const VITE_CONFIG = { createServer: () => {} };
+
+  /** What LinkedServer does per request, minus Express and React. */
+  const renderDecisions = (viteConfig: unknown, buildOutput: unknown) => {
+    const usingViteDev = isViteDevServer({ viteConfig, buildOutput });
+    const mainEntry = buildOutput
+      ? resolveViteMainEntry(buildOutput as Record<string, unknown>)
+      : null;
+    return {
+      usingViteDev,
+      emitsRoutePreloads: !usingViteDev,
+      bootstrap: resolveBootstrapEntry({
+        viteDevServer: usingViteDev,
+        mainEntryIsModule: !!mainEntry?.file,
+        mainEntry: mainEntry?.file
+          ? `/bundles/${mainEntry.file}`
+          : '/bundles/main.bundle.js',
+      }),
+    };
+  };
+
+  it('server.vite WITH a manifest: bootstrapModules and route preloads', () => {
+    const { usingViteDev, emitsRoutePreloads, bootstrap } = renderDecisions(
+      VITE_CONFIG,
+      VITE_MANIFEST,
+    );
+    expect(usingViteDev).toBe(false);
+    expect(emitsRoutePreloads).toBe(true);
+    expect(bootstrap).toEqual({
+      bootstrapModules: ['/bundles/assets/main-abc123.js'],
+    });
+    expect(bootstrap.bootstrapScriptContent).toBeUndefined();
+  });
+
+  it('server.vite WITHOUT a manifest: dev preamble and no route preloads', () => {
+    const { usingViteDev, emitsRoutePreloads, bootstrap } = renderDecisions(
+      VITE_CONFIG,
+      null,
+    );
+    expect(usingViteDev).toBe(true);
+    expect(emitsRoutePreloads).toBe(false);
+    expect(bootstrap).toEqual({
+      bootstrapScriptContent: VITE_DEV_BOOTSTRAP_CONTENT,
+    });
+  });
+
+  it('no server.vite: production behaviour', () => {
+    const { usingViteDev, emitsRoutePreloads, bootstrap } = renderDecisions(
+      undefined,
+      WEBPACK_MANIFEST,
+    );
+    expect(usingViteDev).toBe(false);
+    expect(emitsRoutePreloads).toBe(true);
+    expect(bootstrap).toEqual({
+      bootstrapScripts: ['/bundles/main.bundle.js'],
+    });
   });
 });
 
