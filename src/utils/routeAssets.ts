@@ -29,7 +29,36 @@ export type BundleManifest = Record<string, string | ViteManifestEntry | unknown
 const isAbsoluteURL = (value: string): boolean =>
   /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
 
-/** Find the Vite manifest entry for a route chunk, by source path or by tail. */
+/**
+ * Last-resort match for a chunk name whose casing does not line up with the
+ * manifest.
+ *
+ * Webpack named its chunks after the route (`home`, `signin`); Vite keys its
+ * manifest by source path (`src/pages/Home.tsx`). An app carrying the old
+ * lowercase `preloadChunks` therefore matched nothing at all. This compares the
+ * file's basename case-insensitively, anchored on the path separator so
+ * `Home` cannot be answered by `MyHome.tsx`.
+ */
+const caseInsensitiveEntryFor = (
+  manifest: BundleManifest,
+  chunkName: string,
+): ViteManifestEntry | null => {
+  const lower = chunkName.toLowerCase();
+  const entry = Object.values(manifest).find((e: any) => {
+    const src = typeof e?.src === 'string' ? e.src.toLowerCase() : null;
+    if (!src) return false;
+    return ['tsx', 'ts'].some((ext) => {
+      const name = `${lower}.${ext}`;
+      return src === name || src.endsWith(`/${name}`);
+    });
+  });
+  return entry && typeof entry === 'object' ? (entry as ViteManifestEntry) : null;
+};
+
+/**
+ * Find the Vite manifest entry for a route chunk, by source path, by tail, or
+ * — only once both of those miss — by a case-insensitive basename.
+ */
 const viteEntryFor = (
   manifest: BundleManifest,
   chunkName: string,
@@ -42,7 +71,8 @@ const viteEntryFor = (
       (e: any) =>
         e?.src?.endsWith(`${chunkName}.tsx`) || e?.src?.endsWith(`${chunkName}.ts`),
     );
-  return entry && typeof entry === 'object' ? (entry as ViteManifestEntry) : null;
+  if (entry && typeof entry === 'object') return entry as ViteManifestEntry;
+  return caseInsensitiveEntryFor(manifest, chunkName);
 };
 
 /**
@@ -95,16 +125,51 @@ export const resolveRouteStyles = (
     : [];
 };
 
+/**
+ * Chunk names already reported as unresolved.
+ *
+ * A route's `preloadChunks` are resolved on every render of that route, so a
+ * name the manifest does not know would otherwise warn on every request. One
+ * line per name is enough: the fix is in the app's source, not in this run.
+ */
+const warnedUnresolvedChunks = new Set<string>();
+
+/** Forget which chunk names have been warned about. For tests. */
+export const resetUnresolvedChunkWarnings = (): void => {
+  warnedUnresolvedChunks.clear();
+};
+
+/**
+ * Say so when a declared preload chunk resolves to nothing.
+ *
+ * Silence here is what let an app ship webpack-era lowercase `preloadChunks`
+ * against a Vite manifest and emit no preload tags at all, with nothing
+ * visibly broken.
+ */
+const warnUnresolvedChunk = (chunkName: string): void => {
+  if (warnedUnresolvedChunks.has(chunkName)) return;
+  warnedUnresolvedChunks.add(chunkName);
+  console.warn(
+    `[routeAssets] preloadChunk "${chunkName}" matched nothing in the bundle manifest — ` +
+      'no preload tags will be emitted for it. Check that the name matches the ' +
+      'page source file (Vite manifest keys look like "src/pages/Home.tsx").',
+  );
+};
+
 /** The preload URLs for every chunk a matched route asked for. */
 export const resolveRouteAssets = (
   manifest: BundleManifest,
   chunkNames: string[],
   staticAccessURL: string,
-): { scripts: string[]; styles: string[] } => ({
-  scripts: chunkNames
-    .map((chunkName) => resolveRouteScript(manifest, chunkName, staticAccessURL))
-    .filter((url): url is string => !!url),
-  styles: chunkNames.flatMap((chunkName) =>
-    resolveRouteStyles(manifest, chunkName, staticAccessURL),
-  ),
-});
+): { scripts: string[]; styles: string[] } => {
+  const scripts: string[] = [];
+  const styles: string[] = [];
+  for (const chunkName of chunkNames) {
+    const script = resolveRouteScript(manifest, chunkName, staticAccessURL);
+    const chunkStyles = resolveRouteStyles(manifest, chunkName, staticAccessURL);
+    if (script) scripts.push(script);
+    styles.push(...chunkStyles);
+    if (!script && chunkStyles.length === 0) warnUnresolvedChunk(chunkName);
+  }
+  return { scripts, styles };
+};

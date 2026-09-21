@@ -1,7 +1,8 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import { bundleAssetURL } from '../utils/releaseManifest.js';
 import {
+  resetUnresolvedChunkWarnings,
   resolveRouteAssets,
   resolveRouteScript,
   resolveRouteStyles,
@@ -162,5 +163,100 @@ describe('manifest shapes and misses', () => {
       scripts: [],
       styles: [],
     });
+  });
+});
+
+describe('preload chunk names that do not match the manifest casing', () => {
+  beforeEach(() => {
+    resetUnresolvedChunkWarnings();
+  });
+
+  it('resolves a webpack-era lowercase name against the Vite manifest', () => {
+    // `preloadChunks: ['home']` is what the old app template shipped.
+    const { scripts, styles } = resolveRouteAssets(
+      viteManifest,
+      ['home'],
+      RELEASE_ROOT,
+    );
+    expect(scripts).toEqual([`${BUNDLE_BASE}/assets/Home-def456.js`]);
+    expect(styles).toEqual([`${BUNDLE_BASE}/assets/Home-def456.css`]);
+  });
+
+  it('finds a nested page by a lowercase name too', () => {
+    expect(resolveRouteScript(viteManifest, 'profile', '')).toBe(
+      '/public/bundles/assets/nested/Profile-ghi789.js',
+    );
+  });
+
+  it('does not let the fallback match a different page ending in the name', () => {
+    // `Home` must not be answered by `MyHome.tsx` — the fallback is anchored
+    // on the path separator.
+    const manifest = {
+      'src/pages/MyHome.tsx': {
+        file: 'assets/MyHome-xyz.js',
+        src: 'src/pages/MyHome.tsx',
+      },
+    };
+    expect(resolveRouteScript(manifest, 'home', RELEASE_ROOT)).toBeNull();
+  });
+
+  it('prefers the exact match over the case-insensitive one', () => {
+    const manifest = {
+      'src/pages/home.tsx': {
+        file: 'assets/lowercase-000.js',
+        src: 'src/pages/home.tsx',
+      },
+      'src/pages/Home.tsx': {
+        file: 'assets/Home-def456.js',
+        src: 'src/pages/Home.tsx',
+      },
+    };
+    // Exact source-path lookup wins even though the lowercase key is first.
+    expect(resolveRouteScript(manifest, 'Home', RELEASE_ROOT)).toBe(
+      `${BUNDLE_BASE}/assets/Home-def456.js`,
+    );
+    expect(resolveRouteScript(manifest, 'home', RELEASE_ROOT)).toBe(
+      `${BUNDLE_BASE}/assets/lowercase-000.js`,
+    );
+  });
+});
+
+describe('warning about an unresolved preload chunk', () => {
+  let warn: ReturnType<typeof jest.spyOn>;
+
+  beforeEach(() => {
+    resetUnresolvedChunkWarnings();
+    warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it('warns once per name across repeated calls, and still returns no URLs', () => {
+    for (let i = 0; i < 3; i++) {
+      const { scripts, styles } = resolveRouteAssets(
+        viteManifest,
+        ['NoSuchPage'],
+        RELEASE_ROOT,
+      );
+      expect(scripts).toEqual([]);
+      expect(styles).toEqual([]);
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = String(warn.mock.calls[0][0]);
+    expect(message).toContain('NoSuchPage');
+    expect(message).toContain('manifest');
+  });
+
+  it('does not warn about a chunk the manifest resolves', () => {
+    resolveRouteAssets(viteManifest, ['Home', 'home'], RELEASE_ROOT);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('warns separately for each distinct unresolved name', () => {
+    resolveRouteAssets(viteManifest, ['Ghost', 'Phantom'], RELEASE_ROOT);
+    resolveRouteAssets(viteManifest, ['Ghost', 'Phantom'], RELEASE_ROOT);
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
