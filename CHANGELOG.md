@@ -1,5 +1,18 @@
 # @\_linked/server
 
+## 2.7.1
+
+### Patch Changes
+
+- [#51](https://github.com/linked-fw/server/pull/51) [`c33a0d8`](https://github.com/linked-fw/server/commit/c33a0d81fccee6ff0ae354400c318443377b0673) Thanks [@flyon](https://github.com/flyon)! - Bootstrap a Vite-built entry as an ES module.
+
+  React renders `bootstrapScripts` as a plain `<script src async>`. Vite always
+  emits the client entry as an ES module, so every production build died on the
+  first line with "Cannot use import statement outside a module" and the app
+  never hydrated. When the entry was resolved from a Vite manifest it is now
+  passed as `bootstrapModules` instead. A legacy webpack bundle is still a
+  classic script and keeps `bootstrapScripts`.
+
 ## 2.7.0
 
 ### Minor Changes
