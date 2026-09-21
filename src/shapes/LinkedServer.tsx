@@ -45,6 +45,10 @@ import {
   resolveStaticAccessURL,
   staticAssetURL,
 } from '../utils/releaseManifest.js';
+import {
+  resolveBootstrapEntry,
+  resolveViteMainEntry,
+} from '../utils/bootstrapEntry.js';
 import { resolveRouteAssets } from '../utils/routeAssets.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
 import {
@@ -319,10 +323,7 @@ export class LinkedServer extends Shape {
         this.assets.manifest = viteManifest;
         // Resolve main entry per Vite manifest shape:
         //   { "src/index.tsx": { file: "assets/main-<hash>.js", css: [...] } }
-        const mainEntry =
-          viteManifest['src/index.tsx'] ||
-          viteManifest['src/index.ts'] ||
-          Object.values(viteManifest).find((e: any) => e?.isEntry);
+        const mainEntry = resolveViteMainEntry(viteManifest);
         if (mainEntry?.file) {
           this.assets['main.js'] = staticAsset(`/bundles/${mainEntry.file}`);
           this.mainEntryIsModule = true;
@@ -1744,38 +1745,13 @@ export class LinkedServer extends Shape {
         </StaticRouter>
       </React.StrictMode>,
       {
-        // Bootstrap scripts:
-        // - Vite dev mode: use bootstrapModules so the browser loads them
-        //   as ES modules. Vite middleware intercepts /src/index.tsx and
-        //   transforms+serves it; /@vite/client provides the HMR client.
-        //   @vitejs/plugin-react requires a "preamble" inline script
-        //   defining $RefreshReg$/$RefreshSig$ — without it, the first
-        //   React module throws "can't detect preamble" and hydration
-        //   blows up. Inline via bootstrapScriptContent.
-        // - Production, Vite build: bootstrapModules with the hashed main.js
-        //   from the Vite manifest. Vite always emits the entry as an ES
-        //   module, and React renders bootstrapScripts as a plain
-        //   `<script src async>` — the browser then refuses the file with
-        //   "Cannot use import statement outside a module" and the app never
-        //   boots. bootstrapModules is the same tag with type="module".
-        // - Production, legacy webpack build: bootstrapScripts, because that
-        //   bundle is a classic script and a module tag would break it.
-        ...((this.config.server as any)?.vite
-          ? {
-              bootstrapScriptContent: `
-                import("/@vite/client");
-                import("/@react-refresh").then(RefreshRuntime => {
-                  RefreshRuntime.injectIntoGlobalHook(window);
-                  window.$RefreshReg$ = () => {};
-                  window.$RefreshSig$ = () => (type) => type;
-                  window.__vite_plugin_react_preamble_installed__ = true;
-                  return import("/src/index.tsx");
-                });
-              `,
-            }
-          : this.mainEntryIsModule
-            ? {bootstrapModules: [this.assets['main.js']]}
-            : {bootstrapScripts: [this.assets['main.js']]}),
+        // How the client entry boots — dev preamble, ES module, or classic
+        // script. See utils/bootstrapEntry.
+        ...resolveBootstrapEntry({
+          viteDevServer: !!(this.config.server as any)?.vite,
+          mainEntryIsModule: this.mainEntryIsModule,
+          mainEntry: this.assets['main.js'],
+        }),
         onShellReady: function () {
           res.statusCode = didError ? 500 : 200;
           res.setHeader('Content-type', 'text/html');
