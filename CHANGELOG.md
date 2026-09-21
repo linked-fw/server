@@ -1,5 +1,13 @@
 # @\_linked/server
 
+## 2.7.3
+
+### Patch Changes
+
+- [#57](https://github.com/linked-fw/server/pull/57) [`b47d50e`](https://github.com/linked-fw/server/commit/b47d50e818db8d0b7cbfba582213ea8cf2296a30) Thanks [@flyon](https://github.com/flyon)! - Match route `preloadChunks` against the Vite manifest case-insensitively, and warn when one resolves to nothing.
+
+  Apps carrying webpack-era lowercase chunk names (`['home', 'signin']`) matched nothing in a Vite manifest keyed by source path (`src/pages/Home.tsx`), so no preload tags were emitted at all — silently. Exact matching by source path and by path tail still wins; the case-insensitive basename match is only a fallback, anchored on the path separator so `home` cannot be answered by `MyHome.tsx`. An unresolved chunk name is now logged once per name, not once per request.
+
 ## 2.7.2
 
 ### Patch Changes
