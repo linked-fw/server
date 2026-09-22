@@ -43,7 +43,6 @@ import { StaticRouter } from 'react-router-dom/server.js';
 import { rimraf } from 'rimraf';
 import sharp from 'sharp';
 import {
-  fetchStoredImage,
   findStoredKey,
   resolveResizeSource,
 } from '../utils/resizeSource.js';
@@ -856,11 +855,15 @@ export class LinkedServer extends Shape {
         // //   imageFileName = imageFileName.replace('localhost', '127.0.0.1');
         // // }
 
-        // Fetch the URL rebuilt from the validated key, never the caller's
-        // string, and under a timeout, a size cap and redirect: 'error'. The
-        // redirect rule is not optional: fetch follows redirects by default, so
-        // a 302 would otherwise undo the origin check one hop later.
-        const image = await fetchStoredImage(source.url);
+        // Read the bytes out of the store rather than fetching its public URL.
+        //
+        // Once `src` has to name an image the store already holds, fetching is
+        // a round-trip to ask a web server for a file this process can open --
+        // over the loopback interface, for a LocalFileStore. Reading directly
+        // is faster, and it means the route makes no outbound request at all:
+        // there is no origin to re-check after a redirect, no timeout to tune
+        // and no response size to cap, because there is no response.
+        const image = await LinkedFileStorage.getFile(storedKey);
 
         // if image is null, return 404
         if (!image) {

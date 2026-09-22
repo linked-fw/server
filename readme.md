@@ -347,6 +347,52 @@ Such singletons (e.g. `LinkedStorage.setDefaultDataset`) often hold live connect
 This section will be a brief overview of the shapes that are included in this package, along with example usage of each
 shape.
 
+### Resizing images
+
+`GET /resized/*` serves a resized copy of an image the app stores, generating and caching it on first request. It is
+registered **before** the `apiOnly` guard, so it is available on an API-only server too.
+
+Two forms:
+
+```
+GET /resized/<key>?w=200          # a key in the uploads store
+GET /resized/x?src=<url>&h=100    # a public URL of a file in the uploads store
+```
+
+`w` and `h` are both optional but at least one is needed; with neither, the request redirects to the original under
+`/uploads`. Pass one to scale by that dimension, or both to fit the exact box.
+
+**Only images the app already stores can be resized.** A `src` that does not resolve to a key in the file store is
+refused with `400 Unsupported image source`, and a key the store does not hold gives `404`. The route makes no
+outbound HTTP request of its own: it reads the bytes through `LinkedFileStorage`. This matters — `src` used to be
+fetched as given, which made the route an open proxy into its own network, and the result was written to the public
+store and handed back as a URL.
+
+#### Where the derivatives go
+
+Resized images are written under a `resized/` prefix beside the original, through a file store of their own:
+
+```ts
+import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
+import { resizedImagesPurpose } from '@_linked/server/utils/resizedImagesPurpose';
+import { LocalFileStore } from '@_linked/server/shapes/filestores/LocalFileStore';
+
+// keep the originals wherever they are, but cache derivatives on the local disk
+LinkedFileStorage.setStore(resizedImagesPurpose, new LocalFileStore('resize-cache'));
+```
+
+Configure nothing and it resolves to the default store, alongside the uploads — which is what the route did before
+the purpose existed.
+
+It is worth deciding rather than inheriting. A local disk cache is free and fast, but it is per-instance and goes
+with the container: behind PM2 multicore or several replicas each instance resizes its own copies, and every deploy
+starts cold. A cache in object storage is shared, survives deploys and can sit behind a CDN, at the cost of a PUT per
+derivative. Either is reasonable; they suit different deployments.
+
+The distinction is not only about where the bytes land. Uploads are originals and have to be kept; derivatives are
+reproducible from them, so they can be cleared, rebuilt or expired on their own schedule without touching user data.
+
+
 ### LocalFileStore
 
 An `IFileStore` that stores files in a local directory. Its usage follows the general pattern of other file stores in
@@ -376,7 +422,8 @@ LinkedFileStorage.setDefaultStore(store);
 is the server's own upload folder — that is the only folder the server serves.
 
 Registering stores per purpose (`LinkedFileStorage.setStore`, `getStore`, `registerPurpose`) is core's concern — see
-[`@_linked/core`](https://github.com/linked-cm/core), `utils/LinkedFileStorage` and `interfaces/IFileStore`.
+[`@_linked/core`](https://github.com/linked-cm/core), `utils/LinkedFileStorage` and `interfaces/IFileStore`. This
+package declares one purpose of its own, for the image resize cache — see [Resizing images](#resizing-images).
 
 #### Saving files
 

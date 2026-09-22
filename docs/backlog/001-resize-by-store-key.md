@@ -1,14 +1,15 @@
 ---
 summary: >
-  /resized/* still takes `?src=` as a full URL and fetches it over HTTP, even
-  though the source is now required to be an image this app already stores. The
-  fetch is a network round-trip for bytes the process can read directly, and it
-  keeps a URL-shaped API for what is really a store key. Collapsing it to
-  getFile(key) removes the last of the SSRF surface and deletes code, but it
-  changes the route's contract, so it needs a major.
+  DONE. /resized/* no longer fetches anything: both branches read and write
+  through LinkedFileStorage. The `?src=` parameter still accepts a full URL, so
+  nothing broke -- the URL is resolved to a store key and the bytes are read
+  directly, which turned out not to need the major release this item assumed.
+  Kept as the record of why the route looks the way it does.
 ---
 
 # 001 — Resize by store key instead of fetching a URL
+
+> **Done.** Delivered without the breaking change this item expected: see *Resolution* at the end.
 
 ## Where this came from
 
@@ -79,3 +80,25 @@ SSRF fix — breaks visibly rather than silently.
 
 - `src/utils/resizeSource.ts` — the guard this would let go.
 - `src/tests/resized-images.test.ts` — the behaviour that must keep passing.
+
+## Resolution
+
+Done, and the "why it is not done yet" above turned out to be wrong.
+
+The assumption was that dropping the fetch meant dropping `?src=<full URL>`,
+which would break callers and need a major. It does not. The URL form still
+works: `resolveResizeSource` turns it into a store key, and the bytes are then
+read with `LinkedFileStorage.getFile(key)` instead of being fetched over HTTP.
+The request contract is unchanged, so this shipped as a minor.
+
+What went with the fetch: `fetchStoredImage`, the 10s timeout, the 25MB
+streaming cap and `redirect: 'error'`. All of that existed to make an outbound
+request safe, and there is no outbound request any more — the route cannot be
+pointed at anything, rather than being guarded against it.
+
+The local branch had already moved to the store, so both halves now read and
+write the same way.
+
+Open question 2 — whether to add a `?key=` parameter — was not needed and is
+dropped. Question 1, whether anyone passes a full URL, no longer matters either
+way, since both forms cost the same now.
