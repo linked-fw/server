@@ -36,6 +36,7 @@ import {
   getSuperShapesClasses,
 } from '@_linked/core/utils/ShapeClass';
 import path from 'path';
+import {pathToFileURL} from 'node:url';
 import process from 'process';
 import * as React from 'react';
 import { renderToPipeableStream, renderToStaticMarkup } from 'react-dom/server';
@@ -1133,8 +1134,21 @@ export class LinkedServer extends Shape {
         }
         return await vite.ssrLoadModule(specifier);
       }
-      // No-vite path (e.g. production runtime). Fall back to Node's
-      // resolver. The dynamic specifier is intentional.
+      // No-vite path (e.g. production runtime).
+      //
+      // The app's own backend cannot be imported by name here. A self-reference
+      // resolves only from inside the package that declares it, and this code
+      // lives in node_modules/@_linked/server — so Node reports
+      // `Cannot find package '<app>'` and every one of the app's Providers
+      // silently fails to register. The Vite branch above already works around
+      // this; the compiled runtime needs the same treatment, by path.
+      if (specifier === `${this.package.name}/backend`) {
+        const compiled = path.join(process.cwd(), 'lib', 'backend.js');
+        const source = path.join(process.cwd(), 'src', 'backend.ts');
+        const target = fsNative.existsSync(compiled) ? compiled : source;
+        return await import(/* @vite-ignore */ pathToFileURL(target).href);
+      }
+      // Fall back to Node's resolver. The dynamic specifier is intentional.
       return await import(/* @vite-ignore */ specifier);
     };
     await loadModule(backendIndexFilePath)
