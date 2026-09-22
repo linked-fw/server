@@ -156,10 +156,27 @@ function stubFetch(impl: (url: string) => Promise<any>) {
 }
 
 function okResponse(body: Buffer) {
+  // Shaped like the parts of a Response the handler reads: `ok`, a `headers`
+  // lookup for content-length, and `arrayBuffer`. No `body` stream, so the
+  // size cap falls back to measuring the buffered result.
   return Promise.resolve({
+    ok: true,
+    headers: { get: () => null },
     arrayBuffer: async () =>
       body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
   });
+}
+
+/**
+ * Put a source image in the store under the key `?src=<CDN>/uploads/<name>`
+ * resolves to.
+ *
+ * The route only fetches images it already stores, so a remote-branch test has
+ * to seed the source first. Before that guard existed these tests passed with
+ * an empty store, which is exactly the hole it closes.
+ */
+function seedSource(fileName: string, body: Buffer) {
+  store.files.set(`uploads/${fileName}`, body);
 }
 
 beforeAll(async () => {
@@ -207,6 +224,7 @@ describe('/resized/* — no dimensions given', () => {
 describe('/resized/* — remote branch (?src=)', () => {
   it('resizes a fetched jpeg and stores it under a dimension-tagged key', async () => {
     const original = await makeImage('jpeg');
+    seedSource('photo.jpg', original);
     const calls = stubFetch(() => okResponse(original));
     const base = await listen(makeLinkedServer());
 
@@ -230,6 +248,7 @@ describe('/resized/* — remote branch (?src=)', () => {
 
   it('scales by height alone, tagging the key with `h` only', async () => {
     const original = await makeImage('png');
+    seedSource('logo.png', original);
     stubFetch(() => okResponse(original));
     const base = await listen(makeLinkedServer());
 
@@ -238,12 +257,13 @@ describe('/resized/* — remote branch (?src=)', () => {
       `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/logo.png`)}&h=30`
     );
 
-    // Note the missing underscore: the separator is emitted by the WIDTH
-    // segment, so a height-only key reads `logoh30`, not `logo_h30`. Pinned as
-    // the behaviour that is actually shipped — cached URLs depend on it.
-    expect(res.location).toBe(`${CDN}/uploads/resized/logoh30.png`);
+    // The separator is emitted once, before either dimension, so a height-only
+    // key reads `logo_h30`. It used to live inside the width segment, which gave
+    // `logoh30` here while the local branch produced `logo_h30` for the same
+    // request -- the two halves of one route disagreeing on the cache key.
+    expect(res.location).toBe(`${CDN}/uploads/resized/logo_h30.png`);
     const meta = await sharp(
-      (await store.getFile('uploads/resized/logoh30.png'))!
+      (await store.getFile('uploads/resized/logo_h30.png'))!
     ).metadata();
     expect(meta.format).toBe('png');
     expect(meta.height).toBe(30);
@@ -252,6 +272,7 @@ describe('/resized/* — remote branch (?src=)', () => {
 
   it('honours both dimensions, cropping to the exact box', async () => {
     const original = await makeImage('webp');
+    seedSource('banner.webp', original);
     stubFetch(() => okResponse(original));
     const base = await listen(makeLinkedServer());
 
@@ -291,6 +312,7 @@ describe('/resized/* — remote branch (?src=)', () => {
     'applies the %s output options the handler selects',
     async (format, fileName, options, defaults) => {
       const original = await makeImage(format);
+      seedSource(fileName, original);
       stubFetch(() => okResponse(original));
       const base = await listen(makeLinkedServer());
 
@@ -318,6 +340,7 @@ describe('/resized/* — remote branch (?src=)', () => {
 
   it('serves a second request for the same size from the in-process map', async () => {
     const original = await makeImage('jpeg');
+    seedSource('photo.jpg', original);
     const calls = stubFetch(() => okResponse(original));
     const linkedServer = makeLinkedServer();
     const base = await listen(linkedServer);
@@ -344,6 +367,7 @@ describe('/resized/* — remote branch (?src=)', () => {
       'uploads/resized/photo_w60.jpg',
       await makeImage('jpeg', 60, 45)
     );
+    seedSource('photo.jpg', await makeImage('jpeg'));
     const calls = stubFetch(() => okResponse(Buffer.alloc(0)));
     const base = await listen(makeLinkedServer());
 
@@ -371,6 +395,7 @@ describe('/resized/* — remote branch (?src=)', () => {
   });
 
   it('answers 400 when the fetched bytes are not a supported image', async () => {
+    seedSource('page.jpg', Buffer.from('<html>not an image</html>'));
     stubFetch(() => okResponse(Buffer.from('<html>not an image</html>')));
     const base = await listen(makeLinkedServer());
 
@@ -381,7 +406,11 @@ describe('/resized/* — remote branch (?src=)', () => {
 
     expect(res.status).toBe(400);
     expect(res.json()).toEqual({ error: 'Unsupported image format' });
-    expect(store.files.size).toBe(0);
+    // the source itself is in the store (it has to be, to get past the guard);
+    // what must not happen is a resized output being written from junk bytes
+    expect([...store.files.keys()].filter((k) => k.includes('resized/'))).toEqual(
+      []
+    );
   });
 });
 
@@ -463,5 +492,112 @@ describe('/resized/* — local branch (uploads folder)', () => {
 
     expect(res.status).toBe(404);
     expect(res.json()).toEqual({ error: 'Could not find original image' });
+  });
+});
+
+// The guard the route exists behind now. Before it, `?src=` went straight to
+// fetch(), so any unauthenticated caller could aim the server at cloud
+// metadata, localhost or a private range -- and the bytes were written into the
+// PUBLIC store and handed back as a URL, so a reachable internal resource was
+// persisted rather than merely leaked.
+describe('/resized/* — only fetches images the store already holds', () => {
+  const refused: Array<[label: string, src: string]> = [
+    ['cloud metadata', 'http://169.254.169.254/metadata/v1.json'],
+    ['loopback', 'http://localhost:3030/$/datasets'],
+    ['a private range', 'http://10.0.0.7/private-diagram.png'],
+    ['an unrelated host', 'https://attacker.test/payload.png'],
+    // the classic startsWith() bypass: a prefix match on the CDN origin passes,
+    // an origin comparison does not
+    ['a lookalike host', `${CDN}.evil.test/uploads/photo.jpg`],
+    // credentials are ignored by URL.origin, so they are refused separately
+    ['embedded credentials', 'https://user:pw@cdn.example.test/uploads/photo.jpg'],
+    ['a scheme downgrade', 'http://cdn.example.test/uploads/photo.jpg'],
+  ];
+
+  it.each(refused)('refuses %s without making a request', async (_label, src) => {
+    const calls = stubFetch(() => {
+      throw new Error('the guard must refuse before any fetch');
+    });
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(base, `/resized/x?src=${encodeURIComponent(src)}&w=60`);
+
+    expect(res.status).toBe(400);
+    expect(res.json()).toEqual({ error: 'Unsupported image source' });
+    // the point of the fix: nothing left the process
+    expect(calls).toEqual([]);
+    expect(store.files.size).toBe(0);
+  });
+
+  it('refuses a well-formed store URL for a file the store does not hold', async () => {
+    const calls = stubFetch(() => {
+      throw new Error('the guard must refuse before any fetch');
+    });
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/never-uploaded.jpg`)}&w=60`
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.json()).toEqual({ error: 'Could not fetch image from URL' });
+    expect(calls).toEqual([]);
+  });
+
+  it('fetches the URL it rebuilt, not the string the caller sent', async () => {
+    // same key, but with a fragment and a redundantly encoded segment; the
+    // handler must normalise to the canonical store URL before fetching
+    const original = await makeImage('jpeg');
+    seedSource('photo.jpg', original);
+    const calls = stubFetch(() => okResponse(original));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/photo.jpg#fragment`)}&w=60`
+    );
+
+    expect(res.status).toBe(302);
+    expect(calls).toEqual([`${CDN}/uploads/photo.jpg`]);
+  });
+
+  it('refuses redirects, so an allowed origin cannot hop elsewhere', async () => {
+    const original = await makeImage('jpeg');
+    seedSource('photo.jpg', original);
+    let sawRedirectOption: string | undefined;
+    (globalThis as any).fetch = (_url: any, init: any) => {
+      sawRedirectOption = init?.redirect;
+      return okResponse(original);
+    };
+    const base = await listen(makeLinkedServer());
+
+    await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/photo.jpg`)}&w=60`
+    );
+
+    // fetch follows redirects by default, which would undo the origin check one
+    // hop later
+    expect(sawRedirectOption).toBe('error');
+  });
+
+  it('refuses a response larger than the cap', async () => {
+    seedSource('huge.jpg', Buffer.alloc(1));
+    (globalThis as any).fetch = () =>
+      Promise.resolve({
+        ok: true,
+        headers: { get: () => String(64 * 1024 * 1024) },
+        arrayBuffer: async () => new ArrayBuffer(8),
+      });
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/huge.jpg`)}&w=60`
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.json()).toEqual({ error: 'Could not fetch image from URL' });
   });
 });
