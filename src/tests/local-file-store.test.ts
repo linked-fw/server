@@ -138,16 +138,36 @@ describe('LocalFileStore.saveFile options', () => {
     expect(await store.fileExists('positional-form.plain')).toBe(true);
   });
 
-  it('keeps suffixing names when preventDuplicates is not specified', async () => {
+  it('keeps a free name as-is when preventDuplicates is not specified', async () => {
     const publicURL = await store.saveFile(
       'suffixed.txt',
       Buffer.from('suffixed'),
       'text/plain'
     );
 
-    expect(publicURL).toMatch(
-      /^http:\/\/localhost:4000\/uploads\/suffixed_[a-z0-9]{6}\.txt$/
+    expect(publicURL).toBe('http://localhost:4000/uploads/suffixed.txt');
+  });
+
+  it('suffixes only once the name is actually taken', async () => {
+    const opts = 'text/plain';
+
+    const first = await store.saveFile(
+      'taken.txt',
+      Buffer.from('first'),
+      opts
     );
+    const second = await store.saveFile(
+      'taken.txt',
+      Buffer.from('second'),
+      opts
+    );
+
+    expect(first).toBe('http://localhost:4000/uploads/taken.txt');
+    expect(second).toMatch(
+      /^http:\/\/localhost:4000\/uploads\/taken_[a-z0-9]{6}\.txt$/
+    );
+    // the never-clobber guarantee is what matters: the first file is intact
+    expect((await store.getFile('taken.txt'))!.toString()).toBe('first');
   });
 });
 
@@ -214,9 +234,9 @@ describe('LocalFileStore key handling', () => {
       Buffer.from('round trip')
     );
 
-    // unspecified preventDuplicates: the name gained a suffix, and storedPath
-    // is the only place that name is reported
-    expect(saved.storedPath).toMatch(/^Round-Trip_[a-z0-9]{6}\.txt$/);
+    // unspecified preventDuplicates on a free name: the key is the one the
+    // caller asked for, and storedPath reports it either way
+    expect(saved.storedPath).toBe('Round-Trip.txt');
     expect(saved.publicURL).toBe(
       'http://localhost:4000/uploads/' + saved.storedPath
     );
@@ -314,8 +334,7 @@ describe('LocalFileStore with a custom basePath', () => {
 
 // The end-to-end path: core's LinkedFileStorage forwards an unspecified
 // preventDuplicates as undefined, and this store turns that into its own
-// default. A two-argument saveFile() therefore has to keep behaving exactly as
-// it did before options existed.
+// default -- protect what is already there, leave a free name alone.
 describe('LinkedFileStorage.saveFile through LocalFileStore', () => {
   let LinkedFileStorage: any;
 
@@ -326,7 +345,7 @@ describe('LinkedFileStorage.saveFile through LocalFileStore', () => {
     LinkedFileStorage.setDefaultStore(store);
   });
 
-  it('suffixes the name when the caller passes no options at all', async () => {
+  it('protects an existing file when the caller passes no options at all', async () => {
     const first = await LinkedFileStorage.saveFile(
       'two-args.txt',
       Buffer.from('first')
@@ -336,9 +355,10 @@ describe('LinkedFileStorage.saveFile through LocalFileStore', () => {
       Buffer.from('second')
     );
 
-    const suffixed = /^http:\/\/localhost:4000\/uploads\/two-args_[a-z0-9]{6}\.txt$/;
-    expect(first).toMatch(suffixed);
-    expect(second).toMatch(suffixed);
+    expect(first).toBe('http://localhost:4000/uploads/two-args.txt');
+    expect(second).toMatch(
+      /^http:\/\/localhost:4000\/uploads\/two-args_[a-z0-9]{6}\.txt$/
+    );
     // the second save must not have overwritten the first
     expect(second).not.toBe(first);
 
@@ -368,5 +388,68 @@ describe('LinkedFileStorage.saveFile through LocalFileStore', () => {
     expect(
       await fs.readFile(path.join(tmpDir, UPLOAD_DIR, 'overwrite-me.txt'), 'utf8')
     ).toBe('second');
+  });
+});
+
+// listFiles used to return keys joined onto basePath, which no other method on
+// this store accepts, and its recursive branch re-read basePath instead of the
+// subdirectory -- so a single folder in the store recursed until the stack blew.
+describe('LocalFileStore.listFiles', () => {
+  let listStore: IFileStore;
+  let listBase: string;
+
+  beforeAll(async () => {
+    const { LocalFileStore } = await import(
+      '../shapes/filestores/LocalFileStore.js'
+    );
+    listBase = path.join('data', 'listing');
+    await fs.mkdir(path.join(tmpDir, listBase, 'images'), { recursive: true });
+    listStore = new LocalFileStore('listing-filestore', listBase);
+
+    const opts = { mimeType: 'text/plain', preventDuplicates: false };
+    await listStore.saveFile('root.txt', Buffer.from('root'), opts);
+    await listStore.saveFile('images/nested.txt', Buffer.from('nested'), opts);
+    await listStore.saveFile('images/other.txt', Buffer.from('other'), opts);
+  });
+
+  it('returns keys relative to the base folder, not joined onto it', async () => {
+    const keys = await listStore.listFiles();
+
+    expect(keys.sort()).toEqual([
+      'images/nested.txt',
+      'images/other.txt',
+      'root.txt',
+    ]);
+    // none of them carries the base path
+    for (const key of keys) {
+      expect(key.startsWith(listBase)).toBe(false);
+    }
+  });
+
+  it('returns keys that feed straight back into getFile', async () => {
+    // the actual regression: a returned key used to double-prefix, so every
+    // round trip through getFile missed
+    for (const key of await listStore.listFiles()) {
+      expect(await listStore.fileExists(key)).toBe(true);
+      expect(await listStore.getFile(key)).not.toBeNull();
+    }
+  });
+
+  it('recurses into a subdirectory instead of re-reading the base folder', async () => {
+    // before the fix this never returned: listFiles() found `images`, called
+    // itself, read the base folder again, found `images` again, ...
+    const keys = await listStore.listFiles();
+
+    expect(keys).toContain('images/nested.txt');
+    expect(keys.filter((key) => key === 'images/nested.txt')).toHaveLength(1);
+  });
+
+  it('honours the prefix argument, which used to be ignored', async () => {
+    expect((await listStore.listFiles('images/')).sort()).toEqual([
+      'images/nested.txt',
+      'images/other.txt',
+    ]);
+    expect(await listStore.listFiles('root')).toEqual(['root.txt']);
+    expect(await listStore.listFiles('nothing-matches')).toEqual([]);
   });
 });

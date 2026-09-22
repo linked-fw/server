@@ -94,39 +94,50 @@ export class LocalFileStore implements IFileStore {
   }
 
   /**
-   * List all files in the local filesystem, relative to the base upload folder
-   * @param recursive Whether or not to search all subdirectories recursively
-   * @returns A promise that resolves to a list of file paths, relative to the base upload folder
-   * @todo Think about taking an options parameter instead of positional args
-   * @todo Take a path parameter to list files in a subdirectory
+   * List every file in the store, recursively.
+   *
+   * @param prefix Only return keys starting with this string. Matched against
+   *   the returned (relative) key, so `listFiles('images/')` selects the
+   *   `images` folder and `listFiles('main-')` selects by file name.
+   * @returns Keys relative to the base folder, exactly as `getFile`,
+   *   `fileExists`, `deleteFile` and `statFile` expect them.
+   *
+   * The keys are relative on purpose: every other method on this store resolves
+   * its argument *against* `basePath`, so returning `data/uploads/x.txt` here
+   * meant a caller who fed the result straight back into `getFile` looked for
+   * `data/uploads/data/uploads/x.txt`. It also matches `S3FileStore`, which
+   * strips the bucket prefix before returning.
    */
   async listFiles(prefix?: string): Promise<string[]> {
-    let files = await fs.readdir(this.basePath);
+    const walk = async (relativeDir: string): Promise<string[]> => {
+      const absoluteDir = path.join(this.basePath, relativeDir);
 
-    // if (recursive) {
-    const allFiles = await Promise.all(
-      files.map((file) => {
-        const filePath = path.join(this.basePath, file);
+      let entries: fsSync.Dirent[];
+      try {
+        entries = await fs.readdir(absoluteDir, { withFileTypes: true });
+      } catch (err) {
+        console.warn('Error during listFiles', err);
+        return [];
+      }
 
-        return fs
-          .stat(filePath)
-          .then((stat) => {
-            if (stat.isDirectory()) {
-              return this.listFiles(prefix).then((files) =>
-                files.map((file) => path.join(filePath, file))
-              );
-            } else {
-              return [filePath];
-            }
-          })
-          .catch((err) => {
-            console.warn('Error during listFiles', err);
-            return [];
-          });
-      })
-    );
+      const nested = await Promise.all(
+        entries.map((entry) => {
+          // path.join('', 'x') === 'x', so the top level stays unprefixed
+          const key = path.join(relativeDir, entry.name);
+          // recurse into the subdirectory itself. This used to call
+          // listFiles(prefix), which re-read basePath and so found the same
+          // directory again -- unbounded recursion as soon as the store held
+          // one folder.
+          return entry.isDirectory() ? walk(key) : Promise.resolve([key]);
+        })
+      );
 
-    return allFiles.flat();
+      return nested.flat();
+    };
+
+    const keys = await walk('');
+
+    return prefix ? keys.filter((key) => key.startsWith(prefix)) : keys;
   }
 
   /**
@@ -147,11 +158,11 @@ export class LocalFileStore implements IFileStore {
    * Characters that are not safe in a file name are still replaced, exactly as
    * `getUploadTarget` does it — only the case is left alone.
    */
-  private resolveTarget(
+  private async resolveTarget(
     filePath: string,
     mimeType: string | undefined,
     suffixDuplicates: boolean
-  ): SavedFileLocation {
+  ): Promise<SavedFileLocation> {
     // alphanumerics, dot, underscore, dash and the path separator survive; a
     // run of anything else becomes one dash. Case is deliberately preserved.
     //
@@ -178,13 +189,38 @@ export class LocalFileStore implements IFileStore {
       sanitisedName.length - (ext.length + 1)
     );
 
-    // 6 character random string to avoid clobbering an existing file,
-    // e.g. report.pdf -> report_312acb.pdf
-    const randomStringSuffix = suffixDuplicates
-      ? '_' + Math.random().toString(36).substring(2, 8)
-      : '';
+    // A 6 character random string avoids clobbering an existing file,
+    // e.g. report.pdf -> report_312acb.pdf.
+    //
+    // It is only applied when the name is actually taken. This used to be
+    // unconditional, which did prevent duplicates but also meant a caller never
+    // got back the key it asked for: a content-hashed bundle handed over as
+    // `main-hwqwrAvA.css` landed as `main-hwqwrAvA_x9k2ml.css`, so the name
+    // baked into the HTML no longer resolved. Checking first keeps the
+    // never-clobber guarantee -- a taken name still gets a suffix, and the
+    // suffixed name is itself re-checked -- while leaving free names alone.
+    // `S3FileStore` has always worked this way, so the two implementations of
+    // IFileStore now read the flag the same.
+    let storedPath = withoutExt + '.' + ext;
 
-    const storedPath = withoutExt + randomStringSuffix + '.' + ext;
+    if (suffixDuplicates) {
+      // 36^6 is ~2 billion, so a second collision is already vanishingly
+      // unlikely; the cap turns a pathological case into a clear error rather
+      // than a spin.
+      const maxAttempts = 10;
+      let attempt = 0;
+
+      while (await this.fileExists(storedPath)) {
+        if (attempt++ >= maxAttempts) {
+          throw new Error(
+            `Could not find a free name for '${filePath}' after ${maxAttempts} attempts`
+          );
+        }
+
+        storedPath =
+          withoutExt + '_' + Math.random().toString(36).substring(2, 8) + '.' + ext;
+      }
+    }
 
     return {
       storedPath,
@@ -229,10 +265,11 @@ export class LocalFileStore implements IFileStore {
    * take. That is what `storedPath` is: hand it straight back to any of them.
    *
    * The key equals the `filePath` given verbatim — case included — as long as
-   * the name needs no sanitising, already has an extension, and
-   * `preventDuplicates` is `false`. With `preventDuplicates` left unspecified
-   * (this store's default, kept for upload callers) a random suffix is added,
-   * and `storedPath` is the only place that name is reported.
+   * the name needs no sanitising and already has an extension. With
+   * `preventDuplicates` left unspecified (this store's default, kept for upload
+   * callers) that still holds for a name nothing else occupies; only a name
+   * already taken gains a random suffix, and `storedPath` is the only place
+   * that name is reported.
    */
   async saveFileWithPath(
     filePath: string,
@@ -242,11 +279,11 @@ export class LocalFileStore implements IFileStore {
   ): Promise<SavedFileLocation> {
     const normalized = normalizeSaveFileOptions(options, preventDuplicates);
     // Core reports an unspecified preventDuplicates as undefined, leaving the
-    // default to each store. This one has always appended a random suffix, so
-    // only an explicit `false` turns that off.
+    // default to each store. This one protects an existing file, so only an
+    // explicit `false` allows an overwrite.
     const suffixDuplicates = normalized.preventDuplicates ?? true;
 
-    const target = this.resolveTarget(
+    const target = await this.resolveTarget(
       filePath,
       normalized.mimeType,
       suffixDuplicates
