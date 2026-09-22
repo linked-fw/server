@@ -1,5 +1,19 @@
 # @\_linked/server
 
+## 2.12.1
+
+### Patch Changes
+
+- [#75](https://github.com/linked-fw/server/pull/75) [`b285519`](https://github.com/linked-fw/server/commit/b285519430e2e7d1e0daef655c91066af6bd72fd) Thanks [@flyon](https://github.com/flyon)! - Compile the whole `src` folder, and let a bare import resolve under Node10.
+
+  The build only emitted what an entry transitively reached, so any module
+  nothing imported was never built — and never type-checked, so it rotted
+  quietly. `include` now covers `src/**/*` with tests excluded explicitly.
+
+  `typesVersions` maps every specifier through `lib/esm/*`, so a `types` value
+  that already carried that prefix had it applied twice and no consumer on
+  classic Node10 resolution could `import` the package by its bare name.
+
 ## 2.12.0
 
 ### Minor Changes
