@@ -1,3 +1,5 @@
+import { publicUploadPath } from '@_linked/server-utils/utils/ServerPaths';
+
 /**
  * Deciding whether `/resized/*` is allowed to fetch a given `src`.
  *
@@ -21,13 +23,27 @@ export type ResizeSourceRejection =
 
 export interface ResizeSourceAllowed {
   allowed: true;
-  /** The key inside the file store, ready for `getFile`/`fileExists`. */
-  key: string;
   /**
-   * The URL to fetch: rebuilt from `accessURL` and the validated key, never the
-   * caller's string. A validated string can still carry credentials, a
-   * fragment, a different case, or percent-encoding that resolves elsewhere, so
-   * reusing it would hand back the control the check just took away.
+   * The key candidates to try against the store, in order.
+   *
+   * There is more than one because `IFileStore` has no URL-to-key inverse and
+   * the two implementations do not agree on the shape. `S3FileStore` serves a
+   * key directly under its `accessURL`, so the path *is* the key.
+   * `LocalFileStore` serves `accessURL + '/uploads' + '/' + key`, so the same
+   * derivation yields `uploads/photo.jpg` for a file stored as `photo.jpg`.
+   *
+   * Trying both costs one extra `fileExists` in the local case and keeps the
+   * check fail-closed: a path that matches neither shape is refused.
+   */
+  keys: string[];
+  /**
+   * The URL to fetch: rebuilt from the validated origin and pathname, never the
+   * caller's string. A validated string can still carry credentials, a query, a
+   * fragment, or percent-encoding that resolves elsewhere, so reusing it would
+   * hand back the control the check just took away.
+   *
+   * Built from the pathname rather than from a key, so it does not depend on
+   * which key shape the store uses.
    */
   url: string;
 }
@@ -38,6 +54,24 @@ export interface ResizeSourceRefused {
 }
 
 export type ResizeSourceDecision = ResizeSourceAllowed | ResizeSourceRefused;
+
+/**
+ * The first candidate key the store actually holds, or null.
+ *
+ * Kept here rather than in the route so the two-shape detail stays in one
+ * place with the comment that explains it.
+ */
+export async function findStoredKey(
+  keys: string[],
+  fileExists: (key: string) => Promise<boolean>
+): Promise<string | null> {
+  for (const key of keys) {
+    if (await fileExists(key)) {
+      return key;
+    }
+  }
+  return null;
+}
 
 /**
  * Work out the key a `src` refers to inside the store, or why it does not.
@@ -93,25 +127,32 @@ export function resolveResizeSource(
     }
   }
 
-  const key = decodeURIComponent(
+  const relativePath = decodeURIComponent(
     sourcePath.slice(basePath === '/' ? 0 : basePath.length)
   ).replace(/^\/+/, '');
 
-  if (!key || key.includes('\0')) {
+  if (!relativePath || relativePath.includes('\0')) {
     return { allowed: false, reason: 'outside-store' };
   }
 
   // `..` cannot escape the store through a URL pathname, because the URL parser
   // resolves it before we see it — but a key is also used to build a filesystem
   // path downstream, so refuse it rather than rely on that.
-  if (key.split('/').some((segment) => segment === '..')) {
+  if (relativePath.split('/').some((segment) => segment === '..')) {
     return { allowed: false, reason: 'outside-store' };
+  }
+
+  const keys = [relativePath];
+  // LocalFileStore's public URL carries the upload mount that its keys do not.
+  const localPrefix = publicUploadPath.replace(/^\/+/, '') + '/';
+  if (relativePath.startsWith(localPrefix)) {
+    keys.push(relativePath.slice(localPrefix.length));
   }
 
   return {
     allowed: true,
-    key,
-    url: `${trimTrailingSlash(base.origin + basePath)}/${key
+    keys,
+    url: `${trimTrailingSlash(base.origin + basePath)}/${relativePath
       .split('/')
       .map(encodeURIComponent)
       .join('/')}`,

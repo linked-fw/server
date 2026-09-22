@@ -39,6 +39,7 @@ import { rimraf } from 'rimraf';
 import sharp from 'sharp';
 import {
   fetchStoredImage,
+  findStoredKey,
   resolveResizeSource,
 } from '../utils/resizeSource.js';
 import { Transform } from 'stream';
@@ -771,15 +772,28 @@ export class LinkedServer extends Shape {
         return;
       }
 
-      if (!(await LinkedFileStorage.fileExists(source.key))) {
+      // Two candidates, because the stores disagree on whether the public URL
+      // includes the upload mount -- see resolveResizeSource. Fail-closed: if
+      // neither shape is held, nothing is fetched.
+      const storedKey = await findStoredKey(source.keys, (key) =>
+        LinkedFileStorage.fileExists(key)
+      );
+
+      if (!storedKey) {
         res.status(404).send({ error: 'Could not fetch image from URL' });
         return;
       }
 
-      // extract the base name and extension from the imageFileName
-      // example: /uploads/resized/935b511c9_cropped.jpeg
-      const url = new URL(source.url);
-      const { name, ext } = path.parse(url.pathname);
+      // extract the base name and extension from the key the store actually
+      // holds, not from the URL path.
+      //
+      // These differ: LocalFileStore serves `accessURL + /uploads/ + key`, so
+      // deriving the destination from the URL gave it an extra `uploads/`
+      // segment and resized files landed in data/uploads/uploads/resized/.
+      // S3FileStore serves the key directly, so for it the two are the same --
+      // which is why this went unnoticed. Deriving from the key is correct for
+      // both.
+      const { name, ext } = path.parse(storedKey);
 
       // append the width and height parameters to the base name
       // example: 935b511c9_cropped_w190.jpeg or 935b511c9_cropped_w190h190.jpeg
@@ -794,16 +808,16 @@ export class LinkedServer extends Shape {
         height ? 'h' + height : ''
       }`;
 
-      // create a new pathname with dimensions
-      // example: /uploads/resized/935b511c9_cropped.jpeg -> /uploads/resized/935b511c9_cropped_w190.jpeg
+      // the destination key, alongside the original
+      // example: uploads/935b511c9_cropped.jpeg -> uploads/resized/935b511c9_cropped_w190.jpeg
+      // and for a LocalFileStore key: photo.jpg -> resized/photo_w190.jpg
+      const keyDir = path.dirname(storedKey);
       const newPathname = path.join(
-        path.dirname(url.pathname),
+        keyDir === '.' ? '' : keyDir,
         'resized',
         `${newName}${ext}`
       );
 
-      // remove the leading slash from the pathname
-      // example: /uploads/resized/935b511c9_cropped_w190.jpeg -> uploads/resized/935b511c9_cropped_w190.jpeg
       const resizedImageFileName = newPathname.startsWith('/')
         ? newPathname.slice(1)
         : newPathname;

@@ -601,3 +601,82 @@ describe('/resized/* — only fetches images the store already holds', () => {
     expect(res.json()).toEqual({ error: 'Could not fetch image from URL' });
   });
 });
+
+// Regression guard for a real LocalFileStore, not the in-memory stand-in.
+//
+// The two stores do not agree on how a public URL maps back to a key:
+// S3FileStore serves a key directly under accessURL, while LocalFileStore
+// serves `accessURL + /uploads/ + key`. The first version of the source guard
+// derived one key from the URL and only ever ran against a MemoryFileStore
+// shaped like S3, so it passed while every LocalFileStore deployment 404'd.
+describe('/resized/* — key shape against a real LocalFileStore', () => {
+  let localStore: any;
+  let localDir: string;
+  let cwdBeforeLocal: string;
+
+  beforeEach(async () => {
+    cwdBeforeLocal = process.cwd();
+    localDir = await fs.mkdtemp(path.join(os.tmpdir(), 'resized-localstore-'));
+    await fs.mkdir(path.join(localDir, 'data', 'uploads'), { recursive: true });
+    process.chdir(localDir);
+
+    process.env.SITE_ROOT = 'http://localhost:4000';
+    const { LocalFileStore } = await import(
+      '../shapes/filestores/LocalFileStore.js'
+    );
+    localStore = new LocalFileStore('resize-local');
+    LinkedFileStorage.resetForTests();
+    LinkedFileStorage.setDefaultStore(localStore);
+  });
+
+  afterEach(async () => {
+    process.chdir(cwdBeforeLocal);
+    await fs.rm(localDir, { recursive: true, force: true });
+  });
+
+  it('resolves a LocalFileStore public URL back to its key', async () => {
+    const original = await makeImage('jpeg');
+    // the store decides both the key and the URL it is served under
+    const saved = await localStore.saveFileWithPath(
+      'photo.jpg',
+      original,
+      { mimeType: 'image/jpeg', preventDuplicates: false }
+    );
+
+    // the key has no `uploads/` segment, the URL does -- the whole point
+    expect(saved.storedPath).toBe('photo.jpg');
+    expect(saved.publicURL).toBe('http://localhost:4000/uploads/photo.jpg');
+
+    stubFetch(() => okResponse(original));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(saved.publicURL)}&w=60`
+    );
+
+    // before the fix this was 404: fileExists('uploads/photo.jpg') is false
+    expect(res.status).toBe(302);
+    const meta = await sharp(
+      (await localStore.getFile('resized/photo_w60.jpg'))!
+    ).metadata();
+    expect(meta.width).toBe(60);
+  });
+
+  it('still refuses a LocalFileStore URL for a file that is not stored', async () => {
+    const calls = stubFetch(() => {
+      throw new Error('the guard must refuse before any fetch');
+    });
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(
+        'http://localhost:4000/uploads/never-stored.jpg'
+      )}&w=60`
+    );
+
+    expect(res.status).toBe(404);
+    expect(calls).toEqual([]);
+  });
+});
