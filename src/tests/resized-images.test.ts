@@ -417,6 +417,20 @@ describe('/resized/* — remote branch (?src=)', () => {
 describe('/resized/* — local branch (uploads folder)', () => {
   const uploads = () => path.join(process.cwd(), 'data', 'uploads');
 
+  // A real LocalFileStore, not the in-memory stand-in: this branch reads the
+  // original and writes the derivative through LinkedFileStorage now, and the
+  // assertions below are about where those land on disk. With the default
+  // basePath that is `<cwd>/data/uploads`, so writing a fixture with fs is the
+  // same thing as putting it in the store.
+  beforeEach(async () => {
+    const { LocalFileStore } = await import(
+      '../shapes/filestores/LocalFileStore.js'
+    );
+    process.env.SITE_ROOT = 'http://localhost:4000';
+    LinkedFileStorage.resetForTests();
+    LinkedFileStorage.setDefaultStore(new LocalFileStore('resize-local-branch'));
+  });
+
   /** Fails the request loudly if the handler reaches for the network. */
   function forbidFetch() {
     (globalThis as any).fetch = () => {
@@ -678,5 +692,72 @@ describe('/resized/* — key shape against a real LocalFileStore', () => {
 
     expect(res.status).toBe(404);
     expect(calls).toEqual([]);
+  });
+});
+
+// The bug this branch had for as long as it existed: it read and wrote
+// <cwd>/data/uploads directly, so an app whose uploads live in S3 had nothing
+// on local disk and every request 404'd. MemoryFileStore stands in for any
+// non-local store here — what matters is that it is not the filesystem.
+describe('/resized/* — local branch works for a non-local store', () => {
+  beforeEach(() => {
+    (globalThis as any).fetch = () => {
+      throw new Error('the local branch must not fetch');
+    };
+  });
+
+  it('resizes an upload the store holds, with nothing on disk', async () => {
+    store.files.set('remote-only.jpg', await makeImage('jpeg'));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(base, '/resized/remote-only.jpg?w=40');
+
+    expect(res.status).toBe(200);
+    expect((await sharp(res.buffer).metadata()).width).toBe(40);
+    // the derivative went to the store, not to a folder
+    expect(store.files.has('resized/remote-only_w40.jpg')).toBe(true);
+    await expect(
+      fs.stat(path.join(process.cwd(), 'data', 'uploads', 'remote-only.jpg'))
+    ).rejects.toThrow();
+  });
+
+  it('serves the second request from the store without resizing again', async () => {
+    store.files.set('twice.jpg', await makeImage('jpeg'));
+    const base = await listen(makeLinkedServer());
+
+    const first = await get(base, '/resized/twice.jpg?w=40');
+    // drop the original: only the cached derivative can answer now
+    store.files.delete('twice.jpg');
+    const second = await get(base, '/resized/twice.jpg?w=40');
+
+    expect(second.status).toBe(200);
+    expect(second.buffer.equals(first.buffer)).toBe(true);
+  });
+
+  it('404s when the store does not hold the original', async () => {
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(base, '/resized/absent.jpg?w=40');
+
+    expect(res.status).toBe(404);
+    expect(res.json()).toEqual({ error: 'Could not find original image' });
+  });
+
+  it('puts derivatives in whichever store the purpose names', async () => {
+    // the point of the purpose: originals in one store, cache in another
+    const { resizedImagesPurpose } = await import(
+      '../utils/resizedImagesPurpose.js'
+    );
+    const cache = new MemoryFileStore();
+    LinkedFileStorage.setStore(resizedImagesPurpose, cache);
+    store.files.set('split.jpg', await makeImage('jpeg'));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(base, '/resized/split.jpg?w=40');
+
+    expect(res.status).toBe(200);
+    expect(cache.files.has('resized/split_w40.jpg')).toBe(true);
+    // the uploads store keeps only the original
+    expect([...store.files.keys()]).toEqual(['split.jpg']);
   });
 });

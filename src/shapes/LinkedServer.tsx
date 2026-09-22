@@ -23,7 +23,12 @@ import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 import { Shape } from '@_linked/core/shapes/Shape';
 import { LinkedErrorLogging } from '@_linked/core/utils/LinkedErrorLogging';
-import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
+import {
+  FileStorePurposes,
+  LinkedFileStorage,
+} from '@_linked/core/utils/LinkedFileStorage';
+import type { IFileStore } from '@_linked/core/interfaces/IFileStore';
+import { getResizedImagesStore } from '../utils/resizedImagesPurpose.js';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { autoLoadOntologyData } from '@_linked/core/utils/Package';
 import {
@@ -927,93 +932,85 @@ export class LinkedServer extends Shape {
       imageFileName = req.originalUrl.split('/resized/')[1]?.split('?')[0];
     }
 
-    //if this request has not been made (and stored on the HD) before
-    let [trueFileName, ...extensions] = imageFileName.split('.');
-    let extension = extensions.join('.');
+    // Both halves of this route now read and write through LinkedFileStorage.
+    //
+    // This branch used to hardcode <cwd>/data/uploads for both, which meant it
+    // could only ever work for a LocalFileStore: an app configured with S3 kept
+    // its uploads in the bucket, so every request here looked on a local disk
+    // that had nothing on it and 404'd. Going through the store also removes the
+    // need to create the cache directory by hand -- LocalFileStore.saveFile
+    // makes its own parent folders, which is why the mkdirSync that used to sit
+    // here (commented out, so it silently did nothing) is gone rather than
+    // restored.
+    const [trueFileName, ...extensions] = imageFileName.split('.');
+    const extension = extensions.join('.');
 
-    let resizedImageFileName =
-      trueFileName +
-      '_' +
-      (width ? 'w' + width : '') +
-      (height ? 'h' + height : '') +
-      '.' +
-      extension;
-
-    let resizedFilePath = path.join(
-      process.cwd(),
-      'data',
-      'uploads',
+    const resizedKey = path.join(
+      path.dirname(imageFileName) === '.' ? '' : path.dirname(imageFileName),
       'resized',
-      resizedImageFileName
+      `${path.basename(trueFileName)}_${width ? 'w' + width : ''}${
+        height ? 'h' + height : ''
+      }.${extension}`
     );
 
-    if (!fsNative.existsSync(resizedFilePath)) {
-      //ensure the resized folder exists
-      // if (!fsNative.existsSync(path.join(process.cwd(), 'data', 'uploads', 'resized'))) {
-      //   fsNative.mkdirSync(path.join(process.cwd(), 'data', 'uploads', 'resized'), {recursive: true});
-      // }
-
-      //then lets resize and store the image:
-      // resize the image with sharp and return it
-      let originalImagePath = path.join(
-        process.cwd(),
-        'data',
-        'uploads',
-        imageFileName
-      );
-      if (!fsNative.existsSync(originalImagePath)) {
-        console.warn('Could not find original image at ' + originalImagePath);
-        return res.status(404).send({ error: 'Could not find original image' });
+    // The resize cache is its own purpose, so an app can keep derivatives on a
+    // local disk while its uploads live in S3, or share one store for both.
+    // Unconfigured, it falls back to the default store, which is the previous
+    // behaviour for anyone who never thinks about it.
+    const cacheStore = getResizedImagesStore();
+    const sendStoredFile = async (store: IFileStore, key: string) => {
+      const bytes = await store.getFile(key);
+      if (!bytes) {
+        return false;
       }
+      res.type(extension || 'bin').send(bytes);
+      return true;
+    };
 
-      try {
-        let image = sharp(originalImagePath);
-        image.resize(
-          width ? parseInt(width) : null,
-          height ? parseInt(height) : null
-        );
-
-        //write image to disk
-        await image
-          .toFile(resizedFilePath)
-          .then(() => {
-            // console.log('resized image written to disk: ' + resizedFilePath);
-          })
-          .catch((err) => {
-            console.warn(
-              'Could not write resized image to disk at ' +
-                resizedFilePath +
-                ': ' +
-                err
-            );
-          });
-        //
-        // //get content type from the file extension
-        // let contentType;
-        // let extension = imageFileName.split('.').pop();
-        // switch (extension) {
-        //   case 'jpg':
-        //   case 'jpeg':
-        //     contentType = 'image/jpeg';
-        //     break;
-        //   case 'png':
-        //     contentType = 'image/png';
-        //     break;
-        //   case 'gif':
-        //     contentType = 'image/gif';
-        //     break;
-        //   default:
-        //     contentType = 'image/jpeg';
-        // }
-        // res.setHeader('Content-Type', contentType);
-        // image.pipe(res);
-      } catch (err) {
-        console.warn(err);
-        res.status(500).send({ error: 'Could not resize image' });
+    if (await cacheStore.fileExists(resizedKey)) {
+      if (await sendStoredFile(cacheStore, resizedKey)) {
+        return;
       }
     }
-    //send the resized image
-    res.sendFile(resizedFilePath);
+
+    const uploadsStore = LinkedFileStorage.getStore(FileStorePurposes.uploads);
+    const original = await uploadsStore.getFile(imageFileName);
+
+    if (!original) {
+      console.warn('Could not find original image at ' + imageFileName);
+      res.status(404).send({ error: 'Could not find original image' });
+      return;
+    }
+
+    let resized: Buffer;
+    try {
+      resized = await sharp(original)
+        .resize(width ? parseInt(width) : null, height ? parseInt(height) : null)
+        .toBuffer();
+    } catch (err) {
+      console.warn('Could not resize image: ' + err);
+      res.status(500).send({ error: 'Could not resize image' });
+      return;
+    }
+
+    // preventDuplicates: false because this is a cache keyed by name. Letting
+    // the store pick a fresh name on collision would write a second copy for
+    // every request and never hit the cache.
+    //
+    // A failure here is logged, not fatal: the resize succeeded, so the caller
+    // still gets its image and only the caching is lost. It used to be
+    // swallowed and then followed by sendFile on a file that was never written,
+    // which turned a cache miss into a 404 with nothing in the response to say
+    // why -- and, on the error path, into a second send after the 500.
+    try {
+      await cacheStore.saveFile(resizedKey, resized, {
+        preventDuplicates: false,
+      });
+    } catch (err) {
+      console.warn('Could not cache resized image at ' + resizedKey + ': ' + err);
+    }
+
+    res.type(extension || 'bin').send(resized);
   }
 
   async indexLincdPackage(pkg: string, warnIfNotFound: boolean = false) {
