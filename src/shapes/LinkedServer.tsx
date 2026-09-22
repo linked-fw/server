@@ -37,6 +37,10 @@ import { renderToPipeableStream, renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server.js';
 import { rimraf } from 'rimraf';
 import sharp from 'sharp';
+import {
+  fetchStoredImage,
+  resolveResizeSource,
+} from '../utils/resizeSource.js';
 import { Transform } from 'stream';
 import { CookieJar } from 'tough-cookie';
 import { lincdServer } from '../ontologies/lincd-server.js';
@@ -751,20 +755,42 @@ export class LinkedServer extends Shape {
     const accessURL = LinkedFileStorage.accessURL;
 
     if (imageFileName) {
-      // TODO: restrict resizing to images that are stored by LinkedFileStorage.fileExists()
-      // if (imageFileName.startsWith(accessURL)) {
-      //   const exists = await LinkedFileStorage.fileExists(
-      //     imageFileName.replace(`${accessURL}/`, ''),
-      //   );
+      // `src` may only name an image this app already stores. Before this check
+      // the value went straight to fetch(), which made the route an open proxy
+      // into its own network -- cloud metadata, localhost, private ranges -- and
+      // the response was then written into the PUBLIC file store and the caller
+      // redirected to it, so anything reachable was persisted, not just leaked.
+      //
+      // resolveResizeSource compares parsed origins (a startsWith check is
+      // defeated by https://cdn.example.com.evil.com) and hands back the key,
+      // which must also exist in the store before anything is requested.
+      const source = resolveResizeSource(imageFileName, accessURL);
+
+      if (!source.allowed) {
+        res.status(400).send({ error: 'Unsupported image source' });
+        return;
+      }
+
+      if (!(await LinkedFileStorage.fileExists(source.key))) {
+        res.status(404).send({ error: 'Could not fetch image from URL' });
+        return;
+      }
 
       // extract the base name and extension from the imageFileName
       // example: /uploads/resized/935b511c9_cropped.jpeg
-      const url = new URL(imageFileName);
+      const url = new URL(source.url);
       const { name, ext } = path.parse(url.pathname);
 
       // append the width and height parameters to the base name
       // example: 935b511c9_cropped_w190.jpeg or 935b511c9_cropped_w190h190.jpeg
-      const newName = `${name}${width ? '_w' + width : ''}${
+      //
+      // The underscore is emitted once, before either dimension, rather than as
+      // part of the width segment. With it inside the width, a height-only
+      // request produced `logoh30.jpeg` here while the local branch below --
+      // which has always written the separator unconditionally -- produced
+      // `logo_h30.jpeg` for the same request. The two halves of one route
+      // disagreed on the cache key.
+      const newName = `${name}_${width ? 'w' + width : ''}${
         height ? 'h' + height : ''
       }`;
 
@@ -811,15 +837,11 @@ export class LinkedServer extends Shape {
         // //   imageFileName = imageFileName.replace('localhost', '127.0.0.1');
         // // }
 
-        // get the image from imageFileName
-        const image = await globalThis
-          .fetch(imageFileName)
-          .then((res) => res.arrayBuffer())
-          .then((arrayBuffer) => Buffer.from(arrayBuffer))
-          .catch((err) => {
-            console.warn('Could not fetch image from URL: ' + err);
-            return null;
-          });
+        // Fetch the URL rebuilt from the validated key, never the caller's
+        // string, and under a timeout, a size cap and redirect: 'error'. The
+        // redirect rule is not optional: fetch follows redirects by default, so
+        // a 302 would otherwise undo the origin check one hop later.
+        const image = await fetchStoredImage(source.url);
 
         // if image is null, return 404
         if (!image) {
