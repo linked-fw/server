@@ -38,7 +38,6 @@
     "@_linked/cli": "^1.2",
     "@_linked/core": "^2.20.0",
     "@_linked/server-utils": "^1.3.0",
-    "archiver": "^7.0.1",
     "autoprefixer": "^10.4.18",
     "body-parser": "^1.20.2",
     "chalk": "4.1.2",
@@ -47,10 +46,8 @@
     "cron": "^4.3.4",
     "express": "^4.18.3",
     "fetch-cookie": "^3.1.0",
-    "is-object": "^1.0.2",
     "n3": "^1.17.2",
     "node-addon-api": "^8.2.2",
-    "node-hook": "^1.0.0",
     "open": "^8.4.0",
     "proper-lockfile": "^4.1.2",
     "react": "^18.2",
@@ -64,8 +61,7 @@
     "typescript": "^5.7.3",
     "webpack": "^5.90.3",
     "webpack-dev-middleware": "^7.0.0",
-    "webpack-hot-middleware": "^2.26.1",
-    "zip-a-folder": "^3.1.8"
+    "webpack-hot-middleware": "^2.26.1"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.5.2",

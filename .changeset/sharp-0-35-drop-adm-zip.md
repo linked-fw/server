@@ -22,9 +22,11 @@ Flagged `minor` rather than `patch` because sharp 0.35 drops some older
 platform prebuilds; consumers on an unusual target should check that a binary
 exists for theirs.
 
-`adm-zip` is removed: it is declared in `package.json` and referenced nowhere in
-the package. It carried three advisories of its own, so this is three fewer for
-every consumer at the cost of one line.
+Five declared dependencies are removed, each referenced nowhere in the package:
+`adm-zip`, `archiver`, `zip-a-folder`, `node-hook` and `is-object`. Only
+`adm-zip` carried advisories -- three of them, so that is three fewer for every
+consumer. The other four are weight rather than risk: 38 fewer packages in a
+consumer's tree.
 
 Note for whoever picks it up next: `resizeImage` still fetches an arbitrary
 `req.query.src` server-side. The `// TODO: restrict resizing to images that are
