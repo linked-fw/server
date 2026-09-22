@@ -1,0 +1,467 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from '@jest/globals';
+import express from 'express';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import type { AddressInfo } from 'net';
+import sharp from 'sharp';
+import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
+import type { IFileStore } from '@_linked/core/interfaces/IFileStore';
+import { LinkedServer } from '../shapes/LinkedServer.js';
+
+// `GET /resized/*` is registered before the `apiOnly` guard, so it is live on
+// every deployment, and it is the only route in the server that touches sharp.
+// The bump to sharp ^0.35 (a semver-major) had no test behind it, so these
+// exercise the real encoder on both of the handler's branches:
+//
+//  - the REMOTE branch: `?src=<url>` is fetched with `globalThis.fetch`,
+//    resized in memory and written to LinkedFileStorage, with the resulting CDN
+//    URL cached both in-process (`resizePathsMap`) and in the store itself;
+//  - the LOCAL branch: the path after `/resized/` is read from
+//    `<cwd>/data/uploads`, resized, and cached as a file in
+//    `<cwd>/data/uploads/resized` which is then sent back.
+//
+// Every fixture is generated with sharp at run time — no binary files in git.
+// `globalThis.fetch` is replaced per test, never called for real, so the suite
+// stays offline; `realFetch` is kept aside for the test client itself.
+
+const realFetch = globalThis.fetch;
+const CDN = 'https://cdn.example.test';
+
+const servers: any[] = [];
+let tmpDir: string;
+let cwdBefore: string;
+
+/** A file store that keeps everything in memory, so saves are observable. */
+class MemoryFileStore implements IFileStore {
+  public readonly accessURL = CDN;
+  public readonly files = new Map<string, Buffer>();
+
+  private key(filePath: string) {
+    return filePath.startsWith('/') ? filePath.slice(1) : filePath;
+  }
+
+  async saveFile(filePath: string, fileContent: any): Promise<string> {
+    const key = this.key(filePath);
+    this.files.set(key, Buffer.from(fileContent));
+    return `${this.accessURL}/${key}`;
+  }
+
+  async fileExists(filePath: string): Promise<boolean> {
+    return this.files.has(this.key(filePath));
+  }
+
+  async getFile(filePath: string): Promise<Buffer | null> {
+    return this.files.get(this.key(filePath)) ?? null;
+  }
+
+  async deleteFile(filePath: string): Promise<void> {
+    this.files.delete(this.key(filePath));
+  }
+
+  async listFiles(prefix?: string): Promise<string[]> {
+    const keys = [...this.files.keys()];
+    return prefix ? keys.filter((k) => k.startsWith(prefix)) : keys;
+  }
+}
+
+let store: MemoryFileStore;
+
+/**
+ * A LinkedServer with only the fields `resizeImage` touches — the same trick
+ * call-errors/call-semantics use to exercise one handler without booting the
+ * whole server (which would need a package index, vite, providers, …).
+ */
+function makeLinkedServer(): any {
+  const server: any = Object.create(LinkedServer.prototype);
+  server.resizePathsMap = new Map();
+  return server;
+}
+
+/** Mirrors the registration in `LinkedServer.setup()`. */
+async function listen(linkedServer: any): Promise<string> {
+  const app = express();
+  app.get('/resized/*', async (req, res) => {
+    linkedServer.resizeImage(req, res);
+  });
+  const s = await new Promise<any>((resolve) => {
+    const srv = app.listen(0, () => resolve(srv));
+  });
+  servers.push(s);
+  return `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+}
+
+/** Never follows redirects: the handler answers with 302s that we assert on. */
+async function get(base: string, url: string) {
+  const res = await realFetch(base + url, { redirect: 'manual' });
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return {
+    status: res.status,
+    location: res.headers.get('location'),
+    buffer,
+    json: () => JSON.parse(buffer.toString('utf-8')),
+  };
+}
+
+/** A deterministic, non-uniform test image, so encoders have real work to do. */
+async function makeImage(
+  format: 'jpeg' | 'png' | 'webp',
+  width = 120,
+  height = 90
+): Promise<Buffer> {
+  return sharp({
+    create: {
+      width,
+      height,
+      channels: 3,
+      background: { r: 10, g: 120, b: 220 },
+    },
+  })
+    .composite([
+      {
+        input: await sharp({
+          create: {
+            width: Math.round(width / 2),
+            height: Math.round(height / 2),
+            channels: 3,
+            background: { r: 240, g: 30, b: 90 },
+          },
+        })
+          .png()
+          .toBuffer(),
+        top: 0,
+        left: 0,
+      },
+    ])
+    .toFormat(format)
+    .toBuffer();
+}
+
+/** Stub `globalThis.fetch` for the handler's remote branch. */
+function stubFetch(impl: (url: string) => Promise<any>) {
+  const calls: string[] = [];
+  (globalThis as any).fetch = (url: any, ...rest: any[]) => {
+    calls.push(String(url));
+    return impl(String(url));
+  };
+  return calls;
+}
+
+function okResponse(body: Buffer) {
+  return Promise.resolve({
+    arrayBuffer: async () =>
+      body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+  });
+}
+
+beforeAll(async () => {
+  cwdBefore = process.cwd();
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'resized-images-'));
+  // The local branch resolves `data/uploads` against the CWD, so the whole file
+  // runs from a scratch directory rather than writing into the repo.
+  await fs.mkdir(path.join(tmpDir, 'data', 'uploads', 'resized'), {
+    recursive: true,
+  });
+  process.chdir(tmpDir);
+});
+
+afterAll(async () => {
+  process.chdir(cwdBefore);
+  await fs.rm(tmpDir, { recursive: true, force: true });
+  (globalThis as any).fetch = realFetch;
+  LinkedFileStorage.resetForTests();
+});
+
+beforeEach(() => {
+  store = new MemoryFileStore();
+  LinkedFileStorage.resetForTests();
+  LinkedFileStorage.setDefaultStore(store);
+});
+
+afterEach(async () => {
+  (globalThis as any).fetch = realFetch;
+  await Promise.all(
+    servers
+      .splice(0)
+      .map((s) => new Promise<void>((resolve) => s.close(() => resolve())))
+  );
+});
+
+describe('/resized/* — no dimensions given', () => {
+  it('redirects to the untouched original under /uploads', async () => {
+    const base = await listen(makeLinkedServer());
+    const res = await get(base, '/resized/photo.jpg');
+    expect(res.status).toBe(302);
+    expect(res.location).toBe('/uploads/photo.jpg');
+  });
+});
+
+describe('/resized/* — remote branch (?src=)', () => {
+  it('resizes a fetched jpeg and stores it under a dimension-tagged key', async () => {
+    const original = await makeImage('jpeg');
+    const calls = stubFetch(() => okResponse(original));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/photo.jpg`)}&w=60`
+    );
+
+    expect(calls).toEqual([`${CDN}/uploads/photo.jpg`]);
+    expect(res.status).toBe(302);
+    expect(res.location).toBe(`${CDN}/uploads/resized/photo_w60.jpg`);
+
+    const saved = await store.getFile('uploads/resized/photo_w60.jpg');
+    expect(saved).not.toBeNull();
+    const meta = await sharp(saved!).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(60);
+    // Aspect ratio preserved: 120x90 scaled to width 60.
+    expect(meta.height).toBe(45);
+  });
+
+  it('scales by height alone, tagging the key with `h` only', async () => {
+    const original = await makeImage('png');
+    stubFetch(() => okResponse(original));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/logo.png`)}&h=30`
+    );
+
+    // Note the missing underscore: the separator is emitted by the WIDTH
+    // segment, so a height-only key reads `logoh30`, not `logo_h30`. Pinned as
+    // the behaviour that is actually shipped — cached URLs depend on it.
+    expect(res.location).toBe(`${CDN}/uploads/resized/logoh30.png`);
+    const meta = await sharp(
+      (await store.getFile('uploads/resized/logoh30.png'))!
+    ).metadata();
+    expect(meta.format).toBe('png');
+    expect(meta.height).toBe(30);
+    expect(meta.width).toBe(40);
+  });
+
+  it('honours both dimensions, cropping to the exact box', async () => {
+    const original = await makeImage('webp');
+    stubFetch(() => okResponse(original));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/banner.webp`)}&w=50&h=50`
+    );
+
+    expect(res.location).toBe(`${CDN}/uploads/resized/banner_w50h50.webp`);
+    const meta = await sharp(
+      (await store.getFile('uploads/resized/banner_w50h50.webp'))!
+    ).metadata();
+    expect(meta.format).toBe('webp');
+    expect(meta.width).toBe(50);
+    expect(meta.height).toBe(50);
+  });
+
+  // The output options are the part a sharp major could silently change. Each
+  // case re-encodes the same source with the options the handler is supposed to
+  // pass and asserts byte-for-byte equality — and that the encoder's own
+  // default would have produced something different, so the assertion has teeth.
+  const outputOptionCases: Array<
+    [
+      format: 'jpeg' | 'png' | 'webp',
+      fileName: string,
+      options: Record<string, number>,
+      /** What sharp encodes with when the handler passes nothing special. */
+      defaults: Record<string, number>,
+    ]
+  > = [
+    ['jpeg', 'photo.jpg', { quality: 90 }, {}],
+    ['png', 'logo.png', { compressionLevel: 9 }, { compressionLevel: 6 }],
+    ['webp', 'banner.webp', { quality: 90 }, {}],
+  ];
+
+  it.each(outputOptionCases)(
+    'applies the %s output options the handler selects',
+    async (format, fileName, options, defaults) => {
+      const original = await makeImage(format);
+      stubFetch(() => okResponse(original));
+      const base = await listen(makeLinkedServer());
+
+      await get(
+        base,
+        `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/${fileName}`)}&w=60`
+      );
+
+      const key = `uploads/resized/${fileName.replace(/\.(\w+)$/, '_w60.$1')}`;
+      const saved = await store.getFile(key);
+
+      const expected = await sharp(original)
+        .resize(60, null)
+        .toFormat(format, options)
+        .toBuffer();
+      expect(saved!.equals(expected)).toBe(true);
+
+      const withDefaults = await sharp(original)
+        .resize(60, null)
+        .toFormat(format, defaults)
+        .toBuffer();
+      expect(saved!.equals(withDefaults)).toBe(false);
+    }
+  );
+
+  it('serves a second request for the same size from the in-process map', async () => {
+    const original = await makeImage('jpeg');
+    const calls = stubFetch(() => okResponse(original));
+    const linkedServer = makeLinkedServer();
+    const base = await listen(linkedServer);
+    const url = `/resized/x?src=${encodeURIComponent(
+      `${CDN}/uploads/photo.jpg`
+    )}&w=60`;
+
+    const first = await get(base, url);
+    const second = await get(base, url);
+
+    expect(second.status).toBe(302);
+    expect(second.location).toBe(first.location);
+    // Cached: the source is fetched and re-encoded exactly once.
+    expect(calls).toHaveLength(1);
+    expect(linkedServer.resizePathsMap.get('uploads/resized/photo_w60.jpg')).toBe(
+      first.location
+    );
+  });
+
+  it('reuses a resize another process already wrote to the store', async () => {
+    // A cold process with an empty map must still not re-encode: the store is
+    // consulted before the source is fetched.
+    await store.saveFile(
+      'uploads/resized/photo_w60.jpg',
+      await makeImage('jpeg', 60, 45)
+    );
+    const calls = stubFetch(() => okResponse(Buffer.alloc(0)));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/photo.jpg`)}&w=60`
+    );
+
+    expect(res.status).toBe(302);
+    expect(res.location).toBe(`${CDN}/uploads/resized/photo_w60.jpg`);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('answers 404 when the source cannot be fetched', async () => {
+    stubFetch(() => Promise.reject(new Error('ECONNREFUSED')));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/gone.jpg`)}&w=60`
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.json()).toEqual({ error: 'Could not fetch image from URL' });
+  });
+
+  it('answers 400 when the fetched bytes are not a supported image', async () => {
+    stubFetch(() => okResponse(Buffer.from('<html>not an image</html>')));
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(
+      base,
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/page.jpg`)}&w=60`
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.json()).toEqual({ error: 'Unsupported image format' });
+    expect(store.files.size).toBe(0);
+  });
+});
+
+describe('/resized/* — local branch (uploads folder)', () => {
+  const uploads = () => path.join(process.cwd(), 'data', 'uploads');
+
+  /** Fails the request loudly if the handler reaches for the network. */
+  function forbidFetch() {
+    (globalThis as any).fetch = () => {
+      throw new Error('the local branch must not fetch');
+    };
+  }
+
+  it('resizes a local upload, caches it on disk and sends it back', async () => {
+    forbidFetch();
+    await fs.writeFile(
+      path.join(uploads(), 'local.jpg'),
+      await makeImage('jpeg')
+    );
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(base, '/resized/local.jpg?w=40');
+
+    expect(res.status).toBe(200);
+    const meta = await sharp(res.buffer).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(40);
+    expect(meta.height).toBe(30);
+
+    // The cache file is written under the dimension-tagged name…
+    const cached = path.join(uploads(), 'resized', 'local_w40.jpg');
+    expect((await fs.readFile(cached)).equals(res.buffer)).toBe(true);
+  });
+
+  it('serves the cached file without touching the original again', async () => {
+    forbidFetch();
+    await fs.writeFile(
+      path.join(uploads(), 'cached.png'),
+      await makeImage('png')
+    );
+    const base = await listen(makeLinkedServer());
+
+    const first = await get(base, '/resized/cached.png?h=45');
+    expect(first.status).toBe(200);
+
+    // Removing the source proves the second response comes off disk.
+    await fs.rm(path.join(uploads(), 'cached.png'));
+    const second = await get(base, '/resized/cached.png?h=45');
+
+    expect(second.status).toBe(200);
+    expect(second.buffer.equals(first.buffer)).toBe(true);
+    expect(
+      (await sharp(second.buffer).metadata()).height
+    ).toBe(45);
+  });
+
+  it('keeps separate cache entries per requested size', async () => {
+    forbidFetch();
+    await fs.writeFile(
+      path.join(uploads(), 'sizes.webp'),
+      await makeImage('webp')
+    );
+    const base = await listen(makeLinkedServer());
+
+    await get(base, '/resized/sizes.webp?w=30');
+    await get(base, '/resized/sizes.webp?w=30&h=30');
+
+    const written = (await fs.readdir(path.join(uploads(), 'resized'))).filter(
+      (f) => f.startsWith('sizes')
+    );
+    expect(written.sort()).toEqual(['sizes_w30.webp', 'sizes_w30h30.webp']);
+  });
+
+  it('answers 404 when the original upload does not exist', async () => {
+    forbidFetch();
+    const base = await listen(makeLinkedServer());
+
+    const res = await get(base, '/resized/missing.jpg?w=40');
+
+    expect(res.status).toBe(404);
+    expect(res.json()).toEqual({ error: 'Could not find original image' });
+  });
+});
