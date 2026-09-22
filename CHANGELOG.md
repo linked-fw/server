@@ -1,5 +1,41 @@
 # @\_linked/server
 
+## 2.9.0
+
+### Minor Changes
+
+- [#65](https://github.com/linked-fw/server/pull/65) [`85d61d1`](https://github.com/linked-fw/server/commit/85d61d107af292d2b6e02d73bb41251248239d2c) Thanks [@flyon](https://github.com/flyon)! - Upgrade `sharp` to ^0.35.4 and drop the unused `adm-zip` dependency.
+
+  `sharp` was pinned to `^0.34.4`, which resolves to a build carrying the libvips
+  advisories CVE-2026-33327, -33328, -35590 and -35591. This is not a
+  tooling-only exposure: `LinkedServer` imports `sharp` at module top level and
+  registers `GET /resized/*` **before** the `apiOnly` guard, so the handler is
+  live in an API-only deployment too. It fetches a URL and pipes the bytes
+  straight into `sharp()`, which makes those the only advisories in this package
+  reachable from a request.
+
+  `^0.35.4` is a semver-major for sharp, but the surface used here —
+  `sharp(buffer|path)`, `.metadata()`, `.resize(w, h)`, `.toFormat(fmt, opts)`,
+  `.toBuffer()` and `.toFile()` — is unchanged between the two. Verified by
+  exercising exactly those calls against jpeg, png and webp, through both the
+  buffer branch and the `toFile` branch. sharp 0.35 requires Node >= 20.9.
+
+  Flagged `minor` rather than `patch` because sharp 0.35 drops some older
+  platform prebuilds; consumers on an unusual target should check that a binary
+  exists for theirs.
+
+  Five declared dependencies are removed, each referenced nowhere in the package:
+  `adm-zip`, `archiver`, `zip-a-folder`, `node-hook` and `is-object`. Only
+  `adm-zip` carried advisories -- three of them, so that is three fewer for every
+  consumer. The other four are weight rather than risk: 38 fewer packages in a
+  consumer's tree.
+
+  Note for whoever picks it up next: `resizeImage` still fetches an arbitrary
+  `req.query.src` server-side. The `// TODO: restrict resizing to images that are
+stored by LinkedFileStorage` above it is an unfixed SSRF and is arguably a
+  bigger problem than the libvips CVEs this change closes. Deliberately left
+  alone here rather than mixed into a dependency bump.
+
 ## 2.8.0
 
 ### Minor Changes
