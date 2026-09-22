@@ -1,5 +1,12 @@
 # @\_linked/server
 
+## 2.12.3
+
+### Patch Changes
+
+- [#77](https://github.com/linked-fw/server/pull/77) [`9901606`](https://github.com/linked-fw/server/commit/990160657aebedc2a4be31357310acdccc9ba7e1) Thanks [@flyon](https://github.com/flyon)! - Document the two fixes that let a Vite-built release be served — see
+  `docs/reports/001-vite-release-serving.md`.
+
 ## 2.12.2
 
 ### Patch Changes
