@@ -233,7 +233,8 @@ describe('/resized/* — remote branch (?src=)', () => {
       `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/photo.jpg`)}&w=60`
     );
 
-    expect(calls).toEqual([`${CDN}/uploads/photo.jpg`]);
+    // the source is read out of the store; nothing leaves the process
+    expect(calls).toEqual([]);
     expect(res.status).toBe(302);
     expect(res.location).toBe(`${CDN}/uploads/resized/photo_w60.jpg`);
 
@@ -353,8 +354,8 @@ describe('/resized/* — remote branch (?src=)', () => {
 
     expect(second.status).toBe(302);
     expect(second.location).toBe(first.location);
-    // Cached: the source is fetched and re-encoded exactly once.
-    expect(calls).toHaveLength(1);
+    // Cached in-process, and never fetched either time.
+    expect(calls).toEqual([]);
     expect(linkedServer.resizePathsMap.get('uploads/resized/photo_w60.jpg')).toBe(
       first.location
     );
@@ -559,60 +560,26 @@ describe('/resized/* — only fetches images the store already holds', () => {
     expect(calls).toEqual([]);
   });
 
-  it('fetches the URL it rebuilt, not the string the caller sent', async () => {
-    // same key, but with a fragment and a redundantly encoded segment; the
-    // handler must normalise to the canonical store URL before fetching
+  it('makes no outbound request at all for an allowed source', async () => {
+    // The strongest version of the guard: there is no fetch to get wrong. The
+    // route reads the bytes out of the store, so there is no origin to
+    // re-check after a redirect, no timeout to tune and no response to cap --
+    // the tests that used to pin those behaviours are gone with them.
     const original = await makeImage('jpeg');
     seedSource('photo.jpg', original);
-    const calls = stubFetch(() => okResponse(original));
+    const calls = stubFetch(() => {
+      throw new Error('the route must not fetch');
+    });
     const base = await listen(makeLinkedServer());
 
     const res = await get(
       base,
-      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/photo.jpg#fragment`)}&w=60`
+      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/photo.jpg#frag`)}&w=60`
     );
 
     expect(res.status).toBe(302);
-    expect(calls).toEqual([`${CDN}/uploads/photo.jpg`]);
-  });
-
-  it('refuses redirects, so an allowed origin cannot hop elsewhere', async () => {
-    const original = await makeImage('jpeg');
-    seedSource('photo.jpg', original);
-    let sawRedirectOption: string | undefined;
-    (globalThis as any).fetch = (_url: any, init: any) => {
-      sawRedirectOption = init?.redirect;
-      return okResponse(original);
-    };
-    const base = await listen(makeLinkedServer());
-
-    await get(
-      base,
-      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/photo.jpg`)}&w=60`
-    );
-
-    // fetch follows redirects by default, which would undo the origin check one
-    // hop later
-    expect(sawRedirectOption).toBe('error');
-  });
-
-  it('refuses a response larger than the cap', async () => {
-    seedSource('huge.jpg', Buffer.alloc(1));
-    (globalThis as any).fetch = () =>
-      Promise.resolve({
-        ok: true,
-        headers: { get: () => String(64 * 1024 * 1024) },
-        arrayBuffer: async () => new ArrayBuffer(8),
-      });
-    const base = await listen(makeLinkedServer());
-
-    const res = await get(
-      base,
-      `/resized/x?src=${encodeURIComponent(`${CDN}/uploads/huge.jpg`)}&w=60`
-    );
-
-    expect(res.status).toBe(404);
-    expect(res.json()).toEqual({ error: 'Could not fetch image from URL' });
+    expect(calls).toEqual([]);
+    expect(await store.getFile('uploads/resized/photo_w60.jpg')).not.toBeNull();
   });
 });
 
