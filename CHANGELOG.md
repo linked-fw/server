@@ -1,5 +1,22 @@
 # @\_linked/server
 
+## 2.12.2
+
+### Patch Changes
+
+- [#78](https://github.com/linked-fw/server/pull/78) [`1d8e5ac`](https://github.com/linked-fw/server/commit/1d8e5ac2623810a2b4e81c8e355a0b712e9976f3) Thanks [@flyon](https://github.com/flyon)! - Load the application's own backend in the compiled runtime.
+
+  `indexBackendProviders` imports `<app>/backend` by package name. A
+  self-reference resolves only from inside the package that declares it, and this
+  code runs from `node_modules/@_linked/server` — so Node reported
+  `Cannot find package '<app>'` and **every one of the application's Providers
+  silently failed to register**, leaving each `Server.call` on one of its shapes
+  to 501.
+
+  Development was unaffected: the Vite branch already special-cased the app's own
+  backend. The compiled runtime now does the same, resolving `lib/backend.js` by
+  path and falling back to `src/backend.ts`.
+
 ## 2.12.1
 
 ### Patch Changes
