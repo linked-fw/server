@@ -67,11 +67,13 @@ SSRF fix — breaks visibly rather than silently.
    a deprecation window at all.
 2. Should the key form be a new parameter (`?key=`) so both can coexist for a
    release, or should `src` simply start accepting a key as well as a URL?
-3. The other branch of the same route reads from `<cwd>/data/uploads` directly,
-   bypassing `LinkedFileStorage` entirely, so it cannot work for an S3-backed
-   app at all, and its cache directory is never created because the `mkdirSync`
-   is commented out. These probably want doing together, since both end at "the
-   route reads and writes through the store".
+3. ~~The other branch of the same route reads from `<cwd>/data/uploads`
+   directly~~ — **done.** Both branches now read and write through
+   `LinkedFileStorage`, the derivative cache has its own purpose
+   (`resizedImagesPurpose`), and the hand-rolled directory creation is gone
+   because `LocalFileStore` makes its own parents. That was the larger half of
+   "the route reads and writes through the store"; what is left here is only
+   the remote branch's needless HTTP hop.
 
 ## Related
 
