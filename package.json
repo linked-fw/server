@@ -2,7 +2,7 @@
   "name": "@_linked/server",
   "description": "HTTP server & utilities for LINCD applications, running on node.js.",
   "author": {
-    "name": "Ren\u00e9 Verheij",
+    "name": "René Verheij",
     "url": "https://github.com/flyon",
     "email": "rpwverheij@gmail.com"
   },
@@ -10,7 +10,7 @@
     "type": "git",
     "url": "git+https://github.com/linked-fw/server.git"
   },
-  "version": "2.12.3",
+  "version": "2.12.4",
   "packageManager": "npm@11.19.1",
   "linkedPackage": true,
   "type": "module",
