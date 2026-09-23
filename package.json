@@ -2,7 +2,7 @@
   "name": "@_linked/server",
   "description": "HTTP server & utilities for LINCD applications, running on node.js.",
   "author": {
-    "name": "René Verheij",
+    "name": "Ren\u00e9 Verheij",
     "url": "https://github.com/flyon",
     "email": "rpwverheij@gmail.com"
   },
@@ -91,6 +91,14 @@
       "types": "./lib/esm/*.d.ts",
       "import": "./lib/esm/*.js"
     }
+  },
+  "linked": {
+    "serverOnly": [
+      ".",
+      "./shapes/*",
+      "./server/*",
+      "./utils/*"
+    ]
   },
   "publishConfig": {
     "access": "public"
