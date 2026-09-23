@@ -7,7 +7,8 @@ import { Server } from '@_linked/server-utils/utils/Server';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { LinkedServer } from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
-import { LincdAPI } from '../shapes/LincdAPI.js';
+import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
+import { packageName } from '../package.js';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 
 // These suites exercise LinkedServer's SHAPE-provider routing and error handling,
@@ -172,7 +173,11 @@ describe('LinkedServer unmatched calls', () => {
 });
 
 describe('BackendAPIStore call results', () => {
-  const storePkg: string = (BackendAPIStore as any).packageName;
+  // The store addresses the backend by PACKAGE now, so the expected name comes
+  // from the package module -- the same source the store itself uses. It used to
+  // read `BackendAPIStore.packageName`, a static that existed only while the
+  // store was a Shape, which silently read `undefined` once it stopped being one.
+  const storePkg: string = packageName;
 
   // Route Server.call through a real proxy to a real express app, so the store,
   // the proxy and the LinkedServer routes are exercised together.
@@ -226,7 +231,11 @@ describe('BackendAPIStore call results', () => {
 
   it('rejects with the 501 message when no provider handles the call', async () => {
     const linkedServer = makeLinkedServer();
-    linkedServer.shapeProviders.set(storePkg, []);
+    // The GENERIC registry, not `shapeProviders`: the store addresses the
+    // backend by package now, and the package form of a call is served from
+    // `genericProviders`. Priming the shape registry left the package form
+    // with nothing to miss on, so it failed further in as a 500.
+    linkedServer.genericProviders.set(storePkg, null);
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     const base = await listenCalls(linkedServer);
     routeServerCallTo(base);
