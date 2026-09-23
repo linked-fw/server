@@ -7,8 +7,13 @@ import { Server } from '@_linked/server-utils/utils/Server';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { LinkedServer } from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
-import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
-import { BackendAPIStoreProvider } from '../shapes/quadstores/BackendAPIStoreProvider.js';
+import { LincdAPI } from '../shapes/LincdAPI.js';
+import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
+
+// These suites exercise LinkedServer's SHAPE-provider routing and error handling,
+// so they need any registered Shape plus a ShapeProvider for it. They used to borrow
+// BackendAPIStore + BackendAPIStoreProvider; BackendAPIStore is no longer a Shape
+// (it addresses the backend by package name now), so LincdAPI stands in.
 import { getShapeIndex, indexShapesIntoMemory } from '../utils/Shapes.js';
 
 // Error semantics of server calls:
@@ -89,15 +94,15 @@ async function post(url: string, body: unknown) {
 }
 
 function storeProvider(overrides: Record<string, any>) {
-  const provider: any = Object.create(BackendAPIStoreProvider.prototype);
-  provider.shape = BackendAPIStore;
+  const provider: any = Object.create(ShapeProvider.prototype);
+  provider.shape = LincdAPI;
   provider.initRequest = () => {};
   return Object.assign(provider, overrides);
 }
 
 const storeShapeCall = (base: string, method: string) =>
-  post(`${base}/call/server/BackendAPIStore/${method}`, {
-    shapeURI: (BackendAPIStore as any).shape.id,
+  post(`${base}/call/server/LincdAPI/${method}`, {
+    shapeURI: (LincdAPI as any).shape.id,
     instanceNode: null,
     args: [{}],
   });
