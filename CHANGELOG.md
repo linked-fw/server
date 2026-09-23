@@ -1,5 +1,29 @@
 # @\_linked/server
 
+## 2.13.4
+
+### Patch Changes
+
+- [#93](https://github.com/linked-fw/server/pull/93) [`df86a49`](https://github.com/linked-fw/server/commit/df86a490d3335ab3d36645a8c6ae8f3f713d71c2) Thanks [@flyon](https://github.com/flyon)! - `linked.serverOnly` now names what is actually server-only.
+
+  It declared wildcards:
+
+  ```jsonc
+  "serverOnly": [".", "./shapes/*", "./server/*", "./utils/*"]
+  ```
+
+  Of the thirteen modules under `shapes/` and `utils/`, **two** reach a node
+  builtin. The rest are client-safe and were being reported as server-only to
+  every consumer — including `BackendAPIStore`, the client-side store that is
+  meant to be imported by a frontend. `./server/*` matched nothing at all.
+
+  Consumers that enforce a client/server boundary from these declarations were
+  therefore flagging correct code, and the usual repair — an allowlist entry, or
+  relocating the module — made things worse rather than better.
+
+  The declaration now lists the six subpaths that genuinely are server-only. No
+  code moved and no module changed.
+
 ## 2.13.3
 
 ### Patch Changes
