@@ -95,9 +95,11 @@
   "linked": {
     "serverOnly": [
       ".",
-      "./shapes/*",
-      "./server/*",
-      "./utils/*"
+      "./backend",
+      "./shapes/LinkedServer",
+      "./shapes/filestores/*",
+      "./utils/releaseManifest",
+      "./utils/routeAssets"
     ]
   },
   "publishConfig": {
