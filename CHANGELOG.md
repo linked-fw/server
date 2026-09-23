@@ -1,5 +1,16 @@
 # @\_linked/server
 
+## 2.13.2
+
+### Patch Changes
+
+- [#89](https://github.com/linked-fw/server/pull/89) [`1f53442`](https://github.com/linked-fw/server/commit/1f53442e67cfb0abb263b0c430406b3846dc1bbc) Thanks [@flyon](https://github.com/flyon)! - `RouteConfig` compiles under React 19.
+
+  React 19 removed the global `JSX` namespace, so `RouteConfig`'s `component` and
+  `render` fields referenced a type that no longer exists and the package failed
+  to build for any consumer on React 19. They now use `React.JSX.Element`, which
+  is the same type under its current name.
+
 ## 2.13.1
 
 ### Patch Changes
