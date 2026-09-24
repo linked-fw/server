@@ -1,5 +1,12 @@
 # @\_linked/server
 
+## 2.13.6
+
+### Patch Changes
+
+- [#83](https://github.com/linked-fw/server/pull/83) [`5b58619`](https://github.com/linked-fw/server/commit/5b586190b45d52ac8ab70f90e414a7d52fc4d3a9) Thanks [@flyon](https://github.com/flyon)! - Document this package's server-only surface — see
+  `docs/architecture/01-server-only-surface.md`.
+
 ## 2.13.5
 
 ### Patch Changes
