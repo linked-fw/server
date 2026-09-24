@@ -436,10 +436,11 @@ await store.saveFile('report.pdf', fileBuffer, {
 });
 ```
 
-A local file has no headers to attach, so only two of the options do anything here:
+A local file has no headers to attach, so three of the options affect local storage:
 
 - `mimeType` — used to add a missing file extension.
 - `preventDuplicates` — see below.
+- `preservePath` — stores an already-generated relative object key exactly as supplied.
 - `cacheControl` and `metadata` are accepted (so the same call works against an S3-backed store) and ignored.
 
 The old positional form still works: a plain string third argument is read as the mime type, with `preventDuplicates`
@@ -449,7 +450,27 @@ following it.
 await store.saveFile('report.pdf', fileBuffer, 'application/pdf', true);
 ```
 
-##### The key you pass is the key that is stored
+##### Preserve generated object keys exactly
+
+Release manifests and generated bundles refer to exact object keys. Set `preservePath: true` when those keys must not
+be sanitised, lowercased, or renamed:
+
+```ts
+await store.saveFile(
+  'releases/1.2.3/public/images/logo@2x.png',
+  fileBuffer,
+  { preservePath: true, preventDuplicates: false }
+);
+```
+
+Preserved paths must be safe relative POSIX paths. Absolute paths, Windows paths, backslashes, empty segments, `.` and
+`..` segments, and paths that change under normalisation are rejected. This prevents an exact-key save from escaping
+the store's configured root.
+
+Without `preservePath`, ordinary upload behaviour remains unchanged: unsafe filename characters are replaced with a
+dash and a missing extension is added from `mimeType`.
+
+##### Ordinary keys retain safe characters and case
 
 Characters that are unsafe in a file name are still replaced with a dash, and a missing extension is still added from
 `mimeType`, but the **case of the name is preserved**. A build asset named `main-hwqwrAvA.css` is stored under exactly
@@ -472,9 +493,10 @@ const { storedPath, publicURL } = await store.saveFileWithPath(
 const stat = await store.statFile(storedPath); // always resolves
 ```
 
-With `preventDuplicates: false`, `storedPath` equals the path you passed, verbatim, as long as it needs no sanitising
-and already has an extension. With `preventDuplicates` left unspecified the random suffix is added and `storedPath` is
-the only place the resulting name is reported.
+With `preservePath: true`, `storedPath` equals the validated relative path exactly. Without it,
+`preventDuplicates: false` keeps the path verbatim only when it needs no sanitising and already has an extension. With
+`preventDuplicates` left unspecified the random suffix is added and `storedPath` is the only place the resulting name
+is reported.
 
 ##### LocalFileStore suffixes by default
 
