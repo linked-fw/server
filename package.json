@@ -10,7 +10,7 @@
     "type": "git",
     "url": "git+https://github.com/linked-fw/server.git"
   },
-  "version": "2.13.3",
+  "version": "2.13.4",
   "packageManager": "npm@11.19.1",
   "linkedPackage": true,
   "type": "module",
@@ -95,9 +95,11 @@
   "linked": {
     "serverOnly": [
       ".",
-      "./shapes/*",
-      "./server/*",
-      "./utils/*"
+      "./backend",
+      "./shapes/LinkedServer",
+      "./shapes/filestores/*",
+      "./utils/releaseManifest",
+      "./utils/routeAssets"
     ]
   },
   "publishConfig": {
