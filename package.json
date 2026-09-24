@@ -10,7 +10,7 @@
     "type": "git",
     "url": "git+https://github.com/linked-fw/server.git"
   },
-  "version": "2.13.4",
+  "version": "2.13.5",
   "packageManager": "npm@11.19.1",
   "linkedPackage": true,
   "type": "module",
