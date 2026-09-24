@@ -4,7 +4,13 @@ import type { AddressInfo } from 'net';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { LinkedServer } from '../shapes/LinkedServer.js';
 import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
-import { BackendAPIStoreProvider } from '../shapes/quadstores/BackendAPIStoreProvider.js';
+import { LincdAPI } from '../shapes/LincdAPI.js';
+import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
+
+// These suites exercise LinkedServer's SHAPE-provider routing and error handling,
+// so they need any registered Shape plus a ShapeProvider for it. They used to borrow
+// BackendAPIStore + BackendAPIStoreProvider; BackendAPIStore is no longer a Shape
+// (it addresses the backend by package name now), so LincdAPI stands in.
 
 // A provider method that throws must answer with an error status and a JSON
 // `{error}` body (the same shape `handleErrorsJson`/`sendError` use elsewhere),
@@ -67,8 +73,8 @@ describe('LinkedServer call errors', () => {
   it('answers a throwing shape provider method with 500 and a JSON error', async () => {
     const linkedServer = makeLinkedServer();
     let called = false;
-    const provider: any = Object.create(BackendAPIStoreProvider.prototype);
-    provider.shape = BackendAPIStore;
+    const provider: any = Object.create(ShapeProvider.prototype);
+    provider.shape = LincdAPI;
     provider.initRequest = () => {};
     provider.selectQuery = async () => {
       called = true;
@@ -78,8 +84,8 @@ describe('LinkedServer call errors', () => {
     linkedServer.shapeProviders.set('server', [provider]);
     const base = await listen(linkedServer);
 
-    const res = await post(`${base}/call/server/BackendAPIStore/selectQuery`, {
-      shapeURI: (BackendAPIStore as any).shape.id,
+    const res = await post(`${base}/call/server/LincdAPI/selectQuery`, {
+      shapeURI: (LincdAPI as any).shape.id,
       instanceNode: null,
       args: [{}],
     });

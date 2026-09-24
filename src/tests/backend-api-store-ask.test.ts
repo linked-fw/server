@@ -3,11 +3,12 @@ import { AskBuilder } from '@_linked/core/queries/AskBuilder';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
-import { BackendAPIStoreProvider } from '../shapes/quadstores/BackendAPIStoreProvider.js';
+import LincdServerBackendProvider from '../backend.js';
+import { packageName } from '../package.js';
 
 // `askQuery` crosses the wire exactly like the other query kinds: the client
-// store ships `toJSON()` through Server.call, the provider rehydrates it with
-// `fromJSON()` and answers through LinkedStorage.
+// store ships `toJSON()` through Server.call, and this package's generic backend
+// provider rehydrates it with `fromJSON()` and answers through LinkedStorage.
 
 const IRI = 'http://example.org/node-1';
 const originalCall = Server.call;
@@ -28,13 +29,15 @@ describe('BackendAPIStore.askQuery', () => {
 
     await expect(store.askQuery(query)).resolves.toBe(true);
     expect(calls).toHaveLength(1);
-    expect(calls[0][0]).toBe(store);
+    // Addressed by PACKAGE NAME, not by the store instance. Sending the store is
+    // what forced this class to be a Shape; the backend never read it.
+    expect(calls[0][0]).toBe(packageName);
     expect(calls[0][1]).toEqual({ method: 'askQuery', rejectOnError: true });
     expect(calls[0][2]).toEqual(query.toJSON());
   });
 });
 
-describe('BackendAPIStoreProvider.askQuery', () => {
+describe('LincdServerBackendProvider.askQuery', () => {
   it('rehydrates the JSON and answers through LinkedStorage', async () => {
     const received: any[] = [];
     const dataset: any = {
@@ -50,9 +53,10 @@ describe('BackendAPIStoreProvider.askQuery', () => {
     };
     LinkedStorage.setDefaultDataset(dataset);
     const json = AskBuilder.forNode(IRI).toJSON();
-    const provider = Object.create(BackendAPIStoreProvider.prototype);
+    const provider = Object.create(LincdServerBackendProvider.prototype);
 
-    await expect(provider.askQuery(undefined, json)).resolves.toBe(true);
+    // One argument now: the old signature led with a store the method ignored.
+    await expect(provider.askQuery(json)).resolves.toBe(true);
     expect(received).toHaveLength(1);
     expect(received[0].__queryKind).toBe('ask');
     expect(received[0].toJSON()).toEqual(json);

@@ -800,6 +800,12 @@ export class LinkedServer extends Shape {
       // both.
       const { name, ext } = path.parse(storedKey);
 
+      // Sharp READS svg but cannot WRITE it, so an SVG source is rasterized to
+      // PNG below. The cache key has to say so: storing PNG bytes under a `.svg`
+      // key would also mean serving them as `image/svg+xml`, since the cache-hit
+      // branch types the response from this extension.
+      const outputExt = ext.toLowerCase() === '.svg' ? '.png' : ext;
+
       // append the width and height parameters to the base name
       // example: 935b511c9_cropped_w190.jpeg or 935b511c9_cropped_w190h190.jpeg
       //
@@ -820,7 +826,7 @@ export class LinkedServer extends Shape {
       const newPathname = path.join(
         keyDir === '.' ? '' : keyDir,
         'resized',
-        `${newName}${ext}`
+        `${newName}${outputExt}`
       );
 
       const resizedImageFileName = newPathname.startsWith('/')
@@ -866,8 +872,8 @@ export class LinkedServer extends Shape {
         // and no response size to cap, because there is no response.
         const image = await LinkedFileStorage.getFile(storedKey);
 
-        // if image is null, return 404
-        if (!image) {
+        // if image is null or empty, return 404
+        if (!image?.length) {
           res.status(404).send({ error: 'Could not fetch image from URL' });
           return;
         }
@@ -884,9 +890,14 @@ export class LinkedServer extends Shape {
           return;
         }
 
+        // Sharp reads SVG but has no SVG encoder, so `.toFormat('svg')` throws
+        // and every resize of an SVG failed. Rasterize to PNG instead — lossless,
+        // and it matches the `.png` cache key chosen above.
+        const outputFormat = format === 'svg' ? 'png' : format;
+
         // set the output options based on the format for quality and compression
         let outputOptions;
-        switch (format) {
+        switch (outputFormat) {
           case 'jpeg':
             outputOptions = { quality: 90 };
             break;
@@ -907,7 +918,7 @@ export class LinkedServer extends Shape {
             width ? parseInt(width) : null,
             height ? parseInt(height) : null
           )
-          .toFormat(format, outputOptions)
+          .toFormat(outputFormat, outputOptions)
           .toBuffer()
           .catch((err) => {
             console.warn('Could not resize image: ' + err);
@@ -947,7 +958,14 @@ export class LinkedServer extends Shape {
     // here (commented out, so it silently did nothing) is gone rather than
     // restored.
     const [trueFileName, ...extensions] = imageFileName.split('.');
-    const extension = extensions.join('.');
+    const sourceExtension = extensions.join('.');
+
+    // Same rasterization as the branch above: sharp reads SVG but cannot write
+    // it. `extension` is what the cached derivative actually IS, and is what
+    // `sendStoredFile` types the response with, so it has to be the OUTPUT
+    // format rather than the source's.
+    const extension =
+      sourceExtension.toLowerCase() === 'svg' ? 'png' : sourceExtension;
 
     const resizedKey = path.join(
       path.dirname(imageFileName) === '.' ? '' : path.dirname(imageFileName),
@@ -988,9 +1006,16 @@ export class LinkedServer extends Shape {
 
     let resized: Buffer;
     try {
-      resized = await sharp(original)
-        .resize(width ? parseInt(width) : null, height ? parseInt(height) : null)
-        .toBuffer();
+      const pipeline = sharp(original).resize(
+        width ? parseInt(width) : null,
+        height ? parseInt(height) : null
+      );
+      // Without this, sharp writes in the INPUT format, which for an SVG source
+      // means asking for an encoder it does not have.
+      resized = await (sourceExtension.toLowerCase() === 'svg'
+        ? pipeline.png({ compressionLevel: 9 })
+        : pipeline
+      ).toBuffer();
     } catch (err) {
       console.warn('Could not resize image: ' + err);
       res.status(500).send({ error: 'Could not resize image' });

@@ -16,13 +16,13 @@ export interface RouteConfig {
    * For eager loading, import the component directly
    */
   component?:
-    | React.LazyExoticComponent<() => JSX.Element>
+    | React.LazyExoticComponent<() => React.JSX.Element>
     | React.ComponentType<any>;
 
   /**
    * Custom render function for the route (alternative to component)
    */
-  render?: () => JSX.Element;
+  render?: () => React.JSX.Element;
 
   /**
    * Whether this route requires authentication

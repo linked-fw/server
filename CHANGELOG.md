@@ -1,5 +1,140 @@
 # @\_linked/server
 
+## 2.13.4
+
+### Patch Changes
+
+- [#93](https://github.com/linked-fw/server/pull/93) [`df86a49`](https://github.com/linked-fw/server/commit/df86a490d3335ab3d36645a8c6ae8f3f713d71c2) Thanks [@flyon](https://github.com/flyon)! - `linked.serverOnly` now names what is actually server-only.
+
+  It declared wildcards:
+
+  ```jsonc
+  "serverOnly": [".", "./shapes/*", "./server/*", "./utils/*"]
+  ```
+
+  Of the thirteen modules under `shapes/` and `utils/`, **two** reach a node
+  builtin. The rest are client-safe and were being reported as server-only to
+  every consumer — including `BackendAPIStore`, the client-side store that is
+  meant to be imported by a frontend. `./server/*` matched nothing at all.
+
+  Consumers that enforce a client/server boundary from these declarations were
+  therefore flagging correct code, and the usual repair — an allowlist entry, or
+  relocating the module — made things worse rather than better.
+
+  The declaration now lists the six subpaths that genuinely are server-only. No
+  code moved and no module changed.
+
+## 2.13.3
+
+### Patch Changes
+
+- [#85](https://github.com/linked-fw/server/pull/85) [`f4c3429`](https://github.com/linked-fw/server/commit/f4c34292997f5fb1de68972cac126e5189585f16) Thanks [@flyon](https://github.com/flyon)! - `/resized/*` now serves SVG sources as PNG instead of failing.
+
+  Sharp can **read** SVG but has no SVG encoder, so every resize of an SVG threw:
+  the store-backed branch called `.toFormat('svg', …)`, and the uploads branch called
+  `.toBuffer()` with no explicit format, which defaults to the input's. Both now
+  rasterize to PNG.
+
+  The cache key follows the output rather than the source, in both branches. Writing
+  PNG bytes under a `.svg` key would also have served them as `image/svg+xml`, since
+  the cache-hit path types the response from that extension.
+
+  Also treats a zero-length buffer as a missing image rather than handing an empty
+  buffer to sharp.
+
+  Found by @abdipramana in #32, against an earlier version of this route. That PR
+  also carried an `askQuery` change which has since landed on main by another route,
+  and a fetch-based image read that no longer exists — the route now reads bytes
+  straight from the store. Only the SVG behaviour still applied, and it is
+  reimplemented here against the current structure rather than merged.
+
+## 2.13.2
+
+### Patch Changes
+
+- [#89](https://github.com/linked-fw/server/pull/89) [`1f53442`](https://github.com/linked-fw/server/commit/1f53442e67cfb0abb263b0c430406b3846dc1bbc) Thanks [@flyon](https://github.com/flyon)! - `RouteConfig` compiles under React 19.
+
+  React 19 removed the global `JSX` namespace, so `RouteConfig`'s `component` and
+  `render` fields referenced a type that no longer exists and the package failed
+  to build for any consumer on React 19. They now use `React.JSX.Element`, which
+  is the same type under its current name.
+
+## 2.13.1
+
+### Patch Changes
+
+- [#87](https://github.com/linked-fw/server/pull/87) [`063464c`](https://github.com/linked-fw/server/commit/063464ccfe9df2ae3498479483b33f12e926c91f) Thanks [@flyon](https://github.com/flyon)! - Ontology terms are no longer individual module exports.
+
+  `lincd-server.ts` exported all 11 of its terms as module-scope bindings, and
+  several of those names are also shape class names in this package —
+  `LincdWebApp`, `LincdAPI`, `BackendAPIStore` and others. Two bindings of the
+  same name in one bundle scope make the bundler rename one of them:
+
+  ```js
+  Ju = ns("BackendAPIStore"); // the term keeps the binding
+  n(nt, "BackendAPIStore2"); // the class is renamed
+  ```
+
+  When the loser is a shape class, `constructor.name` is its IRI and the name
+  `Server.call` routes on, so a production client asks the backend for a shape it
+  has never heard of and the call answers 501.
+
+  Terms are now reached only through the `lincdServer` namespace object:
+
+  ```ts
+  import { lincdServer } from "@_linked/server/ontologies/lincd-server";
+  lincdServer.LincdWebApp; // instead of a bare `LincdWebApp` import
+  ```
+
+  Nothing imported a term individually, so no call site changes.
+
+## 2.13.0
+
+### Minor Changes
+
+- [#84](https://github.com/linked-fw/server/pull/84) [`7c743e3`](https://github.com/linked-fw/server/commit/7c743e30665889b99e866cc5aff87e45c8c16b1a) Thanks [@flyon](https://github.com/flyon)! - `BackendAPIStore` is no longer a Shape; it addresses the backend by package name.
+
+  It used to call `Server.call(this, …)`, whose transport derives the target from
+  `shape instanceof Shape && shape.id` (which instance) and `shapeClass.shape.id` (which class).
+  That was the only reason this class was a Shape — and the reason the server had to rebuild it
+  with `new (providerShapeClass)({id})` on every request, instantiating a Shape purely to discard
+  it.
+
+  None of that carried meaning. The provider took the store as its first argument and never read
+  it, and query routing is decided by the QUERY's shape via `LinkedStorage`, not by the store. So
+  the instance identity was pure addressing.
+
+  It now uses `Server.call`'s existing package-name overload, which sends `{args}` to
+  `/call/<packageName>/<method>` with no shape fields, and is answered by this package's generic
+  backend provider without any shape resolution. The five query methods moved from
+  `BackendAPIStoreProvider` onto `LincdServerBackendProvider`, losing the unused first argument;
+  `BackendAPIStoreProvider` is removed.
+
+  **Breaking** for anyone importing `BackendAPIStoreProvider`, or relying on `BackendAPIStore`
+  being a Shape (`instanceof Shape`, `.shape`, `targetClass`). The constructor signature is
+  unchanged and `IDataset` is implemented in full, so ordinary use through
+  `linked.{frontend,backend}.datasets.json` is unaffected.
+
+  This removes the last of the four classes blocking core's deferred Shape-instantiation guard.
+
+## 2.12.4
+
+### Patch Changes
+
+- [#81](https://github.com/linked-fw/server/pull/81) [`ff6d03a`](https://github.com/linked-fw/server/commit/ff6d03ae1fb0a1e74447f1802dd273cf7b229630) Thanks [@flyon](https://github.com/flyon)! - Declare this package's server-only surface.
+
+  ```jsonc
+  "linked": { "serverOnly": [".", "./shapes/*", "./server/*", "./utils/*"] }
+  ```
+
+  A consuming application's client/server boundary check can now derive that this
+  package must not appear in a frontend bundle, instead of hardcoding its name.
+  That matters because this package is meant to be replaceable — a check that
+  knows it by name only holds for one arrangement of the framework, and a
+  replacement would inherit none of the protection.
+
+  Purely declarative: no code, no exports and no resolution behaviour changes.
+
 ## 2.12.3
 
 ### Patch Changes

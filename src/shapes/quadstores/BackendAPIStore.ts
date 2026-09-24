@@ -1,6 +1,4 @@
-import { lincdServer } from '../../ontologies/lincd-server.js';
-import { linkedShape } from '../../package.js';
-import { Shape } from '@_linked/core/shapes/Shape';
+import { packageName } from '../../package.js';
 import { Server } from '@_linked/server-utils/utils/Server';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
@@ -30,33 +28,43 @@ export interface BackendAPIStoreConfig {
 }
 
 /**
- * Frontend-side store that routes all queries to the backend via Server.call().
- * The backend's BackendAPIStoreProvider handles execution against the actual store.
+ * Frontend-side store that routes all queries to the backend via `Server.call()`.
+ * The backend's generic provider for this package executes them against the real store.
+ *
+ * A store is not a Shape. This class used to `extends Shape` and carry `@linkedShape`
+ * with a `targetClass`, purely so that `Server.call(this, …)` could address it: the
+ * transport derived the target from `shape instanceof Shape && shape.id` (the instance)
+ * and `shapeClass.shape.id` (the class). Neither carried any meaning — the backend
+ * provider never read the store it was handed, and query routing is decided by the
+ * QUERY's shape, not the store's.
+ *
+ * It now uses `Server.call`'s package form instead, which addresses the backend by
+ * package name and sends no shape fields at all. That removes the last reason for this
+ * class to be a Shape, and with it the `new (providerShapeClass)({id})` the backend had
+ * to perform to rebuild a store instance nobody used.
  */
-@linkedShape
-export class BackendAPIStore extends Shape implements IDataset {
-  static targetClass = lincdServer.BackendAPIStore;
+export class BackendAPIStore implements IDataset {
+  /**
+   * Kept so the config form is still accepted and a store can be named, but it is no
+   * longer an addressing mechanism — nothing transmits or resolves it. Retained because
+   * `linked.{frontend,backend}.datasets.json` may still pass `name`/`id`.
+   */
+  readonly id?: string;
 
   constructor(config?: BackendAPIStoreConfig | string | { id?: string }) {
-    if (!config) {
-      super();
-      return;
-    }
+    if (!config) return;
     if (typeof config === 'string') {
-      // Legacy string-as-name form. Wrap into config shape.
-      super({ id: `${process.env.DATA_ROOT}/backend-api-store/${config}` });
+      this.id = `${process.env.DATA_ROOT}/backend-api-store/${config}`;
       return;
     }
     if ((config as BackendAPIStoreConfig).id) {
-      super({ id: (config as BackendAPIStoreConfig).id! });
+      this.id = (config as BackendAPIStoreConfig).id!;
       return;
     }
     if ((config as BackendAPIStoreConfig).name) {
       const name = (config as BackendAPIStoreConfig).name!;
-      super({ id: `${process.env.DATA_ROOT}/backend-api-store/${name}` });
-      return;
+      this.id = `${process.env.DATA_ROOT}/backend-api-store/${name}`;
     }
-    super();
   }
 
   async init(): Promise<void> {
@@ -93,6 +101,10 @@ export class BackendAPIStore extends Shape implements IDataset {
    * Whatever a successful call returns, `undefined` included, resolves as is.
    */
   private callBackend<T>(method: string, json: unknown): Promise<T> {
-    return Server.call(this, { method, rejectOnError: true }, json);
+    // The PACKAGE form, not the shape form. It posts to
+    // `/call/<packageName>/<method>` with a body of `{args}` only — no `shapeURI`,
+    // no `instanceNode` — and the backend answers from this package's generic
+    // provider without resolving or instantiating any Shape.
+    return Server.call(packageName, { method, rejectOnError: true }, json);
   }
 }
