@@ -1,6 +1,4 @@
 import { createNameSpace } from '@_linked/core/utils/NameSpace';
-import { linkedOntology } from '../package.js';
-import * as _this from './lincd-server.js';
 
 /**
  * Load the data of this ontology.
@@ -51,10 +49,3 @@ export const lincdServer = {
   hasAPI,
 };
 
-linkedOntology(
-  _this,
-  ns,
-  'lincd-server',
-  loadData,
-  '../data/lincd-server.json'
-);
