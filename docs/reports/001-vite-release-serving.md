@@ -34,7 +34,7 @@ asset returned 200, and the page stayed inert.
 The dev branch immediately above this code already used `bootstrapModules`, for exactly this
 reason. Only the production branch was wrong.
 
-### What it does now
+### What it did first
 
 `start()` records whether `assets['main.js']` was resolved from a Vite manifest
 (`mainEntryIsModule`), and the SSR render passes `bootstrapModules` when it was.
@@ -79,6 +79,27 @@ still becomes `My-File-2-.TXT`.
 A regression test in `src/tests/local-file-store.test.ts` covers the doubled dash specifically, and
 was confirmed to fail without the change.
 
+### Exact-key publishing with `preservePath`
+
+The preserved-character fix was necessary but not sufficient. Release artifacts can legitimately contain other
+characters, including `@`, and the file-store contract now exposes `SaveFileOptions.preservePath` specifically for
+generated object keys. `LocalFileStore` now honors that option: a safe relative key is stored byte-for-byte as named,
+without upload-name sanitisation or automatic extension handling.
+
+Exact preservation does not mean accepting arbitrary filesystem paths. The local store rejects empty keys, absolute
+POSIX or Windows paths, backslashes, empty path segments, `.` and `..` segments, and any path changed by POSIX
+normalisation. This keeps every preserved key within the configured store root while allowing manifest-defined paths
+such as:
+
+```text
+releases/1.19.0/public/images/logo@2x.png
+releases/1.19.0/public/bundles/assets/Shape--2JmNvrO.js
+```
+
+Ordinary uploads do not opt into this contract and retain their existing sanitisation and duplicate-suffix behavior.
+Tests cover exact round-tripping, returned URLs, file metadata, traversal/absolute-path rejection, and the unchanged
+ordinary upload path.
+
 ## The contract both establish
 
 **A release object must be addressable by exactly the key it was given.** The bundle's own chunk
@@ -86,7 +107,8 @@ URLs are baked in at build time and nothing rewrites them at request time, so a 
 key — or a server that renders the entry in a form the browser rejects — breaks the release with no
 useful error.
 
-Anything implementing `IFileStore` for release assets inherits that requirement.
+Anything implementing `IFileStore` for release assets inherits that requirement and must honor `preservePath` by
+either storing the validated object key exactly or rejecting it. It must never silently rewrite a release key.
 
 ## Known limitation, not fixed here
 
