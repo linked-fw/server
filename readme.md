@@ -442,7 +442,7 @@ LinkedFileStorage.setDefaultStore(store);
 is the server's own upload folder — that is the only folder the server serves.
 
 Registering stores per purpose (`LinkedFileStorage.setStore`, `getStore`, `registerPurpose`) is core's concern — see
-[`@_linked/core`](https://github.com/linked-cm/core), `utils/LinkedFileStorage` and `interfaces/IFileStore`. This
+[`@_linked/core`](https://github.com/linked-fw/core), `utils/LinkedFileStorage` and `interfaces/IFileStore`. This
 package declares one purpose of its own, for the image resize cache — see [Resizing images](#resizing-images).
 
 #### Saving files
