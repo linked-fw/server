@@ -1,5 +1,5 @@
 import './types.js';
-import './ontologies/lincd-server.js';
+import './ontologies/lincd-server.register.js';
 
 //SHAPES FIRST
 import './shapes/LinkedServer.js';

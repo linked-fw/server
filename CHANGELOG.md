@@ -1,5 +1,42 @@
 # @\_linked/server
 
+## 2.14.0
+
+### Minor Changes
+
+- [#100](https://github.com/linked-fw/server/pull/100) [`91e60bd`](https://github.com/linked-fw/server/commit/91e60bde196aaa849661650a937fc89ef47c728b) Thanks [@flyon](https://github.com/flyon)! - Require `@_linked/core@^2.22.8` (was `^2.20.0`), and pin it in the lockfile.
+
+  The declared range was wide enough that the resolved core depended on whatever the
+  consumer — or this repo's own CI, via `package-lock.json` — happened to install. Core
+  decides how a shape's IRI is minted, so a stale core made this package emit legacy
+  `data.lincd.org` IRIs instead of the arch-02 `linked.cm` scheme. Which IRIs a published
+  package produces should not be a function of the installer's dependency tree.
+
+  Minor rather than patch: this raises the minimum core a consumer must resolve, so it
+  changes what gets installed rather than only what this package does internally.
+
+## 2.13.7
+
+### Patch Changes
+
+- [#98](https://github.com/linked-fw/server/pull/98) [`fe41a81`](https://github.com/linked-fw/server/commit/fe41a81cb84252890258566fcd668e8ef7e534b1) Thanks [@flyon](https://github.com/flyon)! - The ontology no longer registers by importing itself.
+
+  It carried `import * as _this from './<prefix>.js'` and passed that namespace to
+  `linkedOntology()`. Under `tsc` the self-reference survives; under a bundler it does
+  not — Rollup treats it as a circular import and elides it, so the binding is
+  `undefined` and a consuming app dies at boot with `_this is not defined`.
+
+  Registration now lives in a `<prefix>.register.ts` sibling, imported from the package
+  entry. Nothing changes for consumers: importing this package still registers the
+  ontology.
+
+## 2.13.6
+
+### Patch Changes
+
+- [#83](https://github.com/linked-fw/server/pull/83) [`5b58619`](https://github.com/linked-fw/server/commit/5b586190b45d52ac8ab70f90e414a7d52fc4d3a9) Thanks [@flyon](https://github.com/flyon)! - Document this package's server-only surface — see
+  `docs/architecture/01-server-only-surface.md`.
+
 ## 2.13.5
 
 ### Patch Changes
