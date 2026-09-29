@@ -56,7 +56,6 @@ import {
   staticAssetURL,
 } from '../utils/releaseManifest.js';
 import {
-  isViteDevServer,
   resolveBootstrapEntry,
   resolveViteMainEntry,
   resolveViteServingMode,
@@ -131,7 +130,6 @@ export class LinkedServer extends Shape {
   private assets: { [key: string]: string } & {
     manifest?: Record<string, string>;
   };
-  private latestManifest: Record<string, string> | null = null;
   /**
    * Whether pages are served by the live Vite dev server rather than a
    * `vite build` on disk. Decided once in `start()` — see
@@ -1770,7 +1768,7 @@ export class LinkedServer extends Shape {
     //   timedout = true;
     // }, 8_000);
 
-    let manifest = this.latestManifest || this.assets.manifest || {};
+    let manifest = this.assets.manifest || {};
     let preloadScripts: string[] = [];
     let preloadStyles: string[] = [];
     let matchedRouteKey: string | null = null;
@@ -1779,10 +1777,11 @@ export class LinkedServer extends Shape {
     // chunks to preload, and the webpack-shape fallback would pick up
     // stale bundles on disk (public/bundles/*.bundle.js from a prior
     // webpack build) and link them, breaking hydration.
-    const usingViteDev = isViteDevServer({
-      viteConfig: (this.config.server as any)?.vite,
-      buildOutput: this.latestManifest,
-    });
+    // The same decision start() made for the `__viteDev` marker. This used
+    // to be re-derived from `latestManifest`, which nothing ever set, so it
+    // answered "dev" whenever Vite was attached — even when start() had
+    // chosen the build — and the page mixed built CSS with the dev preamble.
+    const usingViteDev = this.viteDevServer;
 
     // Load routes config if available and extract preload chunks for the current route
     if (this.config.server?.loadRoutes) {
