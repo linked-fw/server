@@ -1,5 +1,28 @@
 # @\_linked/server
 
+## 2.14.1
+
+### Patch Changes
+
+- [#103](https://github.com/linked-fw/server/pull/103) [`96504ef`](https://github.com/linked-fw/server/commit/96504ef9485b1a193c757fdbcc5a923c1a799fb9) Thanks [@flyon](https://github.com/flyon)! - Dev SSR styling fixes. A development server no longer reads a build manifest left on disk by an
+  earlier `vite build`, so it stops linking that stale built CSS next to Vite's live styles. The SSR
+  CSS collector skips `?direct` ids and files under Vite's `publicDir` (which failed with "Parse
+  failure" when loaded as a module) and loads each stylesheet once. The collected CSS is no longer
+  serialised into `assetManifest` as well as the inline `<style>`; that copy was about half of a dev page.
+
+- [#103](https://github.com/linked-fw/server/pull/103) [`277e01a`](https://github.com/linked-fw/server/commit/277e01a979d14535e8edcdfc0a84d3ce50c72c82) Thanks [@flyon](https://github.com/flyon)! - Name the `LincdAPI`, `LinkedServer` and `LincdWebApp` shapes explicitly. Their IRIs were derived
+  from the class name, which an esbuild pass over the compiled JS (Vite's dev-SSR `define` step)
+  renames to `LincdAPI2` / `LinkedServer2`, so dev and production minted different IRIs.
+
+- [#103](https://github.com/linked-fw/server/pull/103) [`1332aae`](https://github.com/linked-fw/server/commit/1332aaec4eba795bd0d132252ca4f156d6517bd2) Thanks [@flyon](https://github.com/flyon)! - Embed the TypeScript sources in the published sourcemaps (`inlineSources`). The maps pointed at
+  `src/*.ts`, which the tarball does not contain, so Vite dev warned that each sourcemap "points to
+  missing source files".
+
+- [#103](https://github.com/linked-fw/server/pull/103) [`ecb97e6`](https://github.com/linked-fw/server/commit/ecb97e6aba759e6ee39841069fe2d272ba293257) Thanks [@flyon](https://github.com/flyon)! - The render path now reuses the dev/build decision `start()` makes instead of re-deriving it from a
+  manifest field that was never set. A server started outside development with a Vite build on disk
+  now boots the built entry and preloads route chunks, instead of emitting the Vite dev preamble
+  next to the built CSS.
+
 ## 2.14.0
 
 ### Minor Changes
