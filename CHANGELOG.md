@@ -1,5 +1,16 @@
 # @\_linked/server
 
+## 2.14.2
+
+### Patch Changes
+
+- [#104](https://github.com/linked-fw/server/pull/104) [`cf1b14d`](https://github.com/linked-fw/server/commit/cf1b14dfa9c834c2503f7ad4689e66e5f5f24a58) Thanks [@flyon](https://github.com/flyon)! - Dev SSR inlines only the CSS the rendered page needs. The dev server preloads every page into
+  Vite's module graph, so `<style id="ssr-css">` carried every page's stylesheets on every page
+  (2.3 MB in Create Now). It now holds what the app module and the matched routes' pages import
+  statically — what a production build puts in the entry CSS plus the route's CSS (0.78–1.1 MB in
+  Create Now, most of it Tailwind's output). Falls back to the whole graph when the page cannot be
+  determined, such as a route rendered through a `render` function.
+
 ## 2.14.1
 
 ### Patch Changes
