@@ -115,7 +115,10 @@ global['reactStaticRenderer'] = renderToStaticMarkup;
 
 autoLoadOntologyData(true);
 
-@linkedShape
+// Named explicitly: tsc emits `let X = class X`, and any later esbuild pass over that JS (Vite's
+// SSR `define` replacement runs one on every file mentioning a defined `process.env.*`) renames
+// the inner binding to `X2`, which would otherwise become this shape's IRI.
+@linkedShape({name: 'LinkedServer'})
 export class LinkedServer extends Shape {
   /**
    * indicates that instances of this shape need to have this rdf.type

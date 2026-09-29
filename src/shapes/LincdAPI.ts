@@ -17,7 +17,10 @@ export type ShapeSummary = {
   extends?: { id: string };
   numInstances: number;
 };
-@linkedShape
+// Named explicitly: tsc emits `let X = class X`, and any later esbuild pass over that JS (Vite's
+// SSR `define` replacement runs one on every file mentioning a defined `process.env.*`) renames
+// the inner binding to `X2`, which would otherwise become this shape's IRI.
+@linkedShape({name: 'LincdAPI'})
 export class LincdAPI extends Shape {
   static targetClass = lincdServer.LincdAPI;
 
