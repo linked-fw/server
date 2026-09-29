@@ -61,7 +61,11 @@ import {
   resolveViteServingMode,
 } from '../utils/bootstrapEntry.js';
 import { resolveRouteAssets } from '../utils/routeAssets.js';
-import { ssrCssInlineUrls } from '../utils/ssrCss.js';
+import {
+  resolveRouteComponent,
+  ssrCssInlineUrls,
+  ssrCssScope,
+} from '../utils/ssrCss.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
 import {
   installSpaFallback,
@@ -1640,6 +1644,77 @@ export class LinkedServer extends Shape {
     }
   }
 
+  /**
+   * The stylesheets a dev (Vite) page render needs, inlined into
+   * `<style id="ssr-css">` so the first paint is styled before Vite's client
+   * injects the same CSS.
+   *
+   * Scoped to what the app module and the matched routes' pages import
+   * statically (see utils/ssrCss `ssrCssScope`). The dev server preloads every
+   * page into the module graph, so the whole graph is every page's CSS —
+   * megabytes per request in a large app. When the scope cannot be
+   * established (no routes config, a route rendered through a function, a
+   * module not found) it falls back to the whole graph.
+   *
+   * Ids are kept in the combined graph's order, so the cascade order of what
+   * remains is unchanged.
+   */
+  private async collectViteSsrCss(
+    vite: any,
+    App: unknown,
+    matchedRoutes: RouteConfig[] | null,
+  ): Promise<string> {
+    if (!vite?.moduleGraph?.idToModuleMap) return '';
+    // Note: Tailwind v4 `@theme` directives in app theme CSS files are
+    // NOT processed at SSR collection time — the @tailwindcss/vite
+    // plugin expands them at production build only. In dev mode, the
+    // theme variables (—color-primary-*, etc.) are injected by Vite's
+    // runtime AFTER client hydration, which causes a brief flash of
+    // unthemed content (logos render black until ~hydration+200ms).
+    // Production (vite build) is unaffected — the static main.css
+    // contains expanded :root variables.
+    let scope: Set<string> | null = null;
+    const ssrGraph = vite.environments?.ssr?.moduleGraph;
+    if (ssrGraph?.idToModuleMap && App && matchedRoutes) {
+      const pages: unknown[] = [];
+      let known = true;
+      for (const route of matchedRoutes) {
+        const component = await resolveRouteComponent(route);
+        if (component === undefined) {
+          known = false;
+          break;
+        }
+        if (component !== null) pages.push(component);
+      }
+      if (known) {
+        scope = ssrCssScope(ssrGraph.idToModuleMap.values(), {
+          app: App,
+          pages,
+        });
+      }
+    }
+    // Read only now: resolving a lazy route above can load its page, and the
+    // combined graph's id map is a view built when it is read.
+    const graphIds = [
+      ...(vite.moduleGraph.idToModuleMap as Map<string, unknown>).keys(),
+    ];
+    const ids = scope ? graphIds.filter((id) => scope!.has(id)) : graphIds;
+    // Only real stylesheets, once per file — see utils/ssrCss.
+    const inlineUrls = ssrCssInlineUrls(ids, {
+      publicDir: vite.config?.publicDir,
+    });
+    const cssChunks: string[] = [];
+    for (const inlineUrl of inlineUrls) {
+      try {
+        const cssModule = await vite.ssrLoadModule(inlineUrl);
+        if (typeof cssModule?.default === 'string') {
+          cssChunks.push(cssModule.default);
+        }
+      } catch {/* skip */}
+    }
+    return cssChunks.join('\n');
+  }
+
   async render(req, res) {
     res.socket.on('error', (error) => {
       console.error('Fatal socket error', error);
@@ -1681,8 +1756,9 @@ export class LinkedServer extends Shape {
     //    enter Vite's moduleGraph BEFORE we collect CSS. Without this,
     //    only App's eager imports are in the graph and lazy routes'
     //    CSS would be missing — page renders unstyled until hydration.
-    // 2. Walk moduleGraph for CSS entries, load each via `?inline`
-    //    (Vite returns raw CSS string as default export).
+    // 2. Once the route is matched, collect the CSS the app and that route's
+    //    page import (collectViteSsrCss), each loaded via `?inline` (Vite
+    //    returns the processed CSS as the default export).
     // 3. Inject as inline <style> in HTML head (Html.tsx).
     const vite: any = (this.config.server as any)?.vite;
     // Vite SSR module preload (plan-010 iter1 gap A):
@@ -1704,46 +1780,6 @@ export class LinkedServer extends Shape {
         }
       } catch {/* ignore */}
       (this as any)._viteSsrPreloaded = true;
-    }
-
-    let ssrCss = '';
-    if (vite?.moduleGraph?.idToModuleMap) {
-      const cssChunks: string[] = [];
-      // Walk the moduleGraph for CSS modules pulled in by app/pages.
-      // Note: Tailwind v4 `@theme` directives in app theme CSS files are
-      // NOT processed at SSR collection time — the @tailwindcss/vite
-      // plugin expands them at production build only. In dev mode, the
-      // theme variables (—color-primary-*, etc.) are injected by Vite's
-      // runtime AFTER client hydration, which causes a brief flash of
-      // unthemed content (logos render black until ~hydration+200ms).
-      // Production (vite build) is unaffected — the static main.css
-      // contains expanded :root variables.
-      // Only real stylesheets, once per file — see utils/ssrCss.
-      const inlineUrls = ssrCssInlineUrls(
-        (vite.moduleGraph.idToModuleMap as Map<string, unknown>).keys(),
-        { publicDir: vite.config?.publicDir },
-      );
-      for (const inlineUrl of inlineUrls) {
-        try {
-          const cssModule = await vite.ssrLoadModule(inlineUrl);
-          if (typeof cssModule?.default === 'string') {
-            cssChunks.push(cssModule.default);
-          }
-        } catch {/* skip */}
-      }
-      ssrCss = cssChunks.join('\n');
-    }
-    // Per request, and not enumerable: Html reads `assets.__viteSsrCss` for
-    // the inline <style>, but also serialises the whole assets object into
-    // `assetManifest` for the client, which never uses it. Enumerable, the
-    // collected CSS — megabytes in a large app — went into every page twice.
-    // A per-request copy also keeps one render's CSS out of another's.
-    const assets = { ...this.assets };
-    if (ssrCss) {
-      Object.defineProperty(assets, '__viteSsrCss', {
-        value: ssrCss,
-        enumerable: false,
-      });
     }
 
     await this.initRequest(req, res);
@@ -1772,6 +1808,8 @@ export class LinkedServer extends Shape {
     let preloadScripts: string[] = [];
     let preloadStyles: string[] = [];
     let matchedRouteKey: string | null = null;
+    // Null until the routes config has loaded: without it, what renders is unknown.
+    let matchedRoutes: RouteConfig[] | null = null;
     // Plan-010 Vite dev mode: skip preload resolution entirely. Vite
     // handles dynamic import() at runtime — there are no pre-built
     // chunks to preload, and the webpack-shape fallback would pick up
@@ -1794,6 +1832,7 @@ export class LinkedServer extends Shape {
 
         // Match the current request path to a route
         let matchedRoute: RouteConfig | null = null;
+        const allMatches: RouteConfig[] = [];
         for (const [key, route] of Object.entries(ROUTES)) {
           if (!route?.path) continue;
           const pathPattern = route.path
@@ -1801,11 +1840,17 @@ export class LinkedServer extends Shape {
             .replace(/\*/g, '.*');
           const regex = new RegExp('^' + pathPattern + '$');
           if (regex.test(req.path)) {
-            matchedRoute = route;
-            matchedRouteKey = key;
-            break;
+            // Every match, not only the first: React Router may pick a more
+            // specific route than this first-match loop, and the dev CSS
+            // scope must cover whichever page actually renders.
+            allMatches.push(route);
+            if (!matchedRoute) {
+              matchedRoute = route;
+              matchedRouteKey = key;
+            }
           }
         }
+        matchedRoutes = allMatches;
 
         // If we found a matching route with preloadChunks, resolve them to URLs (both JS and CSS).
         // Manifest format detection: Vite manifest entries are objects with .file/.css; webpack
@@ -1835,6 +1880,20 @@ export class LinkedServer extends Shape {
 
     // Add matched route key to request object for Html component
     req['matchedRouteKey'] = matchedRouteKey;
+
+    const ssrCss = await this.collectViteSsrCss(vite, App, matchedRoutes);
+    // Per request, and not enumerable: Html reads `assets.__viteSsrCss` for
+    // the inline <style>, but also serialises the whole assets object into
+    // `assetManifest` for the client, which never uses it. Enumerable, the
+    // collected CSS — megabytes in a large app — went into every page twice.
+    // A per-request copy also keeps one render's CSS out of another's.
+    const assets = { ...this.assets };
+    if (ssrCss) {
+      Object.defineProperty(assets, '__viteSsrCss', {
+        value: ssrCss,
+        enumerable: false,
+      });
+    }
 
     stream = renderToPipeableStream(
       <React.StrictMode>

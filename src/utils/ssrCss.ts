@@ -45,3 +45,122 @@ export const ssrCssInlineUrls = (
   }
   return urls;
 };
+
+/**
+ * One module of Vite's SSR module graph, as far as scoping reads it — a
+ * structural subset of Vite's `EnvironmentModuleNode`.
+ */
+export interface SsrCssModule {
+  id: string | null;
+  url: string;
+  importedModules: Iterable<SsrCssModule>;
+  transformResult?: { deps?: string[]; dynamicDeps?: string[] } | null;
+  /** The module's evaluated exports, once the SSR runner has loaded it. */
+  ssrModule?: Record<string, unknown> | null;
+}
+
+const isStylesheetId = (id: string) => {
+  const queryAt = id.indexOf('?');
+  return (queryAt === -1 ? id : id.slice(0, queryAt)).endsWith('.css');
+};
+
+const findModuleExporting = (
+  modules: SsrCssModule[],
+  value: unknown,
+): SsrCssModule | undefined =>
+  modules.find((m) => {
+    const exports = m.ssrModule;
+    if (!m.id || !exports || typeof exports !== 'object') return false;
+    for (const key of Object.keys(exports)) {
+      try {
+        if (exports[key] === value) return true;
+      } catch {
+        // an export still in its temporal dead zone (a circular import)
+      }
+    }
+    return false;
+  });
+
+/**
+ * The module ids whose stylesheets one page render needs: everything the app
+ * module and the matched pages import statically — what a production build
+ * puts in the entry CSS plus the route's chunk CSS.
+ *
+ * Walking the whole graph instead inlines every page's CSS into every page,
+ * because the dev server preloads all pages into the graph (megabytes in a
+ * large app). Two kinds of edge are therefore not followed:
+ *
+ *  - dynamic imports: `routes` imports every page lazily; the matched pages
+ *    are passed in as entries instead. A lazily loaded component's CSS arrives
+ *    with it, as in production.
+ *  - edges from a stylesheet to anything but another stylesheet: Tailwind's
+ *    Vite plugin registers every source file it scans as a dependency of the
+ *    stylesheet that runs it, so following them reaches every page again.
+ *
+ * `app` and `pages` are components; their modules are found by export
+ * identity. Returns null when one of them cannot be found — the caller should
+ * then fall back to the whole graph rather than drop a page's styles.
+ */
+export const ssrCssScope = (
+  modules: Iterable<SsrCssModule>,
+  { app, pages }: { app: unknown; pages: unknown[] },
+): Set<string> | null => {
+  const all = [...modules];
+  const entries: SsrCssModule[] = [];
+  for (const component of [app, ...pages]) {
+    const module = findModuleExporting(all, component);
+    if (!module) return null;
+    entries.push(module);
+  }
+
+  const scope = new Set<string>();
+  const stack = [...entries];
+  while (stack.length) {
+    const module = stack.pop()!;
+    if (!module.id || scope.has(module.id)) continue;
+    scope.add(module.id);
+    const fromStylesheet = isStylesheetId(module.id);
+    const staticDeps = new Set(module.transformResult?.deps ?? []);
+    const dynamicDeps = new Set(module.transformResult?.dynamicDeps ?? []);
+    for (const child of module.importedModules) {
+      if (!child.id || scope.has(child.id)) continue;
+      if (fromStylesheet && !isStylesheetId(child.id)) continue;
+      if (dynamicDeps.has(child.url) && !staticDeps.has(child.url)) continue;
+      stack.push(child);
+    }
+  }
+  return scope;
+};
+
+const REACT_LAZY = Symbol.for('react.lazy');
+
+/**
+ * The component a route renders, loading it first if it is `React.lazy`.
+ * Returns null for a route without one, and undefined when it cannot be
+ * known (a `render` function, or a lazy component that fails to load).
+ *
+ * Reads React.lazy's `_init`/`_payload` — the same pair React itself calls,
+ * stable since lazy was introduced — because a lazy component exposes nothing
+ * else that says which module it loads.
+ */
+export const resolveRouteComponent = async (route: {
+  component?: unknown;
+  render?: unknown;
+}): Promise<unknown> => {
+  const component = route.component as any;
+  if (!component) return route.render ? undefined : null;
+  if (component.$$typeof !== REACT_LAZY) return component;
+  if (typeof component._init !== 'function') return undefined;
+  const init = () => component._init(component._payload);
+  try {
+    return init();
+  } catch (thrown) {
+    if (!thrown || typeof (thrown as any).then !== 'function') return undefined;
+    try {
+      await thrown;
+      return init();
+    } catch {
+      return undefined;
+    }
+  }
+};
