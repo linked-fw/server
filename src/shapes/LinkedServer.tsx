@@ -56,11 +56,12 @@ import {
   staticAssetURL,
 } from '../utils/releaseManifest.js';
 import {
-  isViteDevServer,
   resolveBootstrapEntry,
   resolveViteMainEntry,
+  resolveViteServingMode,
 } from '../utils/bootstrapEntry.js';
 import { resolveRouteAssets } from '../utils/routeAssets.js';
+import { ssrCssInlineUrls } from '../utils/ssrCss.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
 import {
   installSpaFallback,
@@ -115,7 +116,10 @@ global['reactStaticRenderer'] = renderToStaticMarkup;
 
 autoLoadOntologyData(true);
 
-@linkedShape
+// Named explicitly: tsc emits `let X = class X`, and any later esbuild pass over that JS (Vite's
+// SSR `define` replacement runs one on every file mentioning a defined `process.env.*`) renames
+// the inner binding to `X2`, which would otherwise become this shape's IRI.
+@linkedShape({name: 'LinkedServer'})
 export class LinkedServer extends Shape {
   /**
    * indicates that instances of this shape need to have this rdf.type
@@ -126,7 +130,12 @@ export class LinkedServer extends Shape {
   private assets: { [key: string]: string } & {
     manifest?: Record<string, string>;
   };
-  private latestManifest: Record<string, string> | null = null;
+  /**
+   * Whether pages are served by the live Vite dev server rather than a
+   * `vite build` on disk. Decided once in `start()` — see
+   * utils/bootstrapEntry `resolveViteServingMode`.
+   */
+  private viteDevServer = false;
   /**
    * Base URL every asset this build produced is served from — resolved once in
    * `start()` and kept so per-request route chunks land on the same base as
@@ -323,40 +332,45 @@ export class LinkedServer extends Shape {
         staticAsset('/bundles/main.bundle.js') + '?v=' + this.package.version,
       'main.css': staticAsset('/bundles/main.css'),
     };
-    try {
-      const viteManifestPath = path.resolve(
-        process.cwd(),
-        'public/bundles/.vite/manifest.json'
-      );
-      if (fsNative.existsSync(viteManifestPath)) {
-        const manifestRaw = fsNative.readFileSync(viteManifestPath, 'utf-8');
-        const viteManifest = JSON.parse(manifestRaw);
-        this.assets.manifest = viteManifest;
-        // Resolve main entry per Vite manifest shape:
-        //   { "src/index.tsx": { file: "assets/main-<hash>.js", css: [...] } }
-        const mainEntry = resolveViteMainEntry(viteManifest);
-        if (mainEntry?.file) {
-          this.assets['main.js'] = staticAsset(`/bundles/${mainEntry.file}`);
-          this.mainEntryIsModule = true;
+    // Dev or built, decided once and reused by the render path — see
+    // utils/bootstrapEntry. In development the build manifest is not read:
+    // one left on disk by an earlier `vite build` would otherwise swap in
+    // stale built CSS while Vite serves the live styles.
+    const servingMode = resolveViteServingMode({
+      viteConfig: (this.config.server as any)?.vite,
+      nodeEnv: process.env.NODE_ENV,
+      readManifest: () => {
+        try {
+          const viteManifestPath = path.resolve(
+            process.cwd(),
+            'public/bundles/.vite/manifest.json'
+          );
+          if (!fsNative.existsSync(viteManifestPath)) return null;
+          return JSON.parse(fsNative.readFileSync(viteManifestPath, 'utf-8'));
+        } catch (err) {
+          console.warn('Could not load bundle manifest:', err);
+          return null;
         }
-        if (mainEntry?.css?.[0]) {
-          this.assets['main.css'] = staticAsset(`/bundles/${mainEntry.css[0]}`);
-        }
+      },
+    });
+    this.viteDevServer = servingMode.viteDevServer;
+    if (servingMode.manifest) {
+      const viteManifest = servingMode.manifest as Record<string, any>;
+      this.assets.manifest = viteManifest;
+      // Resolve main entry per Vite manifest shape:
+      //   { "src/index.tsx": { file: "assets/main-<hash>.js", css: [...] } }
+      const mainEntry = resolveViteMainEntry(viteManifest);
+      if (mainEntry?.file) {
+        this.assets['main.js'] = staticAsset(`/bundles/${mainEntry.file}`);
+        this.mainEntryIsModule = true;
       }
-    } catch (err) {
-      console.warn('Could not load bundle manifest:', err);
+      if (mainEntry?.css?.[0]) {
+        this.assets['main.css'] = staticAsset(`/bundles/${mainEntry.css[0]}`);
+      }
     }
-    // Vite dev marker: when Vite is in use AND no Vite manifest exists yet
-    // (= dev mode, no `vite build` run), the HTML renderer skips
-    // pre-built CSS/JS link tags. Vite handles asset injection itself.
-    // Same test as the entry bootstrap and the route preloads — see
-    // utils/bootstrapEntry.
-    if (
-      isViteDevServer({
-        viteConfig: (this.config.server as any)?.vite,
-        buildOutput: resolveViteMainEntry(this.assets.manifest ?? {}),
-      })
-    ) {
+    // Vite dev marker: the HTML renderer skips pre-built CSS/JS link tags,
+    // because Vite handles asset injection itself.
+    if (this.viteDevServer) {
       this.assets['__viteDev'] = '1';
     }
 
@@ -1695,7 +1709,6 @@ export class LinkedServer extends Shape {
     let ssrCss = '';
     if (vite?.moduleGraph?.idToModuleMap) {
       const cssChunks: string[] = [];
-      const seen = new Set<string>();
       // Walk the moduleGraph for CSS modules pulled in by app/pages.
       // Note: Tailwind v4 `@theme` directives in app theme CSS files are
       // NOT processed at SSR collection time — the @tailwindcss/vite
@@ -1705,15 +1718,13 @@ export class LinkedServer extends Shape {
       // unthemed content (logos render black until ~hydration+200ms).
       // Production (vite build) is unaffected — the static main.css
       // contains expanded :root variables.
-      for (const [id] of vite.moduleGraph.idToModuleMap as Map<
-        string,
-        any
-      >) {
-        if (seen.has(id)) continue;
-        if (!/\.(module\.)?css(\?(?!.*inline)[^?]*)?$/.test(id)) continue;
-        seen.add(id);
+      // Only real stylesheets, once per file — see utils/ssrCss.
+      const inlineUrls = ssrCssInlineUrls(
+        (vite.moduleGraph.idToModuleMap as Map<string, unknown>).keys(),
+        { publicDir: vite.config?.publicDir },
+      );
+      for (const inlineUrl of inlineUrls) {
         try {
-          const inlineUrl = id + (id.includes('?') ? '&' : '?') + 'inline';
           const cssModule = await vite.ssrLoadModule(inlineUrl);
           if (typeof cssModule?.default === 'string') {
             cssChunks.push(cssModule.default);
@@ -1722,7 +1733,18 @@ export class LinkedServer extends Shape {
       }
       ssrCss = cssChunks.join('\n');
     }
-    (this.assets as any)['__viteSsrCss'] = ssrCss;
+    // Per request, and not enumerable: Html reads `assets.__viteSsrCss` for
+    // the inline <style>, but also serialises the whole assets object into
+    // `assetManifest` for the client, which never uses it. Enumerable, the
+    // collected CSS — megabytes in a large app — went into every page twice.
+    // A per-request copy also keeps one render's CSS out of another's.
+    const assets = { ...this.assets };
+    if (ssrCss) {
+      Object.defineProperty(assets, '__viteSsrCss', {
+        value: ssrCss,
+        enumerable: false,
+      });
+    }
 
     await this.initRequest(req, res);
     let { requestLD, requestObject } = await this.getRequestData(req, res);
@@ -1746,7 +1768,7 @@ export class LinkedServer extends Shape {
     //   timedout = true;
     // }, 8_000);
 
-    let manifest = this.latestManifest || this.assets.manifest || {};
+    let manifest = this.assets.manifest || {};
     let preloadScripts: string[] = [];
     let preloadStyles: string[] = [];
     let matchedRouteKey: string | null = null;
@@ -1755,10 +1777,11 @@ export class LinkedServer extends Shape {
     // chunks to preload, and the webpack-shape fallback would pick up
     // stale bundles on disk (public/bundles/*.bundle.js from a prior
     // webpack build) and link them, breaking hydration.
-    const usingViteDev = isViteDevServer({
-      viteConfig: (this.config.server as any)?.vite,
-      buildOutput: this.latestManifest,
-    });
+    // The same decision start() made for the `__viteDev` marker. This used
+    // to be re-derived from `latestManifest`, which nothing ever set, so it
+    // answered "dev" whenever Vite was attached — even when start() had
+    // chosen the build — and the page mixed built CSS with the dev preamble.
+    const usingViteDev = this.viteDevServer;
 
     // Load routes config if available and extract preload chunks for the current route
     if (this.config.server?.loadRoutes) {
@@ -1817,7 +1840,7 @@ export class LinkedServer extends Shape {
       <React.StrictMode>
         <StaticRouter location={req.url}>
           <AppContextProvider
-            assets={this.assets}
+            assets={assets}
             requestLD={requestLD}
             requestObject={requestObject}
             preloadScripts={preloadScripts}

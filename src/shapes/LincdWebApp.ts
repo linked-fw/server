@@ -4,7 +4,10 @@ import { Shape } from '@_linked/core/shapes/Shape';
 import { objectProperty } from '@_linked/core/shapes/SHACL';
 import { Lincd_API_Client } from '@_linked/server-utils/shapes/Lincd_API_Client';
 
-@linkedShape
+// Named explicitly: tsc emits `let X = class X`, and any later esbuild pass over that JS (Vite's
+// SSR `define` replacement runs one on every file mentioning a defined `process.env.*`) renames
+// the inner binding to `X2`, which would otherwise become this shape's IRI.
+@linkedShape({name: 'LincdWebApp'})
 export class LincdWebApp extends Shape {
   static targetClass = lincdServer.LincdWebApp;
 

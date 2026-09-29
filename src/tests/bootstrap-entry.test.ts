@@ -3,6 +3,7 @@ import {
   isViteDevServer,
   resolveBootstrapEntry,
   resolveViteMainEntry,
+  resolveViteServingMode,
   VITE_DEV_BOOTSTRAP_CONTENT,
 } from '../utils/bootstrapEntry.js';
 
@@ -243,5 +244,51 @@ describe('the manifest a build produced decides the tag', () => {
     expect(bootstrapFor(WEBPACK_MANIFEST)).toEqual({
       bootstrapScripts: ['/bundles/main.bundle.js'],
     });
+  });
+});
+
+describe('resolveViteServingMode', () => {
+  const vite = { ssrLoadModule: () => undefined };
+
+  it('serves from the live dev server in development, even with a build manifest on disk', () => {
+    let reads = 0;
+    const mode = resolveViteServingMode({
+      viteConfig: vite,
+      nodeEnv: 'development',
+      readManifest: () => {
+        reads++;
+        return VITE_MANIFEST;
+      },
+    });
+    expect(mode).toEqual({ viteDevServer: true, manifest: null });
+    // A stale manifest must not even be read, or its CSS leaks into the page.
+    expect(reads).toBe(0);
+  });
+
+  it('serves the build outside development when a manifest exists', () => {
+    const mode = resolveViteServingMode({
+      viteConfig: vite,
+      nodeEnv: 'production',
+      readManifest: () => VITE_MANIFEST,
+    });
+    expect(mode).toEqual({ viteDevServer: false, manifest: VITE_MANIFEST });
+  });
+
+  it('falls back to the dev server outside development when nothing is built', () => {
+    const mode = resolveViteServingMode({
+      viteConfig: vite,
+      nodeEnv: 'production',
+      readManifest: () => null,
+    });
+    expect(mode).toEqual({ viteDevServer: true, manifest: null });
+  });
+
+  it('is never dev without an attached Vite server', () => {
+    const mode = resolveViteServingMode({
+      viteConfig: undefined,
+      nodeEnv: 'development',
+      readManifest: () => null,
+    });
+    expect(mode.viteDevServer).toBe(false);
   });
 });
