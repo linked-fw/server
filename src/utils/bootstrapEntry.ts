@@ -40,8 +40,8 @@ export const resolveViteMainEntry = (
  *
  * The build manifest is what actually separates the two. Once a manifest has
  * been loaded the built assets are on disk and must be used, `server.vite`
- * notwithstanding. Keep both call sites on this one function so they cannot
- * drift apart again.
+ * notwithstanding. Call it only through `resolveViteServingMode`, once per
+ * start, so the call sites cannot drift apart again.
  */
 export const isViteDevServer = ({
   viteConfig,
@@ -56,6 +56,48 @@ export const isViteDevServer = ({
    */
   buildOutput: unknown;
 }): boolean => !!viteConfig && !buildOutput;
+
+/**
+ * Decide, once per server start, whether pages are served by the live Vite
+ * dev server or from a `vite build` on disk — and read the build manifest
+ * only when it will actually be used.
+ *
+ * `linked start` attaches a live Vite dev server in every mode, so its
+ * presence alone cannot tell dev from a production start. A manifest on disk
+ * cannot either: `public/bundles/.vite/manifest.json` survives from any
+ * earlier `vite build`, and treating it as "not dev" made a development
+ * server link the stale built CSS while Vite injected the live styles. So in
+ * development with Vite attached the manifest is not read at all; everywhere
+ * else the answer is `isViteDevServer` over the manifest's entry, exactly as
+ * before.
+ *
+ * The result is stored and reused by the render path, so the `__viteDev`
+ * marker, the entry bootstrap and the route preloads cannot disagree.
+ */
+export const resolveViteServingMode = ({
+  viteConfig,
+  nodeEnv,
+  readManifest,
+}: {
+  /** `config.server.vite` — the attached Vite dev server, if any. */
+  viteConfig: unknown;
+  /** `process.env.NODE_ENV` at start. */
+  nodeEnv: string | undefined;
+  /** Reads the build manifest; returns null when there is none. */
+  readManifest: () => BundleManifest | null;
+}): { viteDevServer: boolean; manifest: BundleManifest | null } => {
+  if (viteConfig && nodeEnv === 'development') {
+    return { viteDevServer: true, manifest: null };
+  }
+  const manifest = readManifest();
+  return {
+    viteDevServer: isViteDevServer({
+      viteConfig,
+      buildOutput: manifest ? resolveViteMainEntry(manifest) : null,
+    }),
+    manifest,
+  };
+};
 
 /** The subset of `renderToPipeableStream` options that boots the client. */
 export interface BootstrapEntryOptions {
