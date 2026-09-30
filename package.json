@@ -68,7 +68,7 @@
     "@changesets/cli": "^3.0.0",
     "@jest/globals": "^29.7.0",
     "@types/jest": "^29.5.14",
-    "@types/node": "^20.12.7",
+    "@types/node": "^24.0.0",
     "@types/react-dom": "^19.3.0",
     "copyfiles": "^2.4.1",
     "cross-env": "^7.0.3",
