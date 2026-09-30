@@ -37,6 +37,32 @@ import {
 } from '@_linked/core/utils/ShapeClass';
 import path from 'path';
 import {pathToFileURL} from 'node:url';
+import {
+  discoverLinkedDependencies,
+  isBundledBySsr,
+  ssrNoExternalOf,
+} from '../utils/linkedDependencies.js';
+
+/**
+ * `instanceof ShapeProvider`, tolerating a second copy of server-utils.
+ *
+ * A registry-installed package's backend is loaded by Node (see
+ * isBundledBySsr), so in a dev runner that BUNDLES server-utils — the
+ * standalone case — its providers extend Node's copy of ShapeProvider, not the
+ * one this module imported. Fall back to the class name along the prototype
+ * chain. Production has one loader and one copy, so instanceof decides there.
+ */
+function isShapeProvider(provider: any): boolean {
+  if (provider instanceof ShapeProvider) return true;
+  for (
+    let proto = provider ? Object.getPrototypeOf(provider) : null;
+    proto && proto !== Object.prototype;
+    proto = Object.getPrototypeOf(proto)
+  ) {
+    if (proto.constructor?.name === 'ShapeProvider') return true;
+  }
+  return false;
+}
 import process from 'process';
 import * as React from 'react';
 import { renderToPipeableStream, renderToStaticMarkup } from 'react-dom/server';
@@ -163,6 +189,10 @@ export class LinkedServer extends Shape {
   private analyse: boolean = false;
   private shapeProviders: Map<string, ShapeProvider[]> = new Map();
   private genericProviders: Map<string, BackendProvider> = new Map();
+  // One indexing per package: boot and the lazy /call path share it, so two
+  // concurrent first calls (or a call racing boot) never construct a
+  // package's providers twice.
+  private providerIndexing: Map<string, Promise<void>> = new Map();
   //from resizedFileName to full resized path (CDN or similar)
   private resizePathsMap: Map<string, string> = new Map();
   private api: LincdAPI;
@@ -668,9 +698,8 @@ export class LinkedServer extends Shape {
     // // }, 1000 * 60 * 60); //every hour
   }
   async initBackendProviders() {
-    //get all local workspace lincd packages, then filter to only those
-    //in this app's dependency tree. This avoids loading npm-installed
-    //legacy packages that may use an old version of the core.
+    // Local workspace packages in this app's dependency tree. These are also
+    // imported whole at boot (indexLincdPackage), not only their /backend.
     const allLocalPackages = getLincdPackages();
     const localPackageMap = new Map<
       string,
@@ -680,10 +709,16 @@ export class LinkedServer extends Shape {
       localPackageMap,
       this.package
     );
-    for (let [pkgName, pkg] of relevantPackages) {
-      await this.indexPackageBackendProviders(pkgName);
-      await this.indexLincdPackage(pkgName);
-    }
+    // Every linked package in the dependency tree, installed or local, each
+    // after the linked packages it depends on. Registry installs and
+    // localized checkouts are not workspace members, and used to be indexed
+    // only lazily, on the first /call/<pkg>/... A provider can hook every
+    // request (initRequest, supplyDataForRequest, setupBeforeControllers
+    // routes), so those hooks stayed silent until some RPC to the package
+    // happened — an installed @_linked/auth did not put the session into a
+    // page's request data until then, and its setupBeforeControllers
+    // middleware never registered at all.
+    await this.indexLinkedDependencyProviders(relevantPackages);
 
     try {
       await fs
@@ -707,6 +742,79 @@ export class LinkedServer extends Shape {
     } catch (err) {
       console.warn(err);
     }
+  }
+
+  /**
+   * Index the backend providers of every linked package in the app's
+   * dependency tree, dependencies first. Workspace members (`localPackages`)
+   * are also imported whole, as before; for anything else only its `/backend`
+   * entry is loaded, and a package without one costs a failed resolve.
+   */
+  private async indexLinkedDependencyProviders(
+    localPackages: Map<string, { packageName: string; path: string }>
+  ) {
+    const started = Date.now();
+    const installed: string[] = [];
+    const ordered = discoverLinkedDependencies(process.cwd(), this.package);
+    // A workspace member the walk cannot reach through node_modules still
+    // loads, after the rest, as it always did.
+    const remaining = new Set(localPackages.keys());
+    for (const { packageName } of ordered) {
+      const isLocal = remaining.delete(packageName);
+      await this.ensurePackageBackendProviders(packageName);
+      if (isLocal) {
+        await this.indexLincdPackage(packageName);
+      } else if (
+        this.genericProviders.get(packageName) ||
+        this.shapeProviders.get(packageName)?.length
+      ) {
+        installed.push(packageName);
+      }
+    }
+    for (const packageName of remaining) {
+      await this.ensurePackageBackendProviders(packageName);
+      await this.indexLincdPackage(packageName);
+    }
+    if (installed.length > 0) {
+      console.log(
+        chalk.gray(
+          `[linked] indexed backend providers of ${ordered.length} linked package(s) in ${
+            Date.now() - started
+          }ms; installed ones with providers: ${installed.join(', ')}`
+        )
+      );
+    }
+  }
+
+  /**
+   * Index a package's backend providers once. Shared by boot and the lazy
+   * path in callBackendMethod / callShapeMethod. `onSourceChange` bypasses it
+   * on purpose: an HMR reload must re-index.
+   */
+  async ensurePackageBackendProviders(pkg: string, warnIfNotFound = false) {
+    if (this.genericProviders.has(pkg) && this.shapeProviders.has(pkg)) {
+      return;
+    }
+    let indexing = this.providerIndexing.get(pkg);
+    if (!indexing) {
+      indexing = this.indexPackageBackendProviders(pkg, warnIfNotFound).then(
+        () => undefined
+      );
+      this.providerIndexing.set(pkg, indexing);
+    }
+    try {
+      await indexing;
+    } finally {
+      this.providerIndexing.delete(pkg);
+    }
+  }
+
+  /**
+   * Node's `import()`, as a method so a test can resolve a fixture app's
+   * node_modules (a test runner resolves bare specifiers from this file).
+   */
+  protected importModule(specifier: string): Promise<any> {
+    return import(/* @vite-ignore */ specifier);
   }
 
   /**
@@ -1130,8 +1238,19 @@ export class LinkedServer extends Shape {
     // @semantu/create-now/backend), which Node's ESM resolver can't resolve
     // from inside an installed package like @_linked/server.
     const vite: any = (this.config.server as any)?.vite;
+    // In dev, load a package's backend with the loader that owns the package
+    // (see isBundledBySsr): Vite for the app itself and for what the SSR
+    // runner bundles (workspaces, SSR_ENTRY_PACKAGES), Node for what it
+    // leaves external (registry installs). ssrLoadModule of an EXTERNAL
+    // package's /backend evaluated that package a second time, apart from the
+    // copy the app's own imports reach.
+    const viteOwnsPackage =
+      !!vite &&
+      typeof vite.ssrLoadModule === 'function' &&
+      (pkg === this.package?.name ||
+        isBundledBySsr(pkg, ssrNoExternalOf(vite)));
     const loadModule = async (specifier: string) => {
-      if (vite && typeof vite.ssrLoadModule === 'function') {
+      if (viteOwnsPackage) {
         // For the user app's own backend, resolve to ./src/backend.ts directly.
         // Vite reads the app's package.json exports.development condition.
         if (specifier === `${this.package.name}/backend`) {
@@ -1171,7 +1290,8 @@ export class LinkedServer extends Shape {
         }
         return await vite.ssrLoadModule(specifier);
       }
-      // No-vite path (e.g. production runtime).
+      // Node path: production runtime, or a package the dev SSR runner
+      // leaves external.
       //
       // The app's own backend cannot be imported by name here. A self-reference
       // resolves only from inside the package that declares it, and this code
@@ -1186,7 +1306,7 @@ export class LinkedServer extends Shape {
         return await import(/* @vite-ignore */ pathToFileURL(target).href);
       }
       // Fall back to Node's resolver. The dynamic specifier is intentional.
-      return await import(/* @vite-ignore */ specifier);
+      return await this.importModule(specifier);
     };
     await loadModule(backendIndexFilePath)
       .then((backendProviderExports) => {
@@ -1196,7 +1316,7 @@ export class LinkedServer extends Shape {
           //always send an instance of the express server
           //TODO: do not create an instance, just save the class and instantiate it when needed
           let provider = new providerClass(this.server, this);
-          if (provider instanceof ShapeProvider) {
+          if (isShapeProvider(provider)) {
             shapeProviders.push(provider);
             if (!Object.getOwnPropertyNames(provider).includes('shape')) {
               console.warn(
@@ -1479,7 +1599,7 @@ export class LinkedServer extends Shape {
   ) {
     //- index module providers if not done yet
     if (!this.shapeProviders.has(pkg)) {
-      await this.indexPackageBackendProviders(pkg, true);
+      await this.ensurePackageBackendProviders(pkg, true);
     }
 
     let packageShapeProviders = this.shapeProviders.get(pkg);
@@ -1489,7 +1609,7 @@ export class LinkedServer extends Shape {
         //access the static shape (which is a linkedShape() / Shape class)
         //then access the SHACL NodeShape of that shape class, and its id
         return (
-          provider instanceof ShapeProvider &&
+          isShapeProvider(provider) &&
           provider.shape?.shape?.id === nodeShapeId
         );
       });
@@ -2074,7 +2194,7 @@ export class LinkedServer extends Shape {
     response
   ) {
     if (!this.genericProviders.has(pkg)) {
-      await this.indexPackageBackendProviders(pkg, true);
+      await this.ensurePackageBackendProviders(pkg, true);
     }
 
     //retrieve the indexed provider class and create a new instance for this request
