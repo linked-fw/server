@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.14.3
+
+### Patch Changes
+
+- [#113](https://github.com/linked-fw/server/pull/113) [`add9285`](https://github.com/linked-fw/server/commit/add928543ce3b0d68319384490b46527b8878e14) Thanks [@flyon](https://github.com/flyon)! - Add `shapes/index`, a side-effect-only module that registers every shape this package defines, and have the package entry import it instead of listing shapes one by one. Hosts and consumers can now load `@_linked/server/shapes/index` to get the package's full shape set registered without pulling in anything else, and a shape added later is picked up by the entry automatically.
+
 ## 2.14.2
 
 ### Patch Changes
