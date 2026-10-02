@@ -18,5 +18,21 @@ export const JSON_BODY_LIMIT = '50mb';
  * the behaviour pinned by `json-body-parser.test.ts`.
  */
 export function createJsonBodyParser() {
-  return express.json({ limit: JSON_BODY_LIMIT });
+  return express.json({ limit: JSON_BODY_LIMIT, verify: keepRawBody });
+}
+
+/** The routes whose handlers get the body as received, on `request.rawBody`. */
+const RAW_BODY_PATHS = new Set(['/api/select-raw']);
+
+/**
+ * Keep the unparsed bytes of a raw SPARQL request on `request.rawBody`, so a
+ * raw query authorizer (`registerRawQueryAuthorizer` in server-utils) can
+ * verify a signature over the exact body. Only for those routes: every other
+ * body is parsed and its bytes dropped as before.
+ */
+function keepRawBody(req: any, _res: unknown, buf: Buffer) {
+  const path = String(req.originalUrl ?? req.url ?? '').split('?')[0];
+  if (req.method === 'POST' && RAW_BODY_PATHS.has(path)) {
+    req.rawBody = buf;
+  }
 }

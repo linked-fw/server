@@ -453,3 +453,94 @@ describe('LocalFileStore.listFiles', () => {
     expect(await listStore.listFiles('nothing-matches')).toEqual([]);
   });
 });
+
+describe('LocalFileStore path containment', () => {
+  // Every key resolves inside the store's base folder; one that would escape it
+  // is refused before the file system is touched.
+  const escapes = ['../outside.txt', 'a/../../outside.txt', '../../etc/passwd', 'images/../../x.txt'];
+
+  it.each(escapes)('refuses %s on every method', async (key) => {
+    const outside = path.join(tmpDir, 'data', 'outside.txt');
+    await fs.writeFile(outside, 'secret');
+    await expect(store.getFile(key)).rejects.toThrow(/escapes the file store/);
+    await expect(store.fileExists(key)).rejects.toThrow(/escapes the file store/);
+    await expect(store.deleteFile(key)).rejects.toThrow(/escapes the file store/);
+    await expect(statFileOf(store)(key)).rejects.toThrow(/escapes the file store/);
+    await expect(
+      store.saveFile(key, Buffer.from('x'), { mimeType: 'text/plain', preventDuplicates: false })
+    ).rejects.toThrow(/escapes the file store/);
+    // the file outside the store is untouched
+    expect(await fs.readFile(outside, 'utf8')).toBe('secret');
+  });
+
+  it('still treats a leading slash as relative to the base folder', async () => {
+    await store.saveFile('/leading-slash.txt', Buffer.from('ok'), {
+      mimeType: 'text/plain',
+      preventDuplicates: false,
+    });
+    expect((await store.getFile('leading-slash.txt'))?.toString()).toBe('ok');
+    expect(await store.fileExists('/leading-slash.txt')).toBe(true);
+  });
+
+  it('allows dot segments that stay inside', async () => {
+    await store.saveFile('inner/file.txt', Buffer.from('in'), {
+      mimeType: 'text/plain',
+      preventDuplicates: false,
+    });
+    expect((await store.getFile('inner/../inner/file.txt'))?.toString()).toBe('in');
+  });
+});
+
+describe('LocalFileStore symlink containment', () => {
+  // A symlink inside the base folder that points out of it must not let a key
+  // reach outside: the check compares real paths, not the joined key.
+  let outsideDir: string;
+  let base: string;
+
+  beforeAll(async () => {
+    base = path.join(tmpDir, UPLOAD_DIR);
+    outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'local-file-store-outside-'));
+    await fs.writeFile(path.join(outsideDir, 'secret.txt'), 'secret');
+    await fs.symlink(outsideDir, path.join(base, 'linked-dir'), 'dir');
+    await fs.symlink(path.join(outsideDir, 'secret.txt'), path.join(base, 'linked-file.txt'));
+    await fs.symlink(path.join(outsideDir, 'created.txt'), path.join(base, 'dangling.txt'));
+  });
+
+  afterAll(async () => {
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  const escapes = ['linked-dir/secret.txt', 'linked-dir/new.txt', 'linked-dir/sub/new.txt', 'linked-file.txt', 'dangling.txt'];
+
+  it.each(escapes)('refuses %s on every method', async (key) => {
+    await expect(store.getFile(key)).rejects.toThrow(/escapes the file store/);
+    await expect(store.fileExists(key)).rejects.toThrow(/escapes the file store/);
+    await expect(store.deleteFile(key)).rejects.toThrow(/escapes the file store/);
+    await expect(statFileOf(store)(key)).rejects.toThrow(/escapes the file store/);
+    await expect(
+      store.saveFile(key, Buffer.from('x'), { mimeType: 'text/plain', preventDuplicates: false })
+    ).rejects.toThrow(/escapes the file store/);
+    expect(await fs.readFile(path.join(outsideDir, 'secret.txt'), 'utf8')).toBe('secret');
+    expect(await fs.readdir(outsideDir)).toEqual(['secret.txt']);
+  });
+
+  it('allows a symlink that stays inside the base folder', async () => {
+    await fs.mkdir(path.join(base, 'real-inner'), { recursive: true });
+    await fs.writeFile(path.join(base, 'real-inner', 'f.txt'), 'inside');
+    await fs.symlink(path.join(base, 'real-inner'), path.join(base, 'inner-link'), 'dir');
+    expect((await store.getFile('inner-link/f.txt'))?.toString()).toBe('inside');
+  });
+
+  it('works when the base folder itself is reached through a symlink', async () => {
+    const { LocalFileStore } = await import('../shapes/filestores/LocalFileStore.js');
+    const viaLink = path.join(tmpDir, 'uploads-link');
+    await fs.symlink(base, viaLink, 'dir');
+    const linkedStore = new LocalFileStore('via-link', viaLink);
+    await linkedStore.saveFile('through-link.txt', Buffer.from('ok'), {
+      mimeType: 'text/plain',
+      preventDuplicates: false,
+    });
+    expect((await linkedStore.getFile('through-link.txt'))?.toString()).toBe('ok');
+    await expect(linkedStore.getFile('linked-dir/secret.txt')).rejects.toThrow(/escapes the file store/);
+  });
+});

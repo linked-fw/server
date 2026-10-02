@@ -7,6 +7,23 @@ import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { cached } from '@_linked/core/utils/cached';
 import { getShapeIndex, ShapeDetails } from '../utils/Shapes.js';
 import { SparqlDataset as SPARQLStore } from '@_linked/core/sparql/SparqlDataset';
+import {
+  authorizeGenericQuery,
+  authorizeRawQuery,
+  toQueryBuilder,
+} from '../utils/queryPlane.js';
+import { getRpcExposureMode } from '../utils/rpcExposure.js';
+
+/** An error carrying an HTTP status, such as a `ServerCallError` (401/403). */
+function isStatusError(error: any): error is { status: number; message: string } {
+  return (
+    !!error &&
+    typeof error.status === 'number' &&
+    error.status >= 400 &&
+    error.status < 600 &&
+    error.name === 'ServerCallError'
+  );
+}
 
 const cacheTime = process.env.NODE_ENV === 'development' ? 0 : Infinity;
 export type ShapeSummary = {
@@ -30,7 +47,9 @@ export class LincdAPI extends Shape {
     httpMethod: 'get' | 'post' | 'put' | 'delete'
   ) {
     let { method, action } = request.params;
-    const body = JSONParser.parseObject<any>(request.body);
+    const body = JSONParser.parseObject<any>(request.body, {
+      shapeClasses: getRpcExposureMode() === 'enforce' ? 'reject' : 'warn',
+    });
 
     //replace - with _ in action names
     let localMethod = httpMethod + '_' + method.replace(/-/g, '_');
@@ -38,7 +57,9 @@ export class LincdAPI extends Shape {
       throw new Error('Unknown method: ' + localMethod);
     }
 
-    //TODO: access rights, check if the current user is allowed to execute this method
+    // The query routes (`post_*`) check access themselves, through
+    // utils/queryPlane. The `get_*` routes describe shapes and stay reachable:
+    // apps read each other's `/api/all-shapes` server to server.
     try {
       const result = await this[localMethod](body, request, response);
       if (typeof result !== 'undefined' || !response.headersSent) {
@@ -46,6 +67,10 @@ export class LincdAPI extends Shape {
         response.json(jsonObject);
       }
     } catch (error) {
+      if (!response.headersSent && isStatusError(error)) {
+        response.status(error.status).json({ error: error.message });
+        return;
+      }
       console.error(`Error while processing ${localMethod}:`, error);
       if (!response.headersSent) {
         const message =
@@ -122,20 +147,31 @@ export class LincdAPI extends Shape {
     );
   }
 
-  post_select({ query }) {
-    return LinkedStorage.selectQuery(query);
+  async post_select({ query }) {
+    const builder = toQueryBuilder(query);
+    await authorizeGenericQuery('select', query, builder, 'api/select');
+    return LinkedStorage.selectQuery(builder);
   }
-  post_create({ query }) {
-    return LinkedStorage.createQuery(query);
+  async post_create({ query }) {
+    const builder = toQueryBuilder(query);
+    await authorizeGenericQuery('create', query, builder, 'api/create');
+    return LinkedStorage.createQuery(builder);
   }
-  post_update({ query }) {
-    return LinkedStorage.updateQuery(query);
+  async post_update({ query }) {
+    const builder = toQueryBuilder(query);
+    await authorizeGenericQuery('update', query, builder, 'api/update');
+    return LinkedStorage.updateQuery(builder);
   }
-  post_delete({ query }) {
-    return LinkedStorage.deleteQuery(query);
+  async post_delete({ query }) {
+    const builder = toQueryBuilder(query);
+    await authorizeGenericQuery('delete', query, builder, 'api/delete');
+    return LinkedStorage.deleteQuery(builder);
   }
 
-  post_select_raw({ query }) {
+  async post_select_raw({ query }) {
+    // A raw SPARQL string cannot be analysed for the shapes it touches: it is
+    // refused unless the app registers a raw query authorizer.
+    await authorizeRawQuery(query, 'api/select-raw');
     this.checkRawQuerySupport();
     return (LinkedStorage.getDefaultDataset() as unknown as SPARQLStore).rawQuery(
       query

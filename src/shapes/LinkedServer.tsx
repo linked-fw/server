@@ -20,6 +20,13 @@ import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
+import {
+  getCallContext,
+  httpCallContext,
+  runAsSystem,
+  runInHttpContext,
+  runWithCallContext,
+} from '@_linked/server-utils/utils/CallContext';
 import { Shape } from '@_linked/core/shapes/Shape';
 import { LinkedErrorLogging } from '@_linked/core/utils/LinkedErrorLogging';
 import {
@@ -155,6 +162,14 @@ import {
 } from '../utils/spaFallback.js';
 import { LincdAPI } from './LincdAPI.js';
 import type { RoutesConfig, RouteConfig } from '../types/RouteConfig.js';
+import {
+  getRpcExposureMode,
+  isGenericRpcDisabled,
+  logSafe,
+  resolveCallable,
+  setRpcExposureMode,
+  warnUndeclaredCall,
+} from '../utils/rpcExposure.js';
 
 //prevent errors in node.js when (s)css files are imported in js
 const isProduction = process.env.NODE_ENV === 'production';
@@ -201,6 +216,59 @@ events.EventEmitter.prototype.setMaxListeners(500);
 global['reactStaticRenderer'] = renderToStaticMarkup;
 
 autoLoadOntologyData(true);
+
+/**
+ * How RPC arguments treat a `{__sc}` (live Shape class) marker. No call takes a
+ * Shape class from the client: logged in 'warn', refused (400) in 'enforce'.
+ */
+function rpcShapeClassRevival(): 'warn' | 'reject' {
+  return getRpcExposureMode() === 'enforce' ? 'reject' : 'warn';
+}
+
+/**
+ * Serve the local upload folder at `/uploads` (where `LocalFileStore` files are
+ * reachable), with the headers for untrusted files.
+ */
+export function mountUploads(
+  app: { use: Function },
+  folder: string = './data/uploads',
+  maxAge: number = 1000 * 60 * 60 * 24 * 365
+): void {
+  app.use(
+    '/uploads',
+    express.static(folder, {
+      maxAge, // cache for a long time
+      immutable: true, // Suggest that the content won't change
+      // uploaded files are user content: never sniffed, never run as a page
+      setHeaders: setUntrustedFileHeaders,
+    })
+  );
+}
+
+/**
+ * Express middleware: run the rest of the chain in the request's http context.
+ * `LinkedServer.start` installs it first, and again right after the JSON body
+ * parser (whose stream callbacks do not carry the context).
+ */
+export function enterRequestContext(req, res, next) {
+  runInHttpContext(req, res, next);
+}
+
+/**
+ * Headers for files users uploaded (`/uploads`, resized copies): the browser
+ * must not guess a type from the bytes, and a document served from them runs
+ * sandboxed (no scripts, an opaque origin), so an uploaded HTML or SVG file
+ * cannot act on the app's origin.
+ */
+export function setUntrustedFileHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', 'sandbox');
+}
+
+/** Whether the current HTTP call carries a session. */
+function hasSession(request): boolean {
+  return !!request?.linkedAuth?.userAccount;
+}
 
 // Named explicitly: tsc emits `let X = class X`, and any later esbuild pass over that JS (Vite's
 // SSR `define` replacement runs one on every file mentioning a defined `process.env.*`) renames
@@ -452,6 +520,8 @@ export class LinkedServer extends Shape {
 
   private async startBoot() {
     this.initPackage();
+    // 'warn' (default) or 'enforce'; see utils/rpcExposure.
+    setRpcExposureMode((this.config?.server as any)?.rpcExposure);
     // Static assets should come from the static store URL (versioned path),
     // not the upload store URL. An explicit STATIC_ACCESS_URL still wins;
     // otherwise the release manifest `linked build-app` wrote next to the
@@ -557,8 +627,15 @@ export class LinkedServer extends Shape {
     //   origin: ['http://localhost:4001', 'https://www.mynd.site'],
     //   optionsSuccessStatus: 200, // some legacy browsers (IE11, various SmartTVs) choke on 204
     // };
+    // Every request runs in its own http call context, from the first layer
+    // on: no handler (middleware, routers, error handlers) ever runs without
+    // one. The context is kept on the request, so a layer that resumes from a
+    // callback that lost it (a body parser's stream events) re-enters the same
+    // one below.
+    this.server.use(enterRequestContext);
     //accept JSON bodies
     this.server.use(createJsonBodyParser());
+    this.server.use(enterRequestContext);
 
     // this.server.use(cors(corsOptions));
     //
@@ -595,13 +672,7 @@ export class LinkedServer extends Shape {
       })
     );
 
-    this.server.use(
-      '/uploads',
-      express.static('./data/uploads', {
-        maxAge: oneYear, // Tell browser to cache for 1 year
-        immutable: true, // Suggest that the content won't change
-      })
-    );
+    mountUploads(this.server, './data/uploads', oneYear);
     this.server.use('/', express.static('./public/root'));
     this.server.use(
       '/favicon.ico',
@@ -617,51 +688,7 @@ export class LinkedServer extends Shape {
       this.resizeImage(req, res);
     });
 
-    // Scoped-package variants (@scope/pkg). Register BEFORE the unscoped
-    // routes — Express `:pkg` won't consume slashes, so a call to
-    // `/call/@_linked/auth/signinDev` would otherwise fall through to the
-    // 3-segment `:pkg/:shape/:method` route and be misinterpreted as a
-    // shape-method call (pkg=`@_linked`, shape=`auth`). These handlers
-    // recognise the `@scope/pkg` prefix and rebuild the full package name
-    // before dispatching to the same handler used for unscoped packages.
-    this.server.post(
-      '/call/@:scope/:pkg/:method',
-      this.handleErrorsJson(async (req, res) => {
-        req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
-        return this.processBackendMethodCall(req, res);
-      })
-    );
-    this.server.post(
-      '/call/@:scope/:pkg/:shape/:method',
-      this.handleErrorsJson(async (req, res) => {
-        req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
-        return this.processShapeMethodCall(req, res);
-      })
-    );
-    this.server.post(
-      '/call/:pkg/:method',
-      this.handleErrorsJson(async (req, res) =>
-        this.processBackendMethodCall(req, res)
-      )
-    );
-    this.server.post(
-      '/call/:pkg/:shape/:method',
-      this.handleErrorsJson(async (req, res) =>
-        this.processShapeMethodCall(req, res)
-      )
-    );
-    this.server.post(
-      '/api/:method/:action?',
-      this.handleErrorsJson(async (req, res) =>
-        this.processAPICall(req, res, 'post')
-      )
-    );
-    this.server.get(
-      '/api/:method/:action?',
-      this.handleErrorsJson(async (req, res) =>
-        this.processAPICall(req, res, 'get')
-      )
-    );
+    registerCallRoutes(this.server, this);
     // this.server.post(
     //   '/api/query/:method',
     //   this.handleErrorsJson(async (req, res) => this.processQuery(req, res)),
@@ -985,9 +1012,12 @@ export class LinkedServer extends Shape {
     }
     let indexing = this.providerIndexing.get(pkg);
     if (!indexing) {
-      indexing = this.indexPackageBackendProviders(pkg, warnIfNotFound).then(
-        () => undefined
-      );
+      // Loading a package's providers runs their constructors and setup hooks.
+      // That is system work, even when the first call to the package triggers it.
+      indexing = runAsSystem(
+        () => this.indexPackageBackendProviders(pkg, warnIfNotFound),
+        'loading backend providers of ' + pkg
+      ).then(() => undefined);
       this.providerIndexing.set(pkg, indexing);
     }
     try {
@@ -1347,6 +1377,7 @@ export class LinkedServer extends Shape {
       console.warn('Could not cache resized image at ' + resizedKey + ': ' + err);
     }
 
+    setUntrustedFileHeaders(res);
     res.type(extension || 'bin').send(resized);
   }
 
@@ -1391,7 +1422,7 @@ export class LinkedServer extends Shape {
         if (warnIfNotFound) {
           console.warn(
             paint('magenta', 
-              `Could not load package ${pkg}`,
+              `Could not load package ${logSafe(pkg)}`,
               typeof module !== 'undefined' && typeof exports !== 'undefined'
                 ? //@ts-ignore
                   ' at ' + (await import.meta.resolve(pkg))
@@ -1402,7 +1433,7 @@ export class LinkedServer extends Shape {
       } else {
         console.warn(
           paint('red', 
-            `Error loading '${pkg}' ${
+            `Error loading '${logSafe(pkg)}' ${
               typeof module !== 'undefined' && typeof exports !== 'undefined'
                 ? //@ts-ignore
                   ' at ' + (await import.meta.resolve(pkg))
@@ -1500,7 +1531,7 @@ export class LinkedServer extends Shape {
     if (!load) {
       if (warnIfNotFound) {
         console.warn(
-          paint('magenta', `Could not find backend file of package ${pkg}. 
+          paint('magenta', `Could not find backend file of package ${logSafe(pkg)}. 
         Check:\n
           - Make sure backend.ts exists and is included in tsconfig.json\n
           - Make sure the package name in src/package.ts matches the package name in package.json`)
@@ -1540,13 +1571,13 @@ export class LinkedServer extends Shape {
               console.warn(
                 paint('red', `${
                   Object.getPrototypeOf(provider).constructor.name
-                } in package ${pkg}
+                } in package ${logSafe(pkg)}
                is not properly linked to a shape. Use public shape = SomeShape.`)
               );
             }
           } else if (genericBackendProvider) {
             console.warn(
-              `Package ${pkg} exports two generic backend providers. Only one will work`
+              `Package ${logSafe(pkg)} exports two generic backend providers. Only one will work`
             );
           } else {
             genericBackendProvider = provider;
@@ -1663,26 +1694,32 @@ export class LinkedServer extends Shape {
   }
 
   async processBackendMethodCall(request, response) {
-    this.noCache(response);
-    await this.initRequest(request, response);
-    let { pkg, method } = request.params;
-    let { args } = JSONParser.parseObject<{ args }>(request.body);
+    // The whole call runs in its own context: `this.request` in a provider is
+    // this request, however many calls are in flight.
+    return runWithCallContext(httpCallContext(request, response), async () => {
+      this.noCache(response);
+      await this.initRequest(request, response);
+      let { pkg, method } = request.params;
+      let { args } = JSONParser.parseObject<{ args }>(request.body, {
+        shapeClasses: rpcShapeClassRevival(),
+      });
 
-    return this.callBackendMethod(pkg, method, args, request, response).then(
-      (result) => {
-        //some methods of backend providers may choose to work with request/response directly and will not return anything
-        //so only if a result is returned
-        if (typeof result !== 'undefined') {
-          //do we convert it to JSON and send it to the frontend
-          this.sendJson(response, result);
-        } else {
-          //in other cases, we still need to close the request and send an empty response
-          if (!response.headersSent) {
-            this.sendJson(response, null);
+      return this.callBackendMethod(pkg, method, args, request, response).then(
+        (result) => {
+          //some methods of backend providers may choose to work with request/response directly and will not return anything
+          //so only if a result is returned
+          if (typeof result !== 'undefined') {
+            //do we convert it to JSON and send it to the frontend
+            this.sendJson(response, result);
+          } else {
+            //in other cases, we still need to close the request and send an empty response
+            if (!response.headersSent) {
+              this.sendJson(response, null);
+            }
           }
         }
-      }
-    );
+      );
+    });
   }
 
   noCache(response) {
@@ -1698,8 +1735,10 @@ export class LinkedServer extends Shape {
     response,
     method: 'get' | 'post' | 'put' | 'delete'
   ) {
-    this.noCache(response);
-    const result = await this.api.process(request, response, method);
+    return runWithCallContext(httpCallContext(request, response), async () => {
+      this.noCache(response);
+      await this.api.process(request, response, method);
+    });
   }
   // async processQuery(request, response) {
   //
@@ -1725,40 +1764,42 @@ export class LinkedServer extends Shape {
     //   console.log(response.statusCode);
     // });
 
-    await this.initRequest(request, response);
-    let { pkg, shape, method } = request.params;
-    let { shapeURI, instanceNode, args } = JSONParser.parseObject<{
-      shapeURI: string;
-      instanceNode: { id: string } | null;
-      args: any[];
-    }>(request.body);
+    return runWithCallContext(httpCallContext(request, response), async () => {
+      await this.initRequest(request, response);
+      let { pkg, shape, method } = request.params;
+      let { shapeURI, instanceNode, args } = JSONParser.parseObject<{
+        shapeURI: string;
+        instanceNode: { id: string } | null;
+        args: any[];
+      }>(request.body, { shapeClasses: rpcShapeClassRevival() });
 
-    if (!shapeURI) {
-      if (request.query?.shapeURI) {
-        shapeURI = request.query?.shapeURI;
-      } else {
-        response.status(500).send({
-          error: 'Invalid server call request: ' + request.originalUrl,
-        });
-        console.warn(
-          paint('red', 'Invalid server call request: ' + request.originalUrl)
-        );
-        return;
+      if (!shapeURI) {
+        if (request.query?.shapeURI) {
+          shapeURI = request.query?.shapeURI;
+        } else {
+          response.status(500).send({
+            error: 'Invalid server call request: ' + request.originalUrl,
+          });
+          console.warn(
+            paint('red', 'Invalid server call request: ' + request.originalUrl)
+          );
+          return;
+        }
       }
-    }
-    return this.callShapeMethod(
-      pkg,
-      method,
-      shapeURI,
-      instanceNode,
-      args,
-      request,
-      response
-    ).then((result) => {
-      //we return json if something was returned or, if nothing was returned, we still close the request if the method has not accessed response itself already to send things over
-      if (typeof result !== 'undefined' || !response.headersSent) {
-        this.sendJson(response, result);
-      }
+      return this.callShapeMethod(
+        pkg,
+        method,
+        shapeURI,
+        instanceNode,
+        args,
+        request,
+        response
+      ).then((result) => {
+        //we return json if something was returned or, if nothing was returned, we still close the request if the method has not accessed response itself already to send things over
+        if (typeof result !== 'undefined' || !response.headersSent) {
+          this.sendJson(response, result);
+        }
+      });
     });
   }
 
@@ -1768,9 +1809,15 @@ export class LinkedServer extends Shape {
     shapeURI: string,
     instanceNode: { id: string } | null,
     args: any[],
-    request,
-    response
+    request?,
+    response?
   ) {
+    // see callBackendMethod: outside any request a local call runs as system
+    if (!request && !getCallContext()) {
+      return runAsSystem(() =>
+        this.callShapeMethod(pkg, method, shapeURI, instanceNode, args, request, response)
+      );
+    }
     //- index module providers if not done yet
     if (!this.shapeProviders.has(pkg)) {
       await this.ensurePackageBackendProviders(pkg, true);
@@ -1817,23 +1864,37 @@ export class LinkedServer extends Shape {
       // 200; direct backend callers get a rejected ServerCallError.
       if (!shapeProvider) {
         console.warn(
-          `[LinkedServer] callShapeMethod: no provider for '${shapeURI}' ` +
-            `(pkg '${pkg}', method '${method}').`
+          `[LinkedServer] callShapeMethod: no provider for '${logSafe(shapeURI)}' ` +
+            `(pkg '${logSafe(pkg)}', method '${logSafe(method)}').`
         );
-        throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
+        throw new ServerCallError(501, `No provider for ${logSafe(pkg)}/${logSafe(method)}`);
       }
 
       if (shapeProvider) {
+        const resolution = resolveCallable(shapeProvider, method);
+        if (resolution.status !== 'missing') {
+          this.assertDispatchAllowed(
+            pkg,
+            method,
+            shapeProvider,
+            resolution,
+            request,
+            'shape'
+          );
+        }
         //NOTE: if this is a direct call from backend to backend, we won't know the request & response here because those don't get passed to the Server utility
         //if this is an issue, we need to see how we can get those back
         if (request && response) {
           //give the provider a chance to prepare for this request
           //wrap the call in a promise and wait for it, because providers MAY return a promise
           await Promise.resolve(shapeProvider.initRequest(request, response));
+          if (resolution.status !== 'missing') {
+            this.assertSessionForLevel(pkg, method, resolution, request);
+          }
         }
 
         //see if the shapeProvider implements the called method
-        if (shapeProvider[method]) {
+        if (resolution.status !== 'missing') {
           //prepare the first argument
           //we want to convert the instance node into an instance of the shape that this shapeProvider provides for
           //let's find the shape class
@@ -1859,7 +1920,7 @@ export class LinkedServer extends Shape {
               console.warn(
                 `Error whilst calling ${
                   Object.getPrototypeOf(shapeProvider).constructor.name
-                }.${method}(): `,
+                }.${logSafe(method)}(): `,
                 e
               );
               // Rethrow so the HTTP route answers with an error status (via
@@ -1879,18 +1940,80 @@ export class LinkedServer extends Shape {
           console.warn(
             `${
               Object.getPrototypeOf(shapeProvider).constructor.name
-            } does not have a method called ${method}`
+            } does not have a method called ${logSafe(method)}`
           );
-          throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
+          throw new ServerCallError(501, `No provider for ${logSafe(pkg)}/${logSafe(method)}`);
         }
       }
     } catch (err) {
       if (!providerMethodFailed && !ServerCallError.is(err)) {
-        console.warn(`Error whilst trying to access provider of ${pkg}: `, err);
+        console.warn(`Error whilst trying to access provider of ${logSafe(pkg)}: `, err);
       }
       throw err;
     }
     return null;
+  }
+
+  /**
+   * Refuse a dispatch the exposure rules do not allow (see utils/rpcExposure).
+   * Throws a 501 `ServerCallError`, the same answer as for a missing method.
+   *
+   * - reserved names: always, for HTTP and backend-to-backend calls alike;
+   * - HTTP only: an internal method (in every mode), a generic call to a provider whose class sets
+   *   `static rpc = false`, and an undeclared method in 'enforce' mode
+   *   (in 'warn' mode it is logged once and runs).
+   */
+  private assertDispatchAllowed(
+    pkg: string,
+    method: string,
+    provider,
+    resolution: ReturnType<typeof resolveCallable>,
+    request,
+    route: 'generic' | 'shape'
+  ) {
+    const className = Object.getPrototypeOf(provider)?.constructor?.name;
+    if (resolution.status === 'reserved') {
+      console.warn(
+        `[linked] refused call to reserved method ${logSafe(pkg)} ${className}.${logSafe(method)}` +
+          (request ? '' : ' (backend-to-backend)')
+      );
+      throw new ServerCallError(501, `No provider for ${logSafe(pkg)}/${logSafe(method)}`);
+    }
+    if (!request) return;
+    if (resolution.status === 'internal') {
+      console.warn(
+        `[linked] refused call to internal method ${logSafe(pkg)} ${className}.${logSafe(method)}`
+      );
+      throw new ServerCallError(501, `No provider for ${logSafe(pkg)}/${logSafe(method)}`);
+    }
+    if (route === 'generic' && isGenericRpcDisabled(provider)) {
+      throw new ServerCallError(501, `No provider for ${logSafe(pkg)}/${logSafe(method)}`);
+    }
+    if (resolution.status === 'undeclared') {
+      if (getRpcExposureMode() === 'enforce') {
+        console.warn(
+          `[linked] refused undeclared RPC ${logSafe(pkg)} ${className}.${logSafe(method)}`
+        );
+        throw new ServerCallError(501, `No provider for ${logSafe(pkg)}/${logSafe(method)}`);
+      }
+      warnUndeclaredCall(pkg, resolution.owner, method, hasSession(request));
+    }
+  }
+
+  /** A declared `'user'` method needs a session: 401 without one, in every mode. */
+  private assertSessionForLevel(
+    pkg: string,
+    method: string,
+    resolution: ReturnType<typeof resolveCallable>,
+    request
+  ) {
+    if (
+      resolution.status === 'callable' &&
+      resolution.level === 'user' &&
+      !hasSession(request)
+    ) {
+      throw new ServerCallError(401, 'Authentication required');
+    }
   }
 
   handleErrors(fn) {
@@ -2004,6 +2127,14 @@ export class LinkedServer extends Shape {
   }
 
   async render(req, res) {
+    // Server-side rendering runs as the requesting user: a Server.call made
+    // while rendering inherits this context rather than escalating to system.
+    return runWithCallContext(httpCallContext(req, res), () =>
+      this.renderPage(req, res)
+    );
+  }
+
+  private async renderPage(req, res) {
     res.socket.on('error', (error) => {
       console.error('Fatal socket error', error);
     });
@@ -2354,9 +2485,16 @@ export class LinkedServer extends Shape {
     pkg: string,
     method: string,
     args: any[],
-    request,
-    response
+    request?,
+    response?
   ) {
+    // A backend-to-backend call outside any request runs as system. Inside a
+    // request (SSR, a provider calling another) it inherits that request.
+    if (!request && !getCallContext()) {
+      return runAsSystem(() =>
+        this.callBackendMethod(pkg, method, args, request, response)
+      );
+    }
     if (!this.genericProviders.has(pkg)) {
       await this.ensurePackageBackendProviders(pkg, true);
     }
@@ -2371,17 +2509,26 @@ export class LinkedServer extends Shape {
           pkg
         )} does not have a generic backend provider. If you can edit this package, make sure 'backend.ts' is included in 'tsconfig.json' and that it exports a provider.`
       );
-      throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
+      throw new ServerCallError(501, `No provider for ${logSafe(pkg)}/${logSafe(method)}`);
     }
-    //test if there is a matching method in the backend provider
-    if (!genericBackendProvider[method]) {
+    //test if there is a matching method in the backend provider, and whether it may be called
+    const resolution = resolveCallable(genericBackendProvider, method);
+    if (resolution.status === 'missing') {
       console.warn(
         `Generic provider '${
           Object.getPrototypeOf(genericBackendProvider).constructor.name
-        }' of ${pkg} does not have a method called ${method}`
+        }' of ${logSafe(pkg)} does not have a method called ${logSafe(method)}`
       );
-      throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
+      throw new ServerCallError(501, `No provider for ${logSafe(pkg)}/${logSafe(method)}`);
     }
+    this.assertDispatchAllowed(
+      pkg,
+      method,
+      genericBackendProvider,
+      resolution,
+      request,
+      'generic'
+    );
 
     try {
       //TODO: remove init request.
@@ -2394,6 +2541,7 @@ export class LinkedServer extends Shape {
         await Promise.resolve(
           genericBackendProvider.initRequest(request, response)
         );
+        this.assertSessionForLevel(pkg, method, resolution, request);
       }
       // args.push(request);
       // args.push(response);
@@ -2403,10 +2551,11 @@ export class LinkedServer extends Shape {
         genericBackendProvider[method].apply(genericBackendProvider, args)
       );
     } catch (e) {
+      if (ServerCallError.is(e) && e.status === 401) throw e;
       console.warn(
-        `Error whilst calling ${method}() in provider ${
+        `Error whilst calling ${logSafe(method)}() in provider ${
           Object.getPrototypeOf(genericBackendProvider).constructor.name
-        } of package ${pkg}:\n`,
+        } of package ${logSafe(pkg)}:\n`,
         e
       );
 
@@ -2417,4 +2566,63 @@ export class LinkedServer extends Shape {
     }
     return result;
   }
+}
+
+/**
+ * Register the RPC routes (`/call/...`) and the `LincdAPI` routes (`/api/...`)
+ * of `linkedServer` on an express app.
+ *
+ * `LinkedServer.start()` calls this; tests call it on a bare express app so they
+ * drive exactly the routes a running server has.
+ */
+export function registerCallRoutes(
+  app: { post: Function; get: Function },
+  linkedServer: LinkedServer
+): void {
+  const server: any = linkedServer;
+  // Scoped-package variants (@scope/pkg). Register BEFORE the unscoped
+  // routes — Express `:pkg` won't consume slashes, so a call to
+  // `/call/@_linked/auth/signinDev` would otherwise fall through to the
+  // 3-segment `:pkg/:shape/:method` route and be misinterpreted as a
+  // shape-method call (pkg=`@_linked`, shape=`auth`). These handlers
+  // recognise the `@scope/pkg` prefix and rebuild the full package name
+  // before dispatching to the same handler used for unscoped packages.
+  app.post(
+    '/call/@:scope/:pkg/:method',
+    server.handleErrorsJson(async (req, res) => {
+      req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
+      return server.processBackendMethodCall(req, res);
+    })
+  );
+  app.post(
+    '/call/@:scope/:pkg/:shape/:method',
+    server.handleErrorsJson(async (req, res) => {
+      req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
+      return server.processShapeMethodCall(req, res);
+    })
+  );
+  app.post(
+    '/call/:pkg/:method',
+    server.handleErrorsJson(async (req, res) =>
+      server.processBackendMethodCall(req, res)
+    )
+  );
+  app.post(
+    '/call/:pkg/:shape/:method',
+    server.handleErrorsJson(async (req, res) =>
+      server.processShapeMethodCall(req, res)
+    )
+  );
+  app.post(
+    '/api/:method/:action?',
+    server.handleErrorsJson(async (req, res) =>
+      server.processAPICall(req, res, 'post')
+    )
+  );
+  app.get(
+    '/api/:method/:action?',
+    server.handleErrorsJson(async (req, res) =>
+      server.processAPICall(req, res, 'get')
+    )
+  );
 }
