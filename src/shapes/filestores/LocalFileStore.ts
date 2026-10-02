@@ -161,8 +161,30 @@ export class LocalFileStore implements IFileStore {
   private async resolveTarget(
     filePath: string,
     mimeType: string | undefined,
-    suffixDuplicates: boolean
+    suffixDuplicates: boolean,
+    preservePath: boolean
   ): Promise<SavedFileLocation> {
+    if (preservePath) {
+      // Release object keys must match the manifest exactly, but still remain
+      // safe relative paths contained within this store's configured root.
+      if (
+        !filePath ||
+        filePath.includes('\\') ||
+        path.posix.isAbsolute(filePath) ||
+        path.win32.isAbsolute(filePath) ||
+        path.posix.normalize(filePath) !== filePath ||
+        filePath.split('/').some((part) => part === '' || part === '.' || part === '..')
+      ) {
+        throw new Error(`Cannot preserve unsafe file-store path '${filePath}'`);
+      }
+
+      return {
+        storedPath: filePath,
+        // Same public URL shape as ordinary saves (accessURL is still SITE_ROOT).
+        publicURL: this.accessURL + publicUploadPath + '/' + filePath,
+      };
+    }
+
     // alphanumerics, dot, underscore, dash and the path separator survive; a
     // run of anything else becomes one dash. Case is deliberately preserved.
     //
@@ -286,7 +308,8 @@ export class LocalFileStore implements IFileStore {
     const target = await this.resolveTarget(
       filePath,
       normalized.mimeType,
-      suffixDuplicates
+      suffixDuplicates,
+      normalized.preservePath === true
     );
 
     // resolved against basePath, exactly like every read method does, so what

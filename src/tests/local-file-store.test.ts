@@ -212,6 +212,79 @@ describe('LocalFileStore key handling', () => {
     expect(await store.fileExists(name)).toBe(true);
   });
 
+  it('preservePath keeps release object keys exactly, including @ and case', async () => {
+    const { LocalFileStore } = await import(
+      '../shapes/filestores/LocalFileStore.js'
+    );
+    const saving = store as InstanceType<typeof LocalFileStore>;
+    const keys = [
+      'releases/1.19.0-local-a/public/images/logo@2x.png',
+      'releases/1.19.0-local-a/public/bundles/main-AbC123.js',
+      'releases/1.19.0-local-a/public/bundles/assets/Shape--2JmNvrO.js',
+    ];
+
+    for (const name of keys) {
+      const contents = `bytes-for-${name}`;
+      const saved = await saving.saveFileWithPath(name, Buffer.from(contents), {
+        mimeType: 'application/octet-stream',
+        preventDuplicates: false,
+        preservePath: true,
+      });
+
+      expect(saved.storedPath).toBe(name);
+      expect(saved.publicURL).toBe(`http://localhost:4000/uploads/${name}`);
+      expect(await store.fileExists(name)).toBe(true);
+      expect((await store.getFile(name))!.toString()).toBe(contents);
+
+      const stat = await statFileOf(store)(name);
+      expect(stat).not.toBeNull();
+      expect(stat!.size).toBe(Buffer.byteLength(contents));
+      expect(stat!.sha256).toBe(
+        createHash('sha256').update(Buffer.from(contents)).digest('hex')
+      );
+    }
+  });
+
+  it('rejects unsafe paths when preservePath is true', async () => {
+    const unsafe = [
+      '',
+      '/absolute.txt',
+      '../outside.txt',
+      'releases/../outside.txt',
+      'a/./b.txt',
+      'a//b.txt',
+      'C:\\outside.txt',
+      'C:/outside.txt',
+      '\\\\server\\share\\outside.txt',
+      'a\\b.txt',
+    ];
+
+    for (const filePath of unsafe) {
+      await expect(
+        store.saveFile(filePath, Buffer.from('nope'), {
+          mimeType: 'text/plain',
+          preventDuplicates: false,
+          preservePath: true,
+        })
+      ).rejects.toThrow('Cannot preserve unsafe file-store path');
+    }
+  });
+
+  it('still sanitises @ for ordinary uploads without preservePath', async () => {
+    const publicURL = await store.saveFile(
+      'logo @2x.png',
+      Buffer.from('image'),
+      {
+        mimeType: 'image/png',
+        preventDuplicates: false,
+      }
+    );
+
+    expect(publicURL).toBe('http://localhost:4000/uploads/logo-2x.png');
+    expect(await store.fileExists('logo-2x.png')).toBe(true);
+    expect(await store.fileExists('logo @2x.png')).toBe(false);
+  });
+
   it('still replaces characters that are unsafe in a file name', async () => {
     const publicURL = await store.saveFile(
       'My File (2).TXT',
