@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.16.2
+
+### Patch Changes
+
+- [#120](https://github.com/linked-fw/server/pull/120) [`e86d163`](https://github.com/linked-fw/server/commit/e86d163f10a4860b74deb1691024d49b8139dd43) Thanks [@renovate](https://github.com/apps/renovate)! - Drop the `chalk` dependency. Log colouring now uses Node's built-in `util.styleText`, which honours TTY detection, `NO_COLOR` and `FORCE_COLOR` the same way. This avoids chalk 5+, which is ESM-only.
+
 ## 2.16.1
 
 ### Patch Changes
