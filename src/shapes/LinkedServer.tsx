@@ -1,5 +1,4 @@
 'use strict';
-import chalk from 'chalk';
 import { timingSafeEqual } from 'crypto';
 import events from 'events';
 import express, { Express as ExpressServer } from 'express';
@@ -29,6 +28,7 @@ import {
 } from '@_linked/core/utils/LinkedFileStorage';
 import type { IFileStore } from '@_linked/core/interfaces/IFileStore';
 import { getResizedImagesStore } from '../utils/resizedImagesPurpose.js';
+import { paint } from '../utils/paint.js';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { autoLoadOntologyData } from '@_linked/core/utils/Package';
 import {
@@ -63,6 +63,7 @@ function isShapeProvider(provider: any): boolean {
   }
   return false;
 }
+
 /**
  * Call one provider's hook and contain its failure: a synchronous throw or a
  * rejection is logged, naming the package and the hook, and swallowed. Used
@@ -79,7 +80,7 @@ async function runProviderHook(
     await call();
   } catch (err: any) {
     console.error(
-      chalk.red(`[linked] ${pkg} ${hook} failed: ${err?.message ?? err}`),
+      paint('red', `[linked] ${pkg} ${hook} failed: ${err?.message ?? err}`),
       err?.stack ? `\n${err.stack}` : ''
     );
   }
@@ -141,14 +142,14 @@ const __lincdFetchWithCookies = fetchCookie(fetch, __lincdCookieJar);
 (globalThis as any).fetch = __lincdFetchWithCookies;
 
 process.on('uncaughtException', (err) => {
-  console.warn(chalk.red('Asynchronous error caught.'));
+  console.warn(paint('red', 'Asynchronous error caught.'));
   console.error(err);
 
   // error logging
   LinkedErrorLogging.log(err);
 });
 process.on('unhandledRejection', (err) => {
-  console.warn(chalk.red('Unhandled rejection caught.'));
+  console.warn(paint('red', 'Unhandled rejection caught.'));
   console.error(err);
 
   // error logging
@@ -807,7 +808,7 @@ export class LinkedServer extends Shape {
     }
     if (installed.length > 0) {
       console.log(
-        chalk.gray(
+        paint('gray', 
           `[linked] indexed backend providers of ${ordered.length} linked package(s) in ${
             Date.now() - started
           }ms; installed ones with providers: ${installed.join(', ')}`
@@ -1227,7 +1228,7 @@ export class LinkedServer extends Shape {
         // console.warn('Error loading ' + providerPath + ': ' + e.stack);
         if (warnIfNotFound) {
           console.warn(
-            chalk.magenta(
+            paint('magenta', 
               `Could not load package ${pkg}`,
               typeof module !== 'undefined' && typeof exports !== 'undefined'
                 ? //@ts-ignore
@@ -1238,7 +1239,7 @@ export class LinkedServer extends Shape {
         }
       } else {
         console.warn(
-          chalk.red(
+          paint('red', 
             `Error loading '${pkg}' ${
               typeof module !== 'undefined' && typeof exports !== 'undefined'
                 ? //@ts-ignore
@@ -1350,7 +1351,7 @@ export class LinkedServer extends Shape {
             shapeProviders.push(provider);
             if (!Object.getOwnPropertyNames(provider).includes('shape')) {
               console.warn(
-                chalk.red(`${
+                paint('red', `${
                   Object.getPrototypeOf(provider).constructor.name
                 } in package ${pkg}
                is not properly linked to a shape. Use public shape = SomeShape.`)
@@ -1394,7 +1395,7 @@ export class LinkedServer extends Shape {
           // console.warn('Error loading ' + providerPath + ': ' + e.stack);
           if (warnIfNotFound) {
             console.warn(
-              chalk.magenta(`Could not find backend file of package ${pkg}. 
+              paint('magenta', `Could not find backend file of package ${pkg}. 
         Check:\n
           - Make sure backend.ts exists and is included in tsconfig.json\n
           - Make sure the package name in src/package.ts matches the package name in package.json`)
@@ -1402,7 +1403,7 @@ export class LinkedServer extends Shape {
           }
         } else {
           console.warn(
-            chalk.red(
+            paint('red', 
               `Could not load backend file of module '${pkg}' from ${process.cwd()}:\n`
             ),
             e.stack
@@ -1458,7 +1459,7 @@ export class LinkedServer extends Shape {
         ]);
       } catch (err: any) {
         console.warn(
-          chalk.yellow(`[linked] ${label} dispose failed: ${err.message}`)
+          paint('yellow', `[linked] ${label} dispose failed: ${err.message}`)
         );
       }
     };
@@ -1490,7 +1491,7 @@ export class LinkedServer extends Shape {
         await fresh.setupBeforeControllers();
       } catch (err: any) {
         console.warn(
-          chalk.yellow(
+          paint('yellow', 
             `[linked] ${pkg} setupBeforeControllers after reload failed: ${err.message}`
           )
         );
@@ -1503,7 +1504,7 @@ export class LinkedServer extends Shape {
           await p.setupBeforeControllers();
         } catch (err: any) {
           console.warn(
-            chalk.yellow(
+            paint('yellow', 
               `[linked] ${pkg} shape-provider setupBeforeControllers after reload failed: ${err.message}`
             )
           );
@@ -1597,7 +1598,7 @@ export class LinkedServer extends Shape {
           error: 'Invalid server call request: ' + request.originalUrl,
         });
         console.warn(
-          chalk.red('Invalid server call request: ' + request.originalUrl)
+          paint('red', 'Invalid server call request: ' + request.originalUrl)
         );
         return;
       }
@@ -1784,7 +1785,7 @@ export class LinkedServer extends Shape {
     res?.status(statusCode);
     if (message) {
       res?.send({ error: message });
-      console.warn(chalk.red(logMessage || message));
+      console.warn(paint('red', logMessage || message));
     }
   }
 
@@ -2223,7 +2224,7 @@ export class LinkedServer extends Shape {
     let result;
     if (!genericBackendProvider) {
       console.warn(
-        `${chalk.magenta(
+        `${paint('magenta', 
           pkg
         )} does not have a generic backend provider. If you can edit this package, make sure 'backend.ts' is included in 'tsconfig.json' and that it exports a provider.`
       );
