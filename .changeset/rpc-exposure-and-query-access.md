@@ -2,7 +2,7 @@
 "@_linked/server": minor
 ---
 
-RPC exposure rules, per-call request context and generic query plane authorization. Requires `@_linked/server-utils` 1.6.
+RPC exposure rules, per-call request context and generic query plane authorization. Requires `@_linked/server-utils` `^1.9.0`.
 
 - `/call/...` dispatches provider methods by declaration. Reserved names always answer 501, also for backend-to-backend calls: `Object.prototype` members, every `BackendProvider`/`ShapeProvider` method (including subclass overrides of lifecycle hooks such as `initRequest`), `dispose`, `constructor`, `__proto__`, accessors and fields.
 - Methods declared with `@callable('public' | 'user')` (from `@_linked/server-utils/utils/callable`) are dispatched; `'user'` answers 401 without a session. An override that does not redeclare a method keeps the strictest level declared for it up the class chain. Methods no class declares run and are logged once per method in `warn` mode, and answer 501 in `enforce` mode. Set the mode with the `server.rpcExposure` option or `LINKED_RPC_EXPOSURE`; the default is `warn`.
@@ -21,4 +21,5 @@ Behaviour changes:
 - With protected shapes registered, a mutation on a dataset that cannot run SPARQL (`rawQuery`) is refused (403), unless the app sets its own probe.
 - `/api/select-raw` is refused (403) in every mode unless the app registers `registerRawQueryAuthorizer`.
 - A query body that is not a query answers 400, as does an operation that does not match the query kind (a delete sent to `selectQuery`).
+- A query that contains a query-context reference (`{"@ctx": name}`, e.g. built with `.for(getQueryContext('user'))`) answers 400 on the query endpoints. A server-side context map is process-wide and does not identify the caller; send the node id instead.
 - `/uploads` files are sandboxed: an HTML file opened from there runs without scripts.

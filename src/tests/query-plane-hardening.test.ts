@@ -228,7 +228,12 @@ import { SparqlDataset } from '@_linked/core/sparql/SparqlDataset';
 import { registerRawQueryAuthorizer } from '@_linked/server-utils/utils/QueryAccess';
 import { runWithCallContext } from '@_linked/server-utils/utils/CallContext';
 import { enterRequestContext, mountUploads } from '../shapes/LinkedServer.js';
-import { protectedNodeAsk, setProtectedNodeProbe } from '../utils/queryPlane.js';
+import {
+  containsContextRef,
+  protectedNodeAsk,
+  setProtectedNodeProbe,
+} from '../utils/queryPlane.js';
+import { getQueryContext, setQueryContext } from '@_linked/core/queries/QueryContext';
 import { logSafe } from '../utils/rpcExposure.js';
 
 /**
@@ -455,6 +460,93 @@ describe('query kind and parsing', () => {
     expect(Object.getPrototypeOf(received[0])).not.toBe(Object.prototype);
     expect(typeof received[0].__queryKind).toBe('string');
     expect(received[0].toJSON()).toEqual(json);
+  });
+});
+
+describe('query-context references on the generic plane', () => {
+  // A context the server process holds (e.g. set by some earlier code path).
+  // Were a client's {"@ctx"} resolved against it, the client would act as
+  // that node.
+  const CTX = 'qp-hardening-user';
+  const Person = RpcPerson as any;
+  let ds: CapturingSparql;
+  let built: Record<string, unknown>;
+  beforeEach(() => {
+    ds = new CapturingSparql();
+    LinkedStorage.setDefaultDataset(ds as any);
+    // Built while the context is unset, as a client builds a query before its
+    // session lands; then the server's context is set.
+    setQueryContext(CTX, undefined as any);
+    built = {
+      select: Person.select((p: any) => p.name).for(getQueryContext(CTX)).toJSON(),
+      update: Person.update({ name: 'x' }).for(getQueryContext(CTX)).toJSON(),
+      updateValue: Person.update({ secret: getQueryContext(CTX) }).for('http://ex/p1').toJSON(),
+      create: Person.create({ name: 'x', friends: [getQueryContext(CTX)] }).toJSON(),
+      delete: Person.delete(getQueryContext(CTX)).toJSON(),
+    };
+    setQueryContext(CTX, { id: 'http://ex/someone-else' }, RpcPerson as any);
+  });
+  afterEach(() => setQueryContext(CTX, undefined as any));
+  const queries = () => built as Record<string, any>;
+
+  it('the builders put a {"@ctx"} marker on the wire in every position tested', () => {
+    for (const [name, json] of Object.entries(queries())) {
+      expect([name, containsContextRef(json)]).toEqual([name, true]);
+    }
+  });
+
+  it('refuses them with 400 on /call before anything runs, in warn mode', async () => {
+    const base = await listen(makeLinkedServer());
+    const q = queries();
+    const cases: [string, unknown][] = [
+      ['selectQuery', q.select],
+      ['updateQuery', q.update],
+      ['updateQuery', q.updateValue],
+      ['createQuery', q.create],
+      ['deleteQuery', q.delete],
+    ];
+    for (const [method, json] of cases) {
+      const res = await call(base, '@_linked/server', method, [json], ME);
+      expect([method, res.status]).toEqual([method, 400]);
+    }
+    expect(ds.sparql).toHaveLength(0);
+  });
+
+  it('refuses them with 400 on /api/*', async () => {
+    const base = await listen(makeLinkedServer());
+    const q = queries();
+    const cases: [string, unknown][] = [
+      ['select', q.select],
+      ['update', q.update],
+      ['update', q.updateValue],
+      ['create', q.create],
+      ['delete', q.delete],
+    ];
+    for (const [route, json] of cases) {
+      const res = await post(`${base}/api/${route}`, { query: json }, ME);
+      expect([route, res.status]).toEqual([route, 400]);
+    }
+    expect(ds.sparql).toHaveLength(0);
+  });
+
+  it('refuses a marker nested in a where clause or hand-written JSON', async () => {
+    const base = await listen(makeLinkedServer());
+    const plain = Person.select((p: any) => p.name).for('http://ex/p1').toJSON();
+    expect(containsContextRef(plain)).toBe(false);
+    const nested = { ...plain, where: { and: [{ '@id': 'http://ex/a' }, [{ '@ctx': CTX }]] } };
+    expect(containsContextRef(nested)).toBe(true);
+    expect((await call(base, '@_linked/server', 'selectQuery', [nested], ME)).status).toBe(400);
+    expect((await post(`${base}/api/select`, { query: nested }, ME)).status).toBe(400);
+    expect(ds.sparql).toHaveLength(0);
+  });
+
+  it('still answers the same queries by id, and a string that mentions @ctx', async () => {
+    const base = await listen(makeLinkedServer());
+    const byId = Person.select((p: any) => p.name).for('http://ex/p1').toJSON();
+    expect((await call(base, '@_linked/server', 'selectQuery', [byId], ME)).status).toBe(200);
+    const upd = Person.update({ name: '{"@ctx":"user"}' }).for('http://ex/p1').toJSON();
+    expect(containsContextRef(upd)).toBe(false);
+    expect((await post(`${base}/api/update`, { query: upd }, ME)).status).toBe(200);
   });
 });
 
