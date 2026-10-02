@@ -12,7 +12,19 @@ export var loadData = async () => {
   return data.default || data;
 };
 
-export var ns = createNameSpace('http://lincd.org/ont/lincd-server/');
+/**
+ * The namespace of this ontology.
+ *
+ * First-party ontologies live on linked.cm: `https://linked.cm/ont/{ontologySlug}/`, and a
+ * package's own ontology takes the package's publicSlug (`@_linked/server` → `server`), the same
+ * slug its shapes use under `https://linked.cm/shape/server/`.
+ *
+ * Until this release it was `http://lincd.org/ont/lincd-server/`. No stored data is typed with
+ * these terms; the only store triples that carried them were the synced shape descriptions of
+ * `LinkedServer`, `LincdAPI` and `LincdWebApp` (`sh:targetClass`, `sh:path`), which boot sync
+ * rewrites (delete, then recreate) the next time the server starts.
+ */
+export var ns = createNameSpace('https://linked.cm/ont/server/');
 
 export var _self = ns('');
 
