@@ -19,7 +19,7 @@ Behaviour changes:
 
 - Generic-plane mutations require a signed-in user in every mode (401), and a create may not choose the ids of its new nodes (403).
 - With protected shapes registered, a mutation on a dataset that cannot run SPARQL (`rawQuery`) is refused (403), unless the app sets its own probe.
-- `/api/select-raw` is refused (403) in every mode unless the app registers `registerRawQueryAuthorizer`.
+- `/api/select-raw` is refused (403) in every mode unless the app registers `registerRawQueryAuthorizer`. Its JSON body is also kept as received on `request.rawBody`, which the raw authorizers get as `rawBody` to verify a signature over the exact bytes; with every raw authorizer accepting, the query runs without a session.
 - A query body that is not a query answers 400, as does an operation that does not match the query kind (a delete sent to `selectQuery`).
 - A query that contains a query-context reference (`{"@ctx": name}`, e.g. built with `.for(getQueryContext('user'))`) answers 400 on the query endpoints. A server-side context map is process-wide and does not identify the caller; send the node id instead.
 - `/uploads` files are sandboxed: an HTML file opened from there runs without scripts.
