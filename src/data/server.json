@@ -4,42 +4,42 @@
     "owl": "http://www.w3.org/2002/07/owl#",
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-    "lincd-server": "https://linked.cm/ont/server/"
+    "server": "https://linked.cm/ont/server/"
   },
   "@graph": [
     {
-      "@id": "lincd-server:LincdServer",
+      "@id": "server:LincdServer",
       "@type": "rdfs:Class",
       "rdfs:comment": "A HTTP server for LINCD applications, running on node.js.",
       "rdfs:isDefinedBy": {
-        "@id": "lincd-server:"
+        "@id": "server:"
       },
       "rdfs:label": "LINCD Server"
     },
     {
-      "@id": "lincd-server:NodeFileStore",
+      "@id": "server:NodeFileStore",
       "@type": "rdfs:Class",
       "rdfs:comment": "Stores quads in a file in JSONLD format. Made for node.js environments.",
       "rdfs:isDefinedBy": {
-        "@id": "lincd-server:"
+        "@id": "server:"
       },
       "rdfs:label": "Node file store"
     },
     {
-      "@id": "lincd-server:BackendFileStore",
+      "@id": "server:BackendFileStore",
       "@type": "rdfs:Class",
       "rdfs:comment": "A simple quad store for frontends that are served by a LINCD Nodejs Server. Quads get loaded and updated through API calls to the backend. All quads are loaded into local memory in the frontend upon initiation of the app.",
       "rdfs:isDefinedBy": {
-        "@id": "lincd-server:"
+        "@id": "server:"
       },
       "rdfs:label": "Backend file store"
     },
     {
-      "@id": "lincd-server:BackendStore",
+      "@id": "server:BackendStore",
       "@type": "rdfs:Class",
       "rdfs:comment": "A base class for backend quad stores. These are quad stores for frontends that are served by a LINCD Nodejs Server. Quads get loaded and updated through API calls to the backend. All quads are loaded into local memory in the frontend upon initiation of the app.",
       "rdfs:isDefinedBy": {
-        "@id": "lincd-server:"
+        "@id": "server:"
       },
       "rdfs:label": "Backend store"
     }
