@@ -265,14 +265,44 @@ describe('resolveCallable', () => {
     expect(resolveCallable(new Sub({}, {}), 'secret').status).toBe('internal');
   });
 
-  it('does not inherit a declaration into an override', () => {
+  it('an undeclared override keeps the strictest level declared up its chain', () => {
     class Sub extends TestProvider {
       ping() {
         return 'sub';
       }
+      whoami() {
+        return 'sub';
+      }
+      fresh() {
+        return 'new';
+      }
     }
-    expect(resolveCallable(new Sub({}, {}), 'ping').status).toBe('undeclared');
-    expect(resolveCallable(new Sub({}, {}), 'whoami').status).toBe('callable');
+    const sub = new Sub({}, {});
+    expect(resolveCallable(sub, 'ping')).toMatchObject({ status: 'callable', level: 'public', inherited: true });
+    expect(resolveCallable(sub, 'whoami')).toMatchObject({ status: 'callable', level: 'user', inherited: true });
+    expect(resolveCallable(sub, 'fresh').status).toBe('undeclared');
+
+    // an explicit declaration on the override is the class's own choice...
+    class Relaxed extends TestProvider {
+      @callable('public')
+      whoami() {
+        return 'relaxed';
+      }
+    }
+    expect(resolveCallable(new Relaxed({}, {}), 'whoami')).toMatchObject({ status: 'callable', level: 'public' });
+    // ...but an undeclared override below it takes the strictest of the chain
+    class Below extends Relaxed {
+      whoami() {
+        return 'below';
+      }
+    }
+    expect(resolveCallable(new Below({}, {}), 'whoami')).toMatchObject({ status: 'callable', level: 'user' });
+  });
+
+  it('a method assigned onto the instance keeps the level its class declares', () => {
+    const p: any = new TestProvider({}, {});
+    p.whoami = () => 'assigned';
+    expect(resolveCallable(p, 'whoami')).toMatchObject({ status: 'callable', level: 'user', inherited: true });
   });
 });
 
@@ -533,10 +563,10 @@ describe('generic query plane', () => {
     expect(refused.status).toBe(403);
   });
 
-  it('refuses raw SPARQL only in enforce mode', async () => {
+  it('refuses raw SPARQL in every mode without a raw query authorizer', async () => {
     const base = await listen(makeLinkedServer());
     const q = { query: 'SELECT * WHERE { ?s ?p ?o }' };
-    expect((await post(`${base}/api/select-raw`, q, 'http://ex/u')).status).toBe(200);
+    expect((await post(`${base}/api/select-raw`, q, 'http://ex/u')).status).toBe(403);
     setRpcExposureMode('enforce');
     expect((await post(`${base}/api/select-raw`, q, 'http://ex/u')).status).toBe(403);
   });

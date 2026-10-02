@@ -7,21 +7,12 @@ import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { cached } from '@_linked/core/utils/cached';
 import { getShapeIndex, ShapeDetails } from '../utils/Shapes.js';
 import { SparqlDataset as SPARQLStore } from '@_linked/core/sparql/SparqlDataset';
-import { authorizeGenericQuery, toQueryBuilder } from '../utils/queryPlane.js';
+import {
+  authorizeGenericQuery,
+  authorizeRawQuery,
+  toQueryBuilder,
+} from '../utils/queryPlane.js';
 import { getRpcExposureMode } from '../utils/rpcExposure.js';
-
-/**
- * The rehydrated builder of a query, for the access check only; the store is
- * still handed the query exactly as it arrived. `undefined` (unanalysable)
- * when it cannot be rehydrated.
- */
-function analysable(query: any): any {
-  try {
-    return toQueryBuilder(query);
-  } catch {
-    return undefined;
-  }
-}
 
 /** An error carrying an HTTP status, such as a `ServerCallError` (401/403). */
 function isStatusError(error: any): error is { status: number; message: string } {
@@ -157,25 +148,30 @@ export class LincdAPI extends Shape {
   }
 
   async post_select({ query }) {
-    await authorizeGenericQuery('select', query, analysable(query), 'api/select');
-    return LinkedStorage.selectQuery(query);
+    const builder = toQueryBuilder(query);
+    await authorizeGenericQuery('select', query, builder, 'api/select');
+    return LinkedStorage.selectQuery(builder);
   }
   async post_create({ query }) {
-    await authorizeGenericQuery('create', query, analysable(query), 'api/create');
-    return LinkedStorage.createQuery(query);
+    const builder = toQueryBuilder(query);
+    await authorizeGenericQuery('create', query, builder, 'api/create');
+    return LinkedStorage.createQuery(builder);
   }
   async post_update({ query }) {
-    await authorizeGenericQuery('update', query, analysable(query), 'api/update');
-    return LinkedStorage.updateQuery(query);
+    const builder = toQueryBuilder(query);
+    await authorizeGenericQuery('update', query, builder, 'api/update');
+    return LinkedStorage.updateQuery(builder);
   }
   async post_delete({ query }) {
-    await authorizeGenericQuery('delete', query, analysable(query), 'api/delete');
-    return LinkedStorage.deleteQuery(query);
+    const builder = toQueryBuilder(query);
+    await authorizeGenericQuery('delete', query, builder, 'api/delete');
+    return LinkedStorage.deleteQuery(builder);
   }
 
   async post_select_raw({ query }) {
-    // A raw SPARQL string cannot be analysed for the shapes it touches.
-    await authorizeGenericQuery('select', query, undefined, 'api/select-raw');
+    // A raw SPARQL string cannot be analysed for the shapes it touches: it is
+    // refused unless the app registers a raw query authorizer.
+    await authorizeRawQuery(query, 'api/select-raw');
     this.checkRawQuerySupport();
     return (LinkedStorage.getDefaultDataset() as unknown as SPARQLStore).rawQuery(
       query

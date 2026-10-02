@@ -68,6 +68,10 @@ function makeRes() {
     body: undefined as any,
     redirectedTo: undefined as any,
     contentType: undefined as any,
+    headers: {} as Record<string, string>,
+    setHeader(name: string, value: string) {
+      res.headers[name.toLowerCase()] = value;
+    },
     status(code: number) {
       res.statusCode = code;
       return res;
@@ -130,6 +134,9 @@ describe('GET /resized/* with an SVG source', () => {
       res
     );
 
+    // a resized upload is still user content
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['content-security-policy']).toBe('sandbox');
     const written = store.saved.find((s) => s.key.includes('resized'));
     expect(written).toBeDefined();
     expect(isPng(written!.bytes)).toBe(true);

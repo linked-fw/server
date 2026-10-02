@@ -2,10 +2,9 @@ import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { callable } from '@_linked/server-utils/utils/callable';
 import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
-import { fromJSON } from '@_linked/core';
 import { LocalFileStore } from './shapes/filestores/LocalFileStore.js';
 import { getShapeIndex } from './utils/Shapes.js';
-import { authorizeGenericQuery } from './utils/queryPlane.js';
+import { authorizeGenericQuery, toQueryBuilder } from './utils/queryPlane.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -52,41 +51,42 @@ export default class LincdServerBackendProvider extends BackendProvider {
 
   //
   // Every query is checked against the generic-plane rules first (session,
-  // protected shapes, registered authorizers): see utils/queryPlane. They are
-  // declared 'public' because that check, not the RPC layer, decides whether
-  // a session is required (it follows `rpcExposure`).
+  // protected shapes and nodes, registered authorizers): see utils/queryPlane.
+  // The store runs the builder that was checked. They are declared 'public'
+  // because that check, not the RPC layer, decides whether a session is
+  // required (always for mutations; for reads it follows `rpcExposure`).
 
   @callable('public')
   async selectQuery(json: any) {
-    const query = fromJSON(json) as any;
+    const query = toQueryBuilder(json);
     await authorizeGenericQuery('select', json, query, 'selectQuery');
     return LinkedStorage.selectQuery(query);
   }
 
   @callable('public')
   async askQuery(json: any) {
-    const query = fromJSON(json) as any;
+    const query = toQueryBuilder(json);
     await authorizeGenericQuery('ask', json, query, 'askQuery');
     return LinkedStorage.askQuery(query);
   }
 
   @callable('public')
   async updateQuery(json: any) {
-    const query = fromJSON(json) as any;
+    const query = toQueryBuilder(json);
     await authorizeGenericQuery('update', json, query, 'updateQuery');
     return LinkedStorage.updateQuery(query);
   }
 
   @callable('public')
   async createQuery(json: any) {
-    const query = fromJSON(json) as any;
+    const query = toQueryBuilder(json);
     await authorizeGenericQuery('create', json, query, 'createQuery');
     return LinkedStorage.createQuery(query);
   }
 
   @callable('public')
   async deleteQuery(json: any) {
-    const query = fromJSON(json) as any;
+    const query = toQueryBuilder(json);
     await authorizeGenericQuery('delete', json, query, 'deleteQuery');
     return LinkedStorage.deleteQuery(query);
   }

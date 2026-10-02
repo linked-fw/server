@@ -1,25 +1,34 @@
 /**
  * Which provider methods a `/call/...` request may reach.
  *
- * A provider method is dispatched over HTTP only when the provider's own class
- * declares it with `@callable(level)` (or `declareCallable`) from
+ * A provider method is dispatched over HTTP when it is declared with
+ * `@callable(level)` (or `declareCallable`) from
  * `@_linked/server-utils/utils/callable`. TypeScript `private`/`protected` do not
  * exist at runtime, so without a declaration every method of a provider would be
  * reachable, including everything it inherits.
+ *
+ * The class that owns the method (the first prototype on the chain that has it)
+ * decides. When that class declares it, its own level applies. When it does not
+ * (an override of an inherited method), the method keeps the strictest level
+ * declared for it by any class up the chain (`'user'` over `'public'`), so an
+ * override never loses a session requirement. Only when no class declares it is
+ * the method undeclared.
  *
  * - **reserved** — never dispatched, in any mode: `Object.prototype` members,
  *   every `BackendProvider`/`ShapeProvider` method (`initRequest`,
  *   `registerRoute`, lifecycle hooks, ...), even when a subclass overrides it,
  *   `dispose` (a lifecycle hook the server calls on reload, which the base
- *   class does not define), `constructor`, `__proto__`, and anything that is not a plain function
- *   (accessors, fields). Answered 501, exactly like a missing method.
+ *   class does not define), `constructor`, `__proto__`, and anything that is not
+ *   a plain function (accessors, fields). Answered 501, exactly like a missing
+ *   method.
  * - **internal** — declared with `@internal()` / `declareInternal` by the
  *   provider's class or one of its super classes (an app can declare it on a
  *   class it imports). Never dispatched over HTTP, in any mode (501), even when
  *   it is also declared callable. Backend-to-backend calls still reach it.
- * - **undeclared** — a method of the provider itself without a declaration.
- *   In `warn` mode it runs and is logged once; in `enforce` mode it is 501.
- * - **callable** — declared. A `'user'` method answers 401 without a session.
+ * - **undeclared** — no class on the chain declares it. In `warn` mode it runs
+ *   and is logged once; in `enforce` mode it is 501.
+ * - **callable** — declared (directly or inherited, see above). A `'user'`
+ *   method answers 401 without a session.
  *
  * Backend-to-backend calls (`Server.call` on the server) skip everything except
  * the reserved names, internal methods included.
@@ -35,7 +44,7 @@ import {
 export type RpcExposureMode = 'warn' | 'enforce';
 
 export type CallableResolution =
-  | { status: 'callable'; level: CallableLevel; owner: Function }
+  | { status: 'callable'; level: CallableLevel; owner: Function; inherited?: boolean }
   | { status: 'undeclared'; owner: Function | undefined }
   | { status: 'internal'; owner: Function | undefined }
   | { status: 'reserved' }
@@ -122,14 +131,44 @@ export function resolveCallable(provider: any, method: string): CallableResoluti
   ) {
     return { status: 'internal', owner: isClassPrototype ? holderCtor : providerCtor };
   }
-  if (!isClassPrototype) {
-    // A method assigned onto the instance itself: nothing declares it.
-    return { status: 'undeclared', owner: provider?.constructor };
+  if (isClassPrototype) {
+    const own = getOwnCallableLevel(holderCtor, method);
+    if (own) return { status: 'callable', level: own, owner: holderCtor };
   }
-  const level = getOwnCallableLevel(holderCtor, method);
-  return level
-    ? { status: 'callable', level, owner: holderCtor }
-    : { status: 'undeclared', owner: holderCtor };
+  // Not declared where it is defined (an override, or a method assigned onto
+  // the instance): the strictest level declared up the class chain applies.
+  const start = isClassPrototype ? holderCtor : providerCtor;
+  const inherited = strictestDeclaredLevel(start, method);
+  if (inherited) {
+    return { status: 'callable', level: inherited, owner: start, inherited: true };
+  }
+  return { status: 'undeclared', owner: start };
+}
+
+const STRICTNESS: Record<CallableLevel, number> = { public: 0, user: 1 };
+
+/** The strictest level any class from `cls` up declares for `method`. */
+function strictestDeclaredLevel(cls: unknown, method: string): CallableLevel | undefined {
+  let level: CallableLevel | undefined;
+  let c: any = cls;
+  while (typeof c === 'function' && c !== Function.prototype) {
+    const own = getOwnCallableLevel(c, method);
+    if (own && (level === undefined || STRICTNESS[own] > STRICTNESS[level])) level = own;
+    c = Object.getPrototypeOf(c);
+  }
+  return level;
+}
+
+/**
+ * A client-supplied name made safe for a log line: control characters escaped
+ * (no forged lines or terminal escapes), and cut to a bounded length.
+ */
+export function logSafe(value: unknown, max = 120): string {
+  const text = String(value);
+  const escaped = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, (ch) =>
+    '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0')
+  );
+  return escaped.length > max ? escaped.slice(0, max) + '…' : escaped;
 }
 
 /**
@@ -189,7 +228,7 @@ export function warnUndeclaredCall(
   if (warnedUndeclared.has(key)) return;
   warnedUndeclared.add(key);
   console.warn(
-    `[linked] undeclared RPC ${pkg} ${className}.${method} (session: ${hasSession ? 'yes' : 'no'}). ` +
+    `[linked] undeclared RPC ${logSafe(pkg)} ${className}.${logSafe(method)} (session: ${hasSession ? 'yes' : 'no'}). ` +
       `Declare it with @callable('public' | 'user') if the client calls it; ` +
       `undeclared methods are refused (501) once rpcExposure is 'enforce'.`
   );
