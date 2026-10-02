@@ -63,6 +63,28 @@ function isShapeProvider(provider: any): boolean {
   }
   return false;
 }
+/**
+ * Call one provider's hook and contain its failure: a synchronous throw or a
+ * rejection is logged, naming the package and the hook, and swallowed. Used
+ * for hooks that run for every provider (boot lifecycle hooks and per-request
+ * hooks), where one provider's bug must not take down boot or every request
+ * without saying which provider it was.
+ */
+async function runProviderHook(
+  pkg: string,
+  hook: string,
+  call: () => any
+): Promise<void> {
+  try {
+    await call();
+  } catch (err: any) {
+    console.error(
+      chalk.red(`[linked] ${pkg} ${hook} failed: ${err?.message ?? err}`),
+      err?.stack ? `\n${err.stack}` : ''
+    );
+  }
+}
+
 import process from 'process';
 import * as React from 'react';
 import { renderToPipeableStream, renderToStaticMarkup } from 'react-dom/server';
@@ -661,15 +683,23 @@ export class LinkedServer extends Shape {
     );
   }
 
-  // get generic backend providers for handle controller methods
+  /**
+   * Run a lifecycle hook (setupBeforeControllers, setupBeforeCatchAllControllers,
+   * setupAfterControllers) on every generic provider, in indexing order.
+   *
+   * Each provider is isolated: a hook that throws (or rejects) is logged with
+   * the package and hook name and the next provider still runs, so one broken
+   * provider does not abort boot. That provider's routes or middleware from
+   * that hook may be missing, but the rest of the app starts.
+   */
   async callGenericBackendProvidersMethod(method: string, ...args: any[]) {
-    for (let genericProvider of this.genericProviders.values()) {
-      if (!genericProvider || !genericProvider[method]) {
+    for (let [pkg, genericProvider] of this.genericProviders.entries()) {
+      if (!genericProvider || typeof genericProvider[method] !== 'function') {
         continue;
       }
-      if (typeof genericProvider[method] == 'function') {
-        await Promise.resolve(genericProvider[method](...args));
-      }
+      await runProviderHook(pkg, method, () =>
+        genericProvider[method](...args)
+      );
     }
   }
 
@@ -2134,50 +2164,40 @@ export class LinkedServer extends Shape {
   }
 
   async initRequest(request, response) {
-    // initialise the request for all providers, do it synchroniously, one after the other
-    let p = Promise.resolve();
-    [...this.genericProviders.values()]
-      .filter(Boolean)
-      .forEach((backendProvider) => {
-        p = p
-          .then(() => {
-            return backendProvider.initRequest(request, response);
-          })
-          .catch((err) => {
-            console.warn(
-              `Error during initRequest for provider ${
-                Object.getPrototypeOf(backendProvider).constructor.name
-              }: `,
-              err
-            );
-          });
-      });
-
-    return p;
+    // initialise the request for all providers, one after the other (order
+    // matters: later providers may read what earlier ones put on the request).
+    // A provider that throws is logged by package name and skipped.
+    for (const [pkg, backendProvider] of this.genericProviders.entries()) {
+      if (!backendProvider || typeof backendProvider.initRequest !== 'function') {
+        continue;
+      }
+      await runProviderHook(pkg, 'initRequest', () =>
+        backendProvider.initRequest(request, response)
+      );
+    }
   }
 
   async getRequestData(
     request,
     response
   ): Promise<{ requestLD: string; requestObject: string }> {
-    // Phase 1: providers return plain JSON data via supplyDataForRequest.
-    // requestLD is kept as empty string for now — SSR data seeding will be
-    // reworked in Phase 2/3 to inject query results instead of graph data.
+    // Providers return plain JSON data via supplyDataForRequest.
+    // requestLD is kept as empty string for now; SSR data seeding will
+    // inject query results instead of graph data.
+    // A provider that throws (synchronously or not) is logged by package
+    // name; the page still renders with the other providers' data.
     let requestData: Record<string, any> = {};
     await Promise.all(
-      [...this.genericProviders.values()].map((backendProvider) => {
-        if (backendProvider) {
-          return Promise.resolve(
-            backendProvider.supplyDataForRequest(request, response, requestData)
-          ).catch((err) => {
-            console.warn(
-              `Error requesting page-request data from ${
-                Object.getPrototypeOf(backendProvider).constructor.name
-              }: `,
-              err
-            );
-          });
+      [...this.genericProviders.entries()].map(([pkg, backendProvider]) => {
+        if (
+          !backendProvider ||
+          typeof backendProvider.supplyDataForRequest !== 'function'
+        ) {
+          return;
         }
+        return runProviderHook(pkg, 'supplyDataForRequest', () =>
+          backendProvider.supplyDataForRequest(request, response, requestData)
+        );
       })
     );
 

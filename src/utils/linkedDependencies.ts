@@ -12,9 +12,11 @@ export interface LinkedDependency {
 }
 
 /**
- * A package whose backend providers the server loads at boot: any `@_linked/*`
- * package, and any package flagged `"linkedPackage": true` (so a custom-scope
- * linked package is picked up too).
+ * A package whose backend providers the server loads at boot: one whose
+ * package.json declares `"linkedPackage": true`. That flag is the only test —
+ * not the package's scope. `@_linked/localize` is in the `@_linked` scope and
+ * is a CLI tool, not a linked package; a custom-scope package with the flag is
+ * a linked package. The CLI's workspace discovery uses the same flag.
  *
  * The legacy `"lincd": true` flag is deliberately NOT enough. Those packages
  * import the old `lincd` core, and loading them at boot is what produced
@@ -23,7 +25,7 @@ export interface LinkedDependency {
  */
 export function isLinkedPackageJson(json: any): boolean {
   if (!json || typeof json.name !== 'string') return false;
-  return json.name.startsWith('@_linked/') || json.linkedPackage === true;
+  return json.linkedPackage === true;
 }
 
 /**

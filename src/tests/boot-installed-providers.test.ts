@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -58,26 +58,31 @@ beforeEach(() => {
     'package.json',
     JSON.stringify({
       name: 'fixture-app',
+      type: 'module',
       dependencies: {
         '@_linked/fixture-auth': '1.0.0',
         'custom-linked': '1.0.0',
         'plain-lib': '1.0.0',
         'legacy-lincd': '1.0.0',
+        '@_linked/unflagged-tool': '1.0.0',
       },
     })
   );
-  // Scope alone qualifies; its dependency is reached transitively.
+  // The "linkedPackage": true flag qualifies; a flagged dependency is reached
+  // transitively.
   installPackage(
     '@_linked/fixture-auth',
-    { dependencies: { '@_linked/fixture-nested': '1.0.0' } },
+    { linkedPackage: true, dependencies: { '@_linked/fixture-nested': '1.0.0' } },
     providerSource('auth')
   );
-  installPackage('@_linked/fixture-nested', {}, providerSource('nested'));
-  // A custom scope qualifies through the flag.
+  installPackage('@_linked/fixture-nested', { linkedPackage: true }, providerSource('nested'));
+  // An unscoped package qualifies through the flag too.
   installPackage('custom-linked', { linkedPackage: true }, providerSource('custom'));
-  // Neither of these may be loaded at boot.
+  // None of these may be loaded at boot: no flag, the legacy flag only, and
+  // the @_linked scope without the flag (a CLI tool like @_linked/localize).
   installPackage('plain-lib', {}, providerSource('plain'));
   installPackage('legacy-lincd', { lincd: true }, providerSource('legacy'));
+  installPackage('@_linked/unflagged-tool', {}, providerSource('unflagged'));
   // The app's own compiled backend, so loading it is quiet.
   writeFile('lib/backend.js', 'export {};\n');
   process.chdir(appDir);
@@ -132,7 +137,7 @@ describe('boot indexes installed linked packages', () => {
     });
   });
 
-  it('loads only @_linked/* and linkedPackage-flagged packages', async () => {
+  it('loads only linkedPackage-flagged packages, whatever their scope', async () => {
     const server = makeServer();
     await server.initBackendProviders();
     expect(Object.keys(g.__constructed).sort()).toEqual(['auth', 'custom', 'nested']);
@@ -190,6 +195,99 @@ describe('boot indexes installed linked packages', () => {
     expect(viaVite).not.toContain('@_linked/fixture-auth/backend');
     expect(viaVite).not.toContain('custom-linked/backend');
     expect(g.__constructed.auth).toBe(1);
+  });
+});
+
+const throwingProviderSource = `
+export default class Provider {
+  setupBeforeControllers() {
+    throw new Error('boom in setup');
+  }
+  setupAfterControllers() {
+    return Promise.reject(new Error('async boom in setup'));
+  }
+  initRequest() {
+    throw new Error('boom in initRequest');
+  }
+  supplyDataForRequest() {
+    throw new Error('boom in supplyDataForRequest');
+  }
+}
+`;
+
+const recordingProviderSource = (label: string) => `
+globalThis.__hooks = globalThis.__hooks || [];
+export default class Provider {
+  setupBeforeControllers() { globalThis.__hooks.push(${JSON.stringify(label)} + ':before'); }
+  setupAfterControllers() { globalThis.__hooks.push(${JSON.stringify(label)} + ':after'); }
+  initRequest(request) { request.inited = (request.inited || []).concat(${JSON.stringify(label)}); }
+  supplyDataForRequest(request) {
+    request.frontendData[${JSON.stringify(label)}] = 'supplied';
+  }
+}
+`;
+
+describe('a provider whose hooks throw', () => {
+  let errorSpy: any;
+  beforeEach(() => {
+    g.__hooks = [];
+    // The thrower is indexed BEFORE the healthy package that depends on it, so
+    // a loop that does not isolate providers never reaches the healthy one.
+    writeFile(
+      'package.json',
+      JSON.stringify({
+        name: 'fixture-app',
+        type: 'module',
+        dependencies: { 'healthy-linked': '1.0.0' },
+      })
+    );
+    installPackage(
+      'healthy-linked',
+      { linkedPackage: true, dependencies: { '@_linked/fixture-broken': '1.0.0' } },
+      recordingProviderSource('healthy')
+    );
+    installPackage(
+      '@_linked/fixture-broken',
+      { linkedPackage: true },
+      throwingProviderSource
+    );
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => errorSpy.mockRestore());
+
+  const logged = () => errorSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
+
+  it('does not abort boot, and the error names the package and the hook', async () => {
+    const server = makeServer();
+    await server.initBackendProviders();
+    await server.callGenericBackendProvidersMethod('setupBeforeControllers');
+    await server.callGenericBackendProvidersMethod('setupAfterControllers');
+
+    expect(g.__hooks).toEqual(['healthy:before', 'healthy:after']);
+    expect(logged()).toContain(
+      '[linked] @_linked/fixture-broken setupBeforeControllers failed: boom in setup'
+    );
+    expect(logged()).toContain(
+      '[linked] @_linked/fixture-broken setupAfterControllers failed: async boom in setup'
+    );
+  });
+
+  it('per-request hooks still serve the request, naming the failing package', async () => {
+    const server = makeServer();
+    await server.initBackendProviders();
+
+    const request: any = { frontendData: {} };
+    await server.initRequest(request, {});
+    const { requestObject } = await server.getRequestData(request, {});
+
+    expect(request.inited).toEqual(['healthy']);
+    expect(JSON.parse(requestObject)).toEqual({ healthy: 'supplied' });
+    expect(logged()).toContain(
+      '[linked] @_linked/fixture-broken initRequest failed: boom in initRequest'
+    );
+    expect(logged()).toContain(
+      '[linked] @_linked/fixture-broken supplyDataForRequest failed: boom in supplyDataForRequest'
+    );
   });
 });
 
