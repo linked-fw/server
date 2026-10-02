@@ -130,7 +130,7 @@ import {
 } from '../utils/resizeSource.js';
 import { Transform } from 'stream';
 import { CookieJar } from 'tough-cookie';
-import { lincdServer } from '../ontologies/lincd-server.js';
+import { server } from '../ontologies/server.js';
 import { linkedShape } from '../package.js';
 import {
   resolveStaticAccessURL,
@@ -210,7 +210,7 @@ export class LinkedServer extends Shape {
   /**
    * indicates that instances of this shape need to have this rdf.type
    */
-  static targetClass = lincdServer.LincdServer;
+  static targetClass = server.LincdServer;
   private config: LinkedConfig;
   private cachedPaths: Map<string, string> = new Map();
   private assets: { [key: string]: string } & {

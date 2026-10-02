@@ -1,5 +1,5 @@
 import './types.js';
-import './ontologies/lincd-server.register.js';
+import './ontologies/server.register.js';
 
 //SHAPES FIRST
 import './shapes/index.js';

@@ -1,5 +1,5 @@
 import { linkedShape } from '../package.js';
-import { lincdServer } from '../ontologies/lincd-server.js';
+import { server } from '../ontologies/server.js';
 import { Shape } from '@_linked/core/shapes/Shape';
 import { objectProperty } from '@_linked/core/shapes/SHACL';
 import { Lincd_API_Client } from '@_linked/server-utils/shapes/Lincd_API_Client';
@@ -9,7 +9,7 @@ import { Lincd_API_Client } from '@_linked/server-utils/shapes/Lincd_API_Client'
 // the inner binding to `X2`, which would otherwise become this shape's IRI.
 @linkedShape({name: 'LincdWebApp'})
 export class LincdWebApp extends Shape {
-  static targetClass = lincdServer.LincdWebApp;
+  static targetClass = server.LincdWebApp;
 
   static get localApp() {
     return new LincdWebApp({ id: process.env.SITE_ROOT });
@@ -19,7 +19,7 @@ export class LincdWebApp extends Shape {
   // These will be re-added when the shape is properly migrated to @_linked/core query patterns.
 
   @objectProperty({
-    path: lincdServer.hasAPI,
+    path: server.hasAPI,
     shape: Lincd_API_Client,
     maxCount: 1,
   })

@@ -1,6 +1,6 @@
 import { Shape } from '@_linked/core/shapes/Shape';
 import { linkedShape } from '../package.js';
-import { lincdServer } from '../ontologies/lincd-server.js';
+import { server } from '../ontologies/server.js';
 import { JSONParser } from '@_linked/server-utils/utils/JSONParser';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
@@ -22,7 +22,7 @@ export type ShapeSummary = {
 // the inner binding to `X2`, which would otherwise become this shape's IRI.
 @linkedShape({name: 'LincdAPI'})
 export class LincdAPI extends Shape {
-  static targetClass = lincdServer.LincdAPI;
+  static targetClass = server.LincdAPI;
 
   async process(
     request,
