@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import express from 'express';
 import type { AddressInfo } from 'net';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
@@ -251,6 +254,34 @@ describe('BackendAPIStore call results', () => {
 });
 
 describe('Missing ./backend export', () => {
+  // A real package directory: whether there is a backend is decided from the
+  // package's exports and the file system, before anything is imported.
+  let appDir: string;
+  let originalCwd: string;
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    appDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'linked-missing-backend-')));
+    process.chdir(appDir);
+  });
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(appDir, { recursive: true, force: true });
+  });
+
+  function installSomePkg(withBackend: boolean) {
+    const root = path.join(appDir, 'node_modules', 'some-pkg');
+    fs.mkdirSync(path.join(root, 'lib', 'esm'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'package.json'),
+      JSON.stringify({
+        name: 'some-pkg',
+        type: 'module',
+        exports: { '.': './lib/esm/index.js', './*': './lib/esm/*.js' },
+      })
+    );
+    if (withBackend) fs.writeFileSync(path.join(root, 'lib', 'esm', 'backend.js'), '');
+  }
+
   function linkedServerWithVite(loadError: Error): any {
     const server: any = makeLinkedServer();
     server.package = { name: 'app' };
@@ -260,31 +291,33 @@ describe('Missing ./backend export', () => {
           // Bundled by the SSR runner, so its backend is loaded through Vite
           // (an external package would go to Node's import instead).
           config: { ssr: { noExternal: ['some-pkg'] } },
-          pluginContainer: { resolveId: async (id: string) => id },
-          ssrLoadModule: async () => {
+          ssrLoadModule: jest.fn(async () => {
             throw loadError;
-          },
+          }),
         },
       },
     };
     return server;
   }
-  const notExported = () =>
-    new Error('Missing "./backend" specifier in "some-pkg" package');
 
-  it('is silent for a package without a ./backend export', async () => {
+  it('is silent, and loads nothing, for a package without a ./backend entry', async () => {
+    installSomePkg(false);
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    const server = linkedServerWithVite(notExported());
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const server = linkedServerWithVite(new Error('must not be loaded'));
 
     await server.indexPackageBackendProviders('some-pkg', false);
 
     expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(server.config.server.vite.ssrLoadModule).not.toHaveBeenCalled();
     expect(server.genericProviders.get('some-pkg')).toBeNull();
   });
 
   it('only gives the "could not find" hint when asked to warn', async () => {
+    installSomePkg(false);
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    const server = linkedServerWithVite(notExported());
+    const server = linkedServerWithVite(new Error('must not be loaded'));
 
     await server.indexPackageBackendProviders('some-pkg', true);
 
@@ -294,14 +327,18 @@ describe('Missing ./backend export', () => {
     );
   });
 
-  it('stays loud for a real load error', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  it('stays loud, naming the package, for a real load error', async () => {
+    installSomePkg(true);
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
     const server = linkedServerWithVite(new SyntaxError('Unexpected token'));
 
     await server.indexPackageBackendProviders('some-pkg', false);
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0][0])).toMatch(/Could not load backend file/);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(String(error.mock.calls[0][0])).toMatch(
+      /\[linked\] some-pkg backend .*backend\.js failed: Unexpected token/
+    );
+    expect(server.genericProviders.get('some-pkg')).toBeNull();
   });
 });
 

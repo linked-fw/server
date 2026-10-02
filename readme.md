@@ -250,7 +250,7 @@ With `apiOnly` the server skips page rendering. It installs no SPA catch-all, so
 
 Every provider — generic (`BackendProvider`) or shape-scoped (`ShapeProvider`) — has a lifecycle the framework drives:
 
-1. **Construction** — `LincdServer.indexPackageBackendProviders(pkg)` reads `${pkg}/backend`, finds every exported provider class, calls `new providerClass(server, lincdServer)` for each.
+1. **Construction** — `LincdServer.indexPackageBackendProviders(pkg)` loads the package's `./backend` entry, finds every exported provider class, calls `new providerClass(server, lincdServer)` for each. The entry is resolved from the directory where the package is actually installed — including a copy nested in another package's `node_modules` — through its `exports` map (`./backend`, or a `./*` pattern, with the `import`/`node`/`default` conditions), and imported by file URL. A package whose exports map to no existing file has no backend and is skipped quietly; a backend file that exists but fails to load is logged as an error naming the package and the file. If a linked package is installed more than once, only the copy the app itself resolves is loaded, with a warning to run `npm dedupe`.
 2. **Boot hooks** — `setupBeforeControllers()`, `setupBeforeCatchAllControllers()`, `setupAfterControllers()` run in that order during server startup.
 3. **Per-request** — `initRequest(req, res)` then `supplyDataForRequest(req, res, data)` on every incoming request.
 4. **Dispose** — `dispose()` runs when the provider is being torn down. In dev mode this happens on HMR (a watched source file in the same package changed) and on graceful shutdown. In production it only runs on shutdown.
