@@ -29,6 +29,7 @@ import {
 import type { IFileStore } from '@_linked/core/interfaces/IFileStore';
 import { getResizedImagesStore } from '../utils/resizedImagesPurpose.js';
 import { paint } from '../utils/paint.js';
+import { createJsonBodyParser } from '../utils/jsonBodyParser.js';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { autoLoadOntologyData } from '@_linked/core/utils/Package';
 import {
@@ -462,9 +463,8 @@ export class LinkedServer extends Shape {
     //   origin: ['http://localhost:4001', 'https://www.mynd.site'],
     //   optionsSuccessStatus: 200, // some legacy browsers (IE11, various SmartTVs) choke on 204
     // };
-    // //accept JSON bodies
-    // this.server.use(bodyParser.json({limit: '50mb'}));
-    this.server.use(express.json({ limit: '50mb' }));
+    //accept JSON bodies
+    this.server.use(createJsonBodyParser());
 
     // this.server.use(cors(corsOptions));
     //

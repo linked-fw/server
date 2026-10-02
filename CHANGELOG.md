@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.16.1
+
+### Patch Changes
+
+- [#119](https://github.com/linked-fw/server/pull/119) [`04d3708`](https://github.com/linked-fw/server/commit/04d3708c41a2b15a032b1b2cfa0bf9687a2d26bf) Thanks [@renovate](https://github.com/apps/renovate)! - Drop the unused direct `body-parser` dependency. The server has always parsed request bodies with Express 4's built-in `express.json({ limit: '50mb' })` (body-parser 1.x bundled inside Express), so nothing changes at runtime. The parser now lives in `createJsonBodyParser()` and its behaviour — `/call` arguments, the 50mb limit, 413/400 errors, multipart and urlencoded bodies left unparsed — is covered by tests.
+
 ## 2.16.0
 
 ### Minor Changes
