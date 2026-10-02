@@ -1914,7 +1914,7 @@ export class LinkedServer extends Shape {
    * Throws a 501 `ServerCallError`, the same answer as for a missing method.
    *
    * - reserved names: always, for HTTP and backend-to-backend calls alike;
-   * - HTTP only: a generic call to a provider whose class sets
+   * - HTTP only: an internal method (in every mode), a generic call to a provider whose class sets
    *   `static rpc = false`, and an undeclared method in 'enforce' mode
    *   (in 'warn' mode it is logged once and runs).
    */
@@ -1935,6 +1935,12 @@ export class LinkedServer extends Shape {
       throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
     }
     if (!request) return;
+    if (resolution.status === 'internal') {
+      console.warn(
+        `[linked] refused call to internal method ${pkg} ${className}.${method}`
+      );
+      throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
+    }
     if (route === 'generic' && isGenericRpcDisabled(provider)) {
       throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
     }

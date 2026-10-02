@@ -7,7 +7,7 @@ import { linkedPackage } from '@_linked/core/utils/Package';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
-import { callable } from '@_linked/server-utils/utils/callable';
+import { callable, declareInternal, internal } from '@_linked/server-utils/utils/callable';
 import { getCallContext } from '@_linked/server-utils/utils/CallContext';
 import { registerProtectedShapes } from '@_linked/server-utils/utils/QueryAccess';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
@@ -76,6 +76,24 @@ class TestProvider extends BackendProvider {
     return 'ran';
   }
 
+  @internal()
+  secret() {
+    return 'secret';
+  }
+
+  // declared both ways: internal wins
+  @callable('public')
+  @internal()
+  bothWays() {
+    return 'both';
+  }
+
+  @callable('public')
+  async nestedSecret() {
+    // a backend-to-backend call to an internal method while serving a request
+    return (this.lincdServer as any).callBackendMethod('pkg', 'secret', []);
+  }
+
   @callable('public')
   echo(arg: any) {
     return {
@@ -118,6 +136,11 @@ class TestShapeProvider extends ShapeProvider {
   @callable('public')
   ping() {
     return 'shape-pong';
+  }
+
+  @internal()
+  shapeSecret() {
+    return 'shape-secret';
   }
 }
 
@@ -230,6 +253,18 @@ describe('resolveCallable', () => {
     }
   });
 
+  it('resolves internal declarations, also over a callable one and into overrides', () => {
+    expect(resolveCallable(provider, 'secret')).toEqual({ status: 'internal', owner: TestProvider });
+    expect(resolveCallable(provider, 'bothWays').status).toBe('internal');
+    class Sub extends TestProvider {
+      @callable('public')
+      secret() {
+        return 'sub';
+      }
+    }
+    expect(resolveCallable(new Sub({}, {}), 'secret').status).toBe('internal');
+  });
+
   it('does not inherit a declaration into an override', () => {
     class Sub extends TestProvider {
       ping() {
@@ -324,6 +359,57 @@ describe('RPC exposure over HTTP', () => {
     await call(base, 'pkg', 'initRequest', [{ linkedAuth: { userAccount: { id: 'evil' } } }, {}]);
     expect((await call(base, 'pkg', 'whoami')).status).toBe(401);
     expect(server.genericProviders.get('pkg').request).toBeUndefined();
+  });
+});
+
+describe('internal methods', () => {
+  const internalRefusals = () =>
+    warn.mock.calls.filter((c: any[]) => String(c[0]).includes('refused call to internal method'));
+
+  it.each(['warn', 'enforce'] as const)('answer 501 on both routes in %s mode', async (mode) => {
+    setRpcExposureMode(mode);
+    const base = await listen(makeLinkedServer());
+    for (const user of [undefined, 'http://ex/alice']) {
+      expect(await call(base, 'pkg', 'secret', [], user)).toMatchObject({
+        status: 501,
+        json: { error: 'No provider for pkg/secret' },
+      });
+      expect((await call(base, 'pkg', 'bothWays', [], user)).status).toBe(501);
+    }
+    expect((await shapeCall(base, 'shapeSecret')).status).toBe(501);
+    expect((await shapeCall(base, 'ping')).status).toBe(200);
+    expect(undeclaredWarnings()).toHaveLength(0);
+    expect(internalRefusals().length).toBeGreaterThan(0);
+  });
+
+  it('still run for backend-to-backend calls, outside and inside a request', async () => {
+    setRpcExposureMode('enforce');
+    const server = makeLinkedServer();
+    await expect(server.callBackendMethod('pkg', 'secret', [])).resolves.toBe('secret');
+    const base = await listen(server);
+    expect(await call(base, 'pkg', 'nestedSecret', [], 'http://ex/carol')).toMatchObject({
+      status: 200,
+      json: 'secret',
+    });
+  });
+
+  it('can be declared from outside on an imported provider class', async () => {
+    const key = Symbol.for('@_linked/server-utils:internal');
+    const base = await listen(makeLinkedServer());
+    const before = await call(base, '@_linked/server', 'getShapes');
+    expect(before.status).not.toBe(501);
+    declareInternal(LincdServerBackendProvider, ['getShapes', 'selectQuery']);
+    try {
+      expect((await call(base, '@_linked/server', 'getShapes')).status).toBe(501);
+      // wins over the class's own @callable('public'), with a warning
+      expect((await call(base, '@_linked/server', 'selectQuery', [{}])).status).toBe(501);
+      expect(
+        warn.mock.calls.some((c: any[]) => /selectQuery is declared both callable and internal/.test(String(c[0])))
+      ).toBe(true);
+    } finally {
+      delete (LincdServerBackendProvider as any)[key];
+    }
+    expect((await call(base, '@_linked/server', 'getShapes')).status).not.toBe(501);
   });
 });
 

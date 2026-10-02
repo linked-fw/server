@@ -13,17 +13,22 @@
  *   `dispose` (a lifecycle hook the server calls on reload, which the base
  *   class does not define), `constructor`, `__proto__`, and anything that is not a plain function
  *   (accessors, fields). Answered 501, exactly like a missing method.
+ * - **internal** — declared with `@internal()` / `declareInternal` by the
+ *   provider's class or one of its super classes (an app can declare it on a
+ *   class it imports). Never dispatched over HTTP, in any mode (501), even when
+ *   it is also declared callable. Backend-to-backend calls still reach it.
  * - **undeclared** — a method of the provider itself without a declaration.
  *   In `warn` mode it runs and is logged once; in `enforce` mode it is 501.
  * - **callable** — declared. A `'user'` method answers 401 without a session.
  *
  * Backend-to-backend calls (`Server.call` on the server) skip everything except
- * the reserved names.
+ * the reserved names, internal methods included.
  */
 import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 import {
   getOwnCallableLevel,
+  isDeclaredInternal,
   type CallableLevel,
 } from '@_linked/server-utils/utils/callable';
 
@@ -32,6 +37,7 @@ export type RpcExposureMode = 'warn' | 'enforce';
 export type CallableResolution =
   | { status: 'callable'; level: CallableLevel; owner: Function }
   | { status: 'undeclared'; owner: Function | undefined }
+  | { status: 'internal'; owner: Function | undefined }
   | { status: 'reserved' }
   | { status: 'missing' };
 
@@ -107,6 +113,15 @@ export function resolveCallable(provider: any, method: string): CallableResoluti
     : undefined;
   const isClassPrototype =
     typeof holderCtor === 'function' && holderCtor.prototype === holder;
+  // Internal on the provider's class or any super class wins over everything
+  // else, a callable declaration included.
+  const providerCtor = typeof provider === 'function' ? undefined : provider.constructor;
+  if (
+    (typeof providerCtor === 'function' && isDeclaredInternal(providerCtor, method)) ||
+    (isClassPrototype && isDeclaredInternal(holderCtor, method))
+  ) {
+    return { status: 'internal', owner: isClassPrototype ? holderCtor : providerCtor };
+  }
   if (!isClassPrototype) {
     // A method assigned onto the instance itself: nothing declares it.
     return { status: 'undeclared', owner: provider?.constructor };
