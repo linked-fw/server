@@ -1,5 +1,13 @@
 # @\_linked/server
 
+## 2.18.0
+
+### Minor Changes
+
+- [#128](https://github.com/linked-fw/server/pull/128) [`2b8e8ac`](https://github.com/linked-fw/server/commit/2b8e8acde912d91d8b706f09ca0a6e2663155c0c) Thanks [@flyon](https://github.com/flyon)! - The server ontology moves from `http://lincd.org/ont/lincd-server/` to `https://linked.cm/ont/server/`, the first-party scheme every public package uses (`https://linked.cm/ont/{publicSlug}/`, next to its shapes at `https://linked.cm/shape/server/`).
+
+  No data migration is needed. No stored data is typed with these terms (`LincdServer`, `LincdAPI`, `LincdWebApp`, `hasAPI`, …). The only store triples that carried them are the synced shape descriptions of `LinkedServer`, `LincdAPI` and `LincdWebApp` (`sh:targetClass`, `sh:path`); boot sync deletes and recreates each registered shape's description, so they move to the new IRIs the next time the server starts. With `syncShapesOnBoot: false` they keep the old IRIs until the next sync. The prefix key (`lincd-server`) and the `ontologies/lincd-server` module are unchanged; code that hard-codes `http://lincd.org/ont/lincd-server/` must be updated.
+
 ## 2.17.0
 
 ### Minor Changes
