@@ -257,6 +257,9 @@ describe('Missing ./backend export', () => {
     server.config = {
       server: {
         vite: {
+          // Bundled by the SSR runner, so its backend is loaded through Vite
+          // (an external package would go to Node's import instead).
+          config: { ssr: { noExternal: ['some-pkg'] } },
           pluginContainer: { resolveId: async (id: string) => id },
           ssrLoadModule: async () => {
             throw loadError;
