@@ -7,6 +7,7 @@ import { LinkedServer } from '../shapes/LinkedServer.js';
 import {
   discoverLinkedDependencies,
   isBundledBySsr,
+  resolveBackendEntry,
 } from '../utils/linkedDependencies.js';
 
 // A package INSTALLED into the app's node_modules (a real directory, not a
@@ -25,12 +26,40 @@ function writeFile(rel: string, contents: string) {
   fs.writeFileSync(file, contents);
 }
 
-function installPackage(name: string, json: object, backend?: string) {
+// The exports map every linked package ships: `./*` → `./lib/esm/*.js`.
+const LINKED_EXPORTS = {
+  '.': { types: './lib/esm/index.d.ts', import: './lib/esm/index.js' },
+  './*.js': { types: './lib/esm/*.d.ts', import: './lib/esm/*.js' },
+  './*': { types: './lib/esm/*.d.ts', import: './lib/esm/*.js' },
+};
+
+/**
+ * Install a package into a real node_modules layout. `under` nests it inside
+ * another installed package's own node_modules (`node_modules/<under>/node_modules/<name>`),
+ * the way npm installs a version the root cannot share.
+ */
+function installPackage(
+  name: string,
+  json: object,
+  backend?: string,
+  under?: string
+) {
+  const root = under
+    ? `node_modules/${under}/node_modules/${name}`
+    : `node_modules/${name}`;
   writeFile(
-    `node_modules/${name}/package.json`,
-    JSON.stringify({ name, version: '1.0.0', type: 'module', ...json })
+    `${root}/package.json`,
+    JSON.stringify({
+      name,
+      version: '1.0.0',
+      type: 'module',
+      main: 'lib/esm/index.js',
+      exports: LINKED_EXPORTS,
+      ...json,
+    })
   );
-  if (backend) writeFile(`node_modules/${name}/lib/esm/backend.js`, backend);
+  writeFile(`${root}/lib/esm/index.js`, 'export {};\n');
+  if (backend) writeFile(`${root}/lib/esm/backend.js`, backend);
 }
 
 const providerSource = (label: string) => `
@@ -93,21 +122,8 @@ afterEach(() => {
   fs.rmSync(appDir, { recursive: true, force: true });
 });
 
-// Resolves `<pkg>/backend` inside the fixture app, the way Node resolves it
-// from the app's node_modules in a real install. The test runner would resolve
-// a bare specifier relative to LinkedServer's source file instead.
-async function importFromApp(specifier: string) {
-  const match = specifier.match(/^((?:@[^/]+\/)?[^/]+)\/backend$/);
-  const file = match
-    ? path.join(appDir, 'node_modules', match[1], 'lib', 'esm', 'backend.js')
-    : null;
-  if (!file || !fs.existsSync(file)) {
-    const err: any = new Error(`Cannot find module '${specifier}'`);
-    err.code = 'ERR_MODULE_NOT_FOUND';
-    throw err;
-  }
-  return import(pathToFileURL(file).href);
-}
+// No stand-in for module resolution: the server resolves each backend from
+// the package directory discovery found, and imports it by file URL.
 
 function makeServer(vite?: any): any {
   const server: any = Object.create(LinkedServer.prototype);
@@ -117,8 +133,9 @@ function makeServer(vite?: any): any {
   server.package = JSON.parse(
     fs.readFileSync(path.join(appDir, 'package.json'), 'utf-8')
   );
+  server.linkedPackageDirs = new Map();
+  server.warnedDuplicateInstalls = new Set();
   server.config = { server: vite ? { vite } : {} };
-  server.importModule = importFromApp;
   return server;
 }
 
@@ -182,9 +199,13 @@ describe('boot indexes installed linked packages', () => {
     const vite = {
       config: { ssr: { noExternal: ['@_linked/fixture-nested'] } },
       pluginContainer: { resolveId: async (id: string) => ({ id }) },
+      // Stands in for Vite resolving a bundled package's bare specifier.
       ssrLoadModule: async (id: string) => {
         viaVite.push(id);
-        return importFromApp(id);
+        const name = id.replace(/\/backend$/, '');
+        const root = path.join(appDir, 'node_modules', name);
+        const json = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
+        return import(pathToFileURL(resolveBackendEntry(root, json)!).href);
       },
     };
     const server = makeServer(vite);

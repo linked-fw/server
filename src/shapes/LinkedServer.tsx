@@ -41,6 +41,9 @@ import {pathToFileURL} from 'node:url';
 import {
   discoverLinkedDependencies,
   isBundledBySsr,
+  NODE_IMPORT_CONDITIONS,
+  readInstalledPackage,
+  resolveBackendEntry,
   ssrNoExternalOf,
 } from '../utils/linkedDependencies.js';
 
@@ -217,6 +220,16 @@ export class LinkedServer extends Shape {
   // concurrent first calls (or a call racing boot) never construct a
   // package's providers twice.
   private providerIndexing: Map<string, Promise<void>> = new Map();
+  /**
+   * Package name → realpath of the installed copy whose backend is loaded,
+   * as discovery found it. A package's backend is resolved from THIS
+   * directory, never by its bare name from @_linked/server's own location:
+   * Node would never look inside another package's nested node_modules, so a
+   * linked package installed only there (owl/node_modules/@_linked/rdfs)
+   * could not be loaded at all.
+   */
+  private linkedPackageDirs: Map<string, string> = new Map();
+  private warnedDuplicateInstalls: Set<string> = new Set();
   //from resizedFileName to full resized path (CDN or similar)
   private resizePathsMap: Map<string, string> = new Map();
   private api: LincdAPI;
@@ -779,7 +792,8 @@ export class LinkedServer extends Shape {
    * Index the backend providers of every linked package in the app's
    * dependency tree, dependencies first. Workspace members (`localPackages`)
    * are also imported whole, as before; for anything else only its `/backend`
-   * entry is loaded, and a package without one costs a failed resolve.
+   * entry is loaded — resolved from the directory discovery found the package
+   * in, and skipped without an import when the package has none.
    */
   private async indexLinkedDependencyProviders(
     localPackages: Map<string, { packageName: string; path: string }>
@@ -790,6 +804,20 @@ export class LinkedServer extends Shape {
     // A workspace member the walk cannot reach through node_modules still
     // loads, after the rest, as it always did.
     const remaining = new Set(localPackages.keys());
+    this.linkedPackageDirs ??= new Map();
+    for (const dep of ordered) {
+      this.linkedPackageDirs.set(dep.packageName, dep.path);
+      this.warnIfInstalledMoreThanOnce(dep);
+    }
+    for (const [packageName, local] of localPackages) {
+      if (!this.linkedPackageDirs.has(packageName) && local?.path) {
+        let dir = local.path;
+        try {
+          dir = fsNative.realpathSync(dir);
+        } catch {}
+        this.linkedPackageDirs.set(packageName, dir);
+      }
+    }
     for (const { packageName } of ordered) {
       const isLocal = remaining.delete(packageName);
       await this.ensurePackageBackendProviders(packageName);
@@ -818,6 +846,49 @@ export class LinkedServer extends Shape {
   }
 
   /**
+   * Two installed copies of one linked package mean two copies of its module
+   * state, and only one of them can own the backend. The one the app resolves
+   * is loaded (see discoverLinkedDependencies); the other is never loaded.
+   */
+  private warnIfInstalledMoreThanOnce(dep: {
+    packageName: string;
+    path: string;
+    copies?: { path: string; version?: string }[];
+  }) {
+    const copies = dep.copies ?? [];
+    this.warnedDuplicateInstalls ??= new Set();
+    if (copies.length < 2 || this.warnedDuplicateInstalls.has(dep.packageName)) {
+      return;
+    }
+    this.warnedDuplicateInstalls.add(dep.packageName);
+    const list = copies
+      .map((c) => `${c.version ?? '?'} at ${c.path}`)
+      .join(', ');
+    console.warn(
+      paint('yellow', 
+        `[linked] ${dep.packageName} is installed ${copies.length} times (${list}); loaded ${dep.path}. Run npm dedupe.`
+      )
+    );
+  }
+
+  /**
+   * The directory a package's backend is resolved from: the copy discovery
+   * chose, or — for a package outside the linked tree, reached only by a lazy
+   * /call — the copy the app itself resolves.
+   */
+  private packageDirFor(pkg: string): string | null {
+    const known = this.linkedPackageDirs?.get(pkg);
+    if (known) return known;
+    const installed = readInstalledPackage(pkg, process.cwd());
+    if (!installed) return null;
+    try {
+      return fsNative.realpathSync(installed.root);
+    } catch {
+      return installed.root;
+    }
+  }
+
+  /**
    * Index a package's backend providers once. Shared by boot and the lazy
    * path in callBackendMethod / callShapeMethod. `onSourceChange` bypasses it
    * on purpose: an HMR reload must re-index.
@@ -841,8 +912,8 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Node's `import()`, as a method so a test can resolve a fixture app's
-   * node_modules (a test runner resolves bare specifiers from this file).
+   * Node's `import()`. Called with the absolute file URL of a resolved backend
+   * entry (see resolveBackendEntry), never a bare name.
    */
   protected importModule(specifier: string): Promise<any> {
     return import(/* @vite-ignore */ specifier);
@@ -1254,20 +1325,11 @@ export class LinkedServer extends Shape {
   }
   async indexPackageBackendProviders(
     pkg: string,
-    warnIfNotFound: boolean = false,
-    backendIndexFilePath?: string
+    warnIfNotFound: boolean = false
   ) {
-    if (!backendIndexFilePath) {
-      backendIndexFilePath = `${pkg}/backend`;
-    }
     let backendProviderExports;
-    let genericBackendProvider;
+    let genericBackendProvider = null;
     let shapeProviders = [];
-    // Plan-010 phase 4/5: when Vite SSR is active, route module loading
-    // through vite.ssrLoadModule. This handles the case where the user app
-    // is the consuming workspace itself (self-reference like
-    // @semantu/create-now/backend), which Node's ESM resolver can't resolve
-    // from inside an installed package like @_linked/server.
     const vite: any = (this.config.server as any)?.vite;
     // In dev, load a package's backend with the loader that owns the package
     // (see isBundledBySsr): Vite for the app itself and for what the SSR
@@ -1280,73 +1342,97 @@ export class LinkedServer extends Shape {
       typeof vite.ssrLoadModule === 'function' &&
       (pkg === this.package?.name ||
         isBundledBySsr(pkg, ssrNoExternalOf(vite)));
-    const loadModule = async (specifier: string) => {
-      if (viteOwnsPackage) {
-        // For the user app's own backend, resolve to ./src/backend.ts directly.
-        // Vite reads the app's package.json exports.development condition.
-        if (specifier === `${this.package.name}/backend`) {
-          return await vite.ssrLoadModule('/src/backend.ts');
-        }
-        // Plan-011: ssr.external is now an npm-only allowlist. Workspace
-        // packages MUST go through Vite's SSR loader so they share the
-        // same module instance as everything else in the SSR call graph
-        // (otherwise we get duplicate React contexts, duplicate Linked
-        // package registrations, etc).
-        //
-        // Pre-check whether the specifier actually resolves before
-        // calling ssrLoadModule — many packages have no `/backend`
-        // export, and ssrLoadModule logs a "Failed to load url" error
-        // INTERNALLY before throwing, which spams stdout even when the
-        // surrounding catch handles it. pluginContainer.resolveId is
-        // quiet: it returns null when no plugin can resolve the id.
-        try {
-          const resolved = await vite.pluginContainer?.resolveId?.(specifier);
-          if (!resolved) {
-            // Synthesise the same error shape the catch expects so the
-            // "no backend export, that's fine" branch fires.
-            const err: any = new Error(
-              `Failed to load url ${specifier} (resolved id: ${specifier}). Does the file exist?`,
-            );
-            throw err;
-          }
-        } catch (e: any) {
-          // If the pre-check itself errored (e.g. plugin threw on a
-          // pkg name it doesn't know), let the call below surface the
-          // real error path.
-          if (!e?.message?.includes('Failed to load url')) {
-            // fall through to ssrLoadModule which will throw + log
-          } else {
-            throw e;
-          }
-        }
-        return await vite.ssrLoadModule(specifier);
-      }
-      // Node path: production runtime, or a package the dev SSR runner
-      // leaves external.
-      //
-      // The app's own backend cannot be imported by name here. A self-reference
+
+    // Decide whether there IS a backend before importing anything. A package
+    // without one is the normal case (most linked packages have none) and is
+    // quiet; once a backend file is known to exist, any failure to load it is
+    // a real error. This used to be decided after the fact, by matching the
+    // loader's error text — which Node and Vite word differently, so a nested
+    // package's "Cannot find package" was reported as a broken backend.
+    let entry: string | null = null;
+    let load: (() => Promise<any>) | null = null;
+    if (pkg === this.package?.name) {
+      // The app's own backend cannot be imported by name: a self-reference
       // resolves only from inside the package that declares it, and this code
-      // lives in node_modules/@_linked/server — so Node reports
-      // `Cannot find package '<app>'` and every one of the app's Providers
-      // silently fails to register. The Vite branch above already works around
-      // this; the compiled runtime needs the same treatment, by path.
-      if (specifier === `${this.package.name}/backend`) {
-        const compiled = path.join(process.cwd(), 'lib', 'backend.js');
-        const source = path.join(process.cwd(), 'src', 'backend.ts');
-        const target = fsNative.existsSync(compiled) ? compiled : source;
-        return await import(/* @vite-ignore */ pathToFileURL(target).href);
+      // lives in node_modules/@_linked/server. Load it by path.
+      const cwd = process.cwd();
+      if (viteOwnsPackage) {
+        const source = path.join(cwd, 'src', 'backend.ts');
+        if (fsNative.existsSync(source)) {
+          entry = source;
+          load = () => vite.ssrLoadModule('/src/backend.ts');
+        }
+      } else {
+        entry = [
+          path.join(cwd, 'lib', 'backend.js'),
+          path.join(cwd, 'src', 'backend.ts'),
+        ].find((f) => fsNative.existsSync(f)) ?? null;
+        if (entry) {
+          const url = pathToFileURL(entry).href;
+          load = () => this.importModule(url);
+        }
       }
-      // Fall back to Node's resolver. The dynamic specifier is intentional.
-      return await this.importModule(specifier);
-    };
-    await loadModule(backendIndexFilePath)
-      .then((backendProviderExports) => {
-        //instantiate the exported provider classes and add them to the right place
-        Object.keys(backendProviderExports).forEach((key) => {
-          let providerClass = backendProviderExports[key];
+    } else {
+      const dir = this.packageDirFor(pkg);
+      let json: any = null;
+      if (dir) {
+        try {
+          json = JSON.parse(
+            fsNative.readFileSync(path.join(dir, 'package.json'), 'utf-8')
+          );
+        } catch {}
+      }
+      if (dir && json) {
+        if (viteOwnsPackage) {
+          // Vite resolves a bundled package with the `development` condition
+          // (a workspace's `./backend` may point at src only there). It is
+          // still loaded by its bare name, so it is the same module id the
+          // rest of the SSR graph imports.
+          entry = resolveBackendEntry(dir, json, [
+            'development',
+            ...NODE_IMPORT_CONDITIONS,
+          ]);
+          if (entry) load = () => vite.ssrLoadModule(`${pkg}/backend`);
+        } else {
+          // Node caches ESM by resolved real file URL, and a bare import of
+          // `<pkg>/backend` from the app resolves to this same real path — so
+          // loading it by URL yields the instance the app's own imports get.
+          entry = resolveBackendEntry(dir, json, NODE_IMPORT_CONDITIONS);
+          if (entry) {
+            const url = pathToFileURL(entry).href;
+            load = () => this.importModule(url);
+          }
+        }
+      }
+    }
+
+    if (!load) {
+      if (warnIfNotFound) {
+        console.warn(
+          paint('magenta', `Could not find backend file of package ${pkg}. 
+        Check:\n
+          - Make sure backend.ts exists and is included in tsconfig.json\n
+          - Make sure the package name in src/package.ts matches the package name in package.json`)
+        );
+      }
+    } else {
+      // Loud, naming the package and the file, and contained: one package's
+      // broken backend does not stop the others from loading.
+      let loaded = false;
+      await runProviderHook(pkg, `backend ${entry}`, async () => {
+        backendProviderExports = await load();
+        loaded = true;
+      });
+      if (loaded) {
+        for (const key of Object.keys(backendProviderExports)) {
+          const providerClass = backendProviderExports[key];
+          let provider;
           //always send an instance of the express server
           //TODO: do not create an instance, just save the class and instantiate it when needed
-          let provider = new providerClass(this.server, this);
+          await runProviderHook(pkg, `${key} constructor`, () => {
+            provider = new providerClass(this.server, this);
+          });
+          if (!provider) continue;
           if (isShapeProvider(provider)) {
             shapeProviders.push(provider);
             if (!Object.getOwnPropertyNames(provider).includes('shape')) {
@@ -1357,60 +1443,16 @@ export class LinkedServer extends Shape {
                is not properly linked to a shape. Use public shape = SomeShape.`)
               );
             }
-          } else {
-            if (genericBackendProvider) {
-              console.warn(
-                `Package ${pkg} exports two generic backend providers. Only one will work`
-              );
-            } else {
-              genericBackendProvider = provider;
-            }
-          }
-        });
-      })
-      .catch((e) => {
-        // Recognize "no /backend export" failures across two loader
-        // shapes:
-        //   Node's import()             → ERR_MODULE_NOT_FOUND + "Cannot find module 'X/backend'"
-        //   Vite's ssrLoadModule()      → "Failed to load url X/backend"
-        //   package `exports` without a ./backend entry (Node + Vite)
-        //                               → 'Missing "./backend" specifier in "X" package'
-        // In either case, missing /backend on a package that doesn't
-        // ship a backend is expected; loud-error only on REAL load
-        // failures (syntax error inside an existing backend.ts, etc).
-        const nodeMatch = e.message.match(/module \'([^\']+)'/);
-        const viteMatch = e.message.match(/Failed to load url ([^\s]+)/);
-        const matchedSpec = nodeMatch?.[1] ?? viteMatch?.[1];
-        const notExported = /Missing "\.\/backend" specifier in "[^"]+" package/.test(
-          e.message
-        );
-        let providerNotFound =
-          notExported ||
-          (!!matchedSpec &&
-            matchedSpec.includes('/backend') &&
-            ((e.code === 'ERR_MODULE_NOT_FOUND' &&
-              e.message.indexOf(`Cannot find module`) !== -1) ||
-              e.message.indexOf('Failed to load url') !== -1));
-        if (providerNotFound) {
-          // console.warn('Error loading ' + providerPath + ': ' + e.stack);
-          if (warnIfNotFound) {
+          } else if (genericBackendProvider) {
             console.warn(
-              paint('magenta', `Could not find backend file of package ${pkg}. 
-        Check:\n
-          - Make sure backend.ts exists and is included in tsconfig.json\n
-          - Make sure the package name in src/package.ts matches the package name in package.json`)
+              `Package ${pkg} exports two generic backend providers. Only one will work`
             );
+          } else {
+            genericBackendProvider = provider;
           }
-        } else {
-          console.warn(
-            paint('red', 
-              `Could not load backend file of module '${pkg}' from ${process.cwd()}:\n`
-            ),
-            e.stack
-          );
         }
-        genericBackendProvider = null;
-      });
+      }
+    }
     this.genericProviders.set(pkg, genericBackendProvider);
     this.shapeProviders.set(pkg, shapeProviders);
     return { backendProviderExports, shapeProviders };
