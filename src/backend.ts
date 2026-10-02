@@ -26,6 +26,9 @@ export default class LincdServerBackendProvider extends BackendProvider {
     }
   }
 
+  // Not callable over RPC: no client calls it. Clients read the same index
+  // through LincdAPI's `/api/all-shapes` and `/api/shape-details`; backend code
+  // can still reach it with a local `Server.call`.
   getShapes() {
     return getShapeIndex();
   }

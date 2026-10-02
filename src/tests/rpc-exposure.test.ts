@@ -452,3 +452,40 @@ describe('generic query plane', () => {
     await expect(server.callBackendMethod('@_linked/server', 'selectQuery', [direct()])).resolves.toEqual([]);
   });
 });
+
+describe('server-side rendering', () => {
+  it('runs the render path inside an http call context for that request', async () => {
+    const server = makeLinkedServer();
+    const seen: any[] = [];
+    // stands in for the page render; render() itself is the real entry point
+    server.renderPage = async (req: any) => {
+      await tick(req.delay);
+      const ctx = getCallContext() as any;
+      seen.push({ kind: ctx?.kind, sameRequest: ctx?.request === req, user: ctx?.request?.linkedAuth?.userAccount?.id });
+      // a Server.call made while rendering inherits the request, not system
+      return server.callBackendMethod('pkg', 'contextKind', []);
+    };
+    const req = (user: string, delay: number) => ({ delay, linkedAuth: { userAccount: { id: user } } });
+    const [a, b] = await Promise.all([
+      server.render(req('http://ex/alice', 30), {}),
+      server.render(req('http://ex/bob', 0), {}),
+    ]);
+    expect(a).toEqual({ kind: 'http', user: 'http://ex/alice' });
+    expect(b).toEqual({ kind: 'http', user: 'http://ex/bob' });
+    expect(seen).toEqual([
+      { kind: 'http', sameRequest: true, user: 'http://ex/bob' },
+      { kind: 'http', sameRequest: true, user: 'http://ex/alice' },
+    ]);
+    expect(getCallContext()).toBeUndefined();
+  });
+});
+
+describe('@_linked/server default provider', () => {
+  it('keeps getShapes internal: no client calls it, /api/all-shapes serves the index', () => {
+    const provider = new LincdServerBackendProvider({}, makeLinkedServer());
+    expect(resolveCallable(provider, 'getShapes').status).toBe('undeclared');
+    for (const m of ['selectQuery', 'askQuery', 'createQuery', 'updateQuery', 'deleteQuery']) {
+      expect(resolveCallable(provider, m)).toMatchObject({ status: 'callable', level: 'public' });
+    }
+  });
+});

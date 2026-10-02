@@ -11,6 +11,44 @@ import * as fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+function isInside(base: string, target: string): boolean {
+  return target === base || target.startsWith(base + path.sep);
+}
+
+/**
+ * `fs.realpath` of `p`, or, when `p` does not exist (yet), the real path of its
+ * nearest existing ancestor with the missing segments appended. Every symlink
+ * on the existing part of the path is resolved, including a dangling one (a
+ * write through it would create its target), so the result is where a read or
+ * write of `p` would actually land.
+ */
+async function realpathOfNearestExisting(p: string, depth = 0): Promise<string> {
+  if (depth > 40) {
+    throw new Error(`Too many symbolic links resolving ${p}`);
+  }
+  const missing: string[] = [];
+  let current = p;
+  for (;;) {
+    try {
+      const real = await fs.realpath(current);
+      return missing.length ? path.join(real, ...missing.reverse()) : real;
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT' && err?.code !== 'ENOTDIR') throw err;
+    }
+    const link = await fs.readlink(current).catch(() => undefined);
+    if (link !== undefined) {
+      // a dangling symlink: follow it to where it points
+      const pointsTo = path.resolve(path.dirname(current), link);
+      const real = await realpathOfNearestExisting(pointsTo, depth + 1);
+      return missing.length ? path.join(real, ...missing.reverse()) : real;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return p;
+    missing.push(path.basename(current));
+    current = parent;
+  }
+}
+
 /**
  * What `saveFile` stored, and where.
  *
@@ -59,16 +97,30 @@ export class LocalFileStore implements IFileStore {
 
   /**
    * Resolve a key against the base folder, refusing anything that ends up
-   * outside it (`../x`, `a/../../x`). Symlinks inside the folder are not followed
-   * for this check.
+   * outside it: dot segments (`../x`, `a/../../x`), and symlinks inside the
+   * folder that point out of it (`link/x` where `link -> /etc`, or a file that
+   * is itself such a link).
+   *
+   * The check runs twice. First lexically, before the file system is touched;
+   * then on real paths, with `fs.realpath` applied to the base folder and to
+   * the target (or, for a target that does not exist yet, its nearest existing
+   * ancestor), so a symlink anywhere along the way is followed before the
+   * comparison.
    *
    * Keys are joined, not resolved, so a leading `/` still means "relative to
    * the base folder", as it always did.
    */
-  private resolveInside(filePath: string): string {
+  private async resolveInside(filePath: string): Promise<string> {
     const base = path.resolve(this.basePath);
     const target = path.resolve(path.join(this.basePath, String(filePath ?? '')));
-    if (target !== base && !target.startsWith(base + path.sep)) {
+    if (!isInside(base, target)) {
+      throw new Error(`File path escapes the file store: ${filePath}`);
+    }
+    const [realBase, realTarget] = await Promise.all([
+      realpathOfNearestExisting(base),
+      realpathOfNearestExisting(target),
+    ]);
+    if (!isInside(realBase, realTarget)) {
       throw new Error(`File path escapes the file store: ${filePath}`);
     }
     return target;
@@ -80,7 +132,7 @@ export class LocalFileStore implements IFileStore {
    * @returns A promise that resolves when the file is deleted
    */
   async deleteFile(filePath: string): Promise<void> {
-    const fileToDelete = this.resolveInside(filePath);
+    const fileToDelete = await this.resolveInside(filePath);
 
     return fs.rm(fileToDelete);
   }
@@ -91,7 +143,7 @@ export class LocalFileStore implements IFileStore {
    * @returns A promise that resolves to true if the file exists, false otherwise
    */
   async fileExists(filePath: string): Promise<boolean> {
-    const fileToCheck = this.resolveInside(filePath);
+    const fileToCheck = await this.resolveInside(filePath);
 
     return fs
       .access(fileToCheck)
@@ -105,7 +157,7 @@ export class LocalFileStore implements IFileStore {
    * @returns A promise that resolves to the file contents as a buffer, or null if the file does not exist
    */
   async getFile(filePath: string): Promise<Buffer | null> {
-    const fileToGet = this.resolveInside(filePath);
+    const fileToGet = await this.resolveInside(filePath);
 
     return fs.readFile(fileToGet).catch(() => null);
   }
@@ -308,7 +360,7 @@ export class LocalFileStore implements IFileStore {
 
     // resolved against basePath, exactly like every read method does, so what
     // is written here can be read back by the same key
-    const targetFilePath = this.resolveInside(target.storedPath);
+    const targetFilePath = await this.resolveInside(target.storedPath);
 
     //make sure the target folder exists
     if (!fsSync.existsSync(path.dirname(targetFilePath))) {
@@ -333,7 +385,7 @@ export class LocalFileStore implements IFileStore {
    * @returns The size and sha256 of the file, or null if it does not exist
    */
   async statFile(filePath: string): Promise<FileStat | null> {
-    const fileToStat = this.resolveInside(filePath);
+    const fileToStat = await this.resolveInside(filePath);
 
     let stat: fsSync.Stats;
     try {
