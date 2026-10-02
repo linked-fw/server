@@ -10,7 +10,8 @@
  * - **reserved** — never dispatched, in any mode: `Object.prototype` members,
  *   every `BackendProvider`/`ShapeProvider` method (`initRequest`,
  *   `registerRoute`, lifecycle hooks, ...), even when a subclass overrides it,
- *   `constructor`, `__proto__`, and anything that is not a plain function
+ *   `dispose` (a lifecycle hook the server calls on reload, which the base
+ *   class does not define), `constructor`, `__proto__`, and anything that is not a plain function
  *   (accessors, fields). Answered 501, exactly like a missing method.
  * - **undeclared** — a method of the provider itself without a declaration.
  *   In `warn` mode it runs and is logged once; in `enforce` mode it is 501.
@@ -50,6 +51,8 @@ export function getReservedNames(): ReadonlySet<string> {
       ...ownNames(Object.prototype),
       ...ownNames(BackendProvider.prototype),
       ...ownNames(ShapeProvider.prototype),
+      // called by the server when it reloads providers; no base class defines it
+      'dispose',
       'constructor',
       '__proto__',
     ]);

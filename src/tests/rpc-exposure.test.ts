@@ -98,7 +98,13 @@ class TestProvider extends BackendProvider {
   }
 
   setupAfterControllers() {}
+
+  dispose() {
+    disposed++;
+  }
 }
+
+let disposed = 0;
 
 class NoRpcProvider extends BackendProvider {
   static rpc = false;
@@ -210,6 +216,7 @@ describe('resolveCallable', () => {
       'callOtherProvider',
       'setupBeforeControllers',
       'setupAfterControllers', // overridden by TestProvider: still reserved
+      'dispose', // a server lifecycle hook, defined only by the subclass
       'constructor',
       '__proto__',
       'toString',
@@ -235,13 +242,15 @@ describe('resolveCallable', () => {
 });
 
 describe('RPC exposure over HTTP', () => {
-  it.each(['initRequest', 'setupAfterControllers', 'toString', 'constructor', 'registerRoute', 'hasOwnProperty'])(
+  it.each(['initRequest', 'setupAfterControllers', 'toString', 'constructor', 'registerRoute', 'hasOwnProperty', 'dispose'])(
     'answers 501 for reserved %s on the generic route',
     async (method) => {
+      disposed = 0;
       const base = await listen(makeLinkedServer());
       const res = await call(base, 'pkg', method, [{ linkedAuth: { userAccount: 'forged' } }]);
       expect(res.status).toBe(501);
       expect(res.json).toEqual({ error: `No provider for pkg/${method}` });
+      expect(disposed).toBe(0);
     }
   );
 
