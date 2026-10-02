@@ -38,6 +38,7 @@ import {
 } from '@_linked/core/utils/ShapeClass';
 import path from 'path';
 import {pathToFileURL} from 'node:url';
+import { isFatalError } from '../utils/fatalError.js';
 import {
   discoverLinkedDependencies,
   isBundledBySsr,
@@ -74,21 +75,48 @@ function isShapeProvider(provider: any): boolean {
  * for hooks that run for every provider (boot lifecycle hooks and per-request
  * hooks), where one provider's bug must not take down boot or every request
  * without saying which provider it was.
+ *
+ * The exception is a fatal error (see utils/fatalError): with `atBoot` it is
+ * logged and re-thrown, so the server refuses to start. Without it — the
+ * server is already serving — it is logged as fatal and contained like any
+ * other error: one provider must not take a running server down.
  */
 async function runProviderHook(
   pkg: string,
   hook: string,
-  call: () => any
+  call: () => any,
+  atBoot = false
 ): Promise<void> {
   try {
     await call();
   } catch (err: any) {
+    if (isFatalError(err)) {
+      logFatalError(pkg, hook, err, atBoot);
+      if (atBoot) throw err;
+      return;
+    }
     console.error(
       paint('red', `[linked] ${pkg} ${hook} failed: ${err?.message ?? err}`),
       err?.stack ? `\n${err.stack}` : ''
     );
   }
 }
+
+/** Log a fatal error once, at the point it was thrown (see runProviderHook). */
+function logFatalError(pkg: string, hook: string, err: any, atBoot: boolean) {
+  if (loggedFatalErrors.has(err)) return;
+  loggedFatalErrors.add(err);
+  console.error(
+    paint(
+      'red',
+      atBoot
+        ? `[linked] ${pkg} ${hook}: fatal error, refusing to start: ${err?.message ?? err}`
+        : `[linked] ${pkg} ${hook}: fatal error after start, server keeps running: ${err?.message ?? err}`
+    ),
+    err?.stack ? `\n${err.stack}` : ''
+  );
+}
+const loggedFatalErrors = new WeakSet<object>();
 
 import process from 'process';
 import * as React from 'react';
@@ -233,6 +261,12 @@ export class LinkedServer extends Shape {
   //from resizedFileName to full resized path (CDN or similar)
   private resizePathsMap: Map<string, string> = new Map();
   private api: LincdAPI;
+  /**
+   * True while start() / initOnly() runs. A fatal provider error (see
+   * utils/fatalError) thrown while booting stops the boot; after it, the same
+   * error is logged and contained.
+   */
+  protected booting = false;
 
   /**
    * yarn linked start sends the contents of linked.config.js as an object to this constructor
@@ -307,6 +341,10 @@ export class LinkedServer extends Shape {
     );
   }
   async initOnly() {
+    return this.bootOrRefuse(() => this.initOnlyBoot());
+  }
+
+  private async initOnlyBoot() {
     await this.initOntologies();
     await this.initStores();
 
@@ -369,7 +407,50 @@ export class LinkedServer extends Shape {
   //   })
   // }
 
+  /**
+   * Boot the server and listen. Rejects — and makes the process exit non-zero —
+   * when a provider throws a fatal error while booting (see utils/fatalError).
+   */
   async start() {
+    return this.bootOrRefuse(() => this.startBoot());
+  }
+
+  /**
+   * Run a boot with `booting` set. A fatal provider error rejects it and hands
+   * the error to exitAfterFatalStartupError; any other boot error rejects as it
+   * always did.
+   */
+  private async bootOrRefuse<T>(boot: () => Promise<T>): Promise<T> {
+    this.booting = true;
+    try {
+      return await boot();
+    } catch (err) {
+      if (isFatalError(err)) this.exitAfterFatalStartupError(err);
+      throw err;
+    } finally {
+      this.booting = false;
+    }
+  }
+
+  /**
+   * Make sure a server that refused to start does not stay up as a process.
+   *
+   * start() rejects either way, so the caller can report the error. But a
+   * rejected start() does not end the process on its own: the CLI's `linked
+   * start` turns an unhandled rejection into a log line, and the Vite dev
+   * server, a store connection or a provider's timer keeps the event loop
+   * alive. So the exit code is set now — a process with nothing left running
+   * exits 1 — and, as a backstop, the process is exited after a moment, on an
+   * unref'd timer that never itself keeps the process alive.
+   *
+   * Override to embed the server somewhere that must not exit (tests).
+   */
+  protected exitAfterFatalStartupError(_err: unknown) {
+    process.exitCode = 1;
+    setTimeout(() => process.exit(1), 1000).unref();
+  }
+
+  private async startBoot() {
     this.initPackage();
     // Static assets should come from the static store URL (versioned path),
     // not the upload store URL. An explicit STATIC_ACCESS_URL still wins;
@@ -711,8 +792,11 @@ export class LinkedServer extends Shape {
       if (!genericProvider || typeof genericProvider[method] !== 'function') {
         continue;
       }
-      await runProviderHook(pkg, method, () =>
-        genericProvider[method](...args)
+      await runProviderHook(
+        pkg,
+        method,
+        () => genericProvider[method](...args),
+        this.booting
       );
     }
   }
@@ -784,6 +868,8 @@ export class LinkedServer extends Shape {
           await this.indexPackageBackendProviders(pkg.name, false);
         });
     } catch (err) {
+      // Already logged where it was thrown; it must reach start().
+      if (isFatalError(err)) throw err;
       console.warn(err);
     }
   }
@@ -1292,6 +1378,11 @@ export class LinkedServer extends Shape {
       }
       // console.log(`✅ Successfully loaded: ${pkg}`);
     } catch (e) {
+      if (isFatalError(e)) {
+        logFatalError(pkg, 'module load', e, this.booting);
+        if (this.booting) throw e;
+        return;
+      }
       let providerNotFound =
         e.code === 'MODULE_NOT_FOUND' &&
         e.message.indexOf(`Cannot find package '${pkg}'`) !== -1;
@@ -1419,19 +1510,29 @@ export class LinkedServer extends Shape {
       // Loud, naming the package and the file, and contained: one package's
       // broken backend does not stop the others from loading.
       let loaded = false;
-      await runProviderHook(pkg, `backend ${entry}`, async () => {
-        backendProviderExports = await load();
-        loaded = true;
-      });
+      await runProviderHook(
+        pkg,
+        `backend ${entry}`,
+        async () => {
+          backendProviderExports = await load();
+          loaded = true;
+        },
+        this.booting
+      );
       if (loaded) {
         for (const key of Object.keys(backendProviderExports)) {
           const providerClass = backendProviderExports[key];
           let provider;
           //always send an instance of the express server
           //TODO: do not create an instance, just save the class and instantiate it when needed
-          await runProviderHook(pkg, `${key} constructor`, () => {
-            provider = new providerClass(this.server, this);
-          });
+          await runProviderHook(
+            pkg,
+            `${key} constructor`,
+            () => {
+              provider = new providerClass(this.server, this);
+            },
+            this.booting
+          );
           if (!provider) continue;
           if (isShapeProvider(provider)) {
             shapeProviders.push(provider);

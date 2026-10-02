@@ -21,6 +21,7 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Error semantics](#error-semantics)
 - [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
 - [Provider lifecycle and HMR](#provider-lifecycle-and-hmr)
+  - [When a provider throws, and refusing to start](#when-a-provider-throws-and-refusing-to-start)
   - [When to implement `dispose()`](#when-to-implement-dispose)
   - [Route tracking helpers](#route-tracking-helpers)
   - [Examples](#examples)
@@ -256,6 +257,25 @@ Every provider — generic (`BackendProvider`) or shape-scoped (`ShapeProvider`)
 4. **Dispose** — `dispose()` runs when the provider is being torn down. In dev mode this happens on HMR (a watched source file in the same package changed) and on graceful shutdown. In production it only runs on shutdown.
 
 The dispose step is what makes hot-reload safe. Without it, anything the constructor or boot hooks registered — Express routes, middleware, listeners, timers, global-singleton mutations — would accumulate every time the source file changed. The framework calls `dispose()` on the OLD provider before replacing it with a freshly-instantiated one.
+
+### When a provider throws, and refusing to start
+
+A provider that throws is isolated: a failing constructor, a backend module that throws when it loads, or a boot hook that throws or rejects is logged with the package and hook name (`[linked] <pkg> <hook> failed: …`), and the rest of the app still starts without it. Per-request hooks (`initRequest`, `supplyDataForRequest`) are isolated the same way — the request is served with the other providers' data.
+
+Sometimes a provider must not let the app serve at all — auth with no signing secret in production, say, where serving anyway looks healthy and fails every sign-in. For that, throw an error with an **own property `fatal` set to `true`**:
+
+```ts
+// No dependency on @_linked/server needed:
+throw Object.assign(new Error('JWT_SECRET is not set'), {fatal: true});
+
+// or, with the helper:
+import {FatalStartupError} from '@_linked/server/utils/fatalError';
+throw new FatalStartupError('JWT_SECRET is not set');
+```
+
+Thrown while the server boots — from a provider constructor, a backend module's top level, or `setupBeforeControllers` / `setupBeforeCatchAllControllers` / `setupAfterControllers` — it is logged as `[linked] <pkg> <hook>: fatal error, refusing to start: <message>`, `start()` (and `initOnly()`) rejects with it before the server listens, and the process exits with code 1. The exit code is set immediately; because a rejected `start()` alone does not end a process that still has a Vite dev server, a store connection or a timer open, the server also calls `process.exit(1)` a second later (an embedder can override `exitAfterFatalStartupError`). `isFatalError(err)` checks the contract.
+
+Thrown after boot — from a per-request hook, a backend loaded lazily by a later `/call`, or an HMR reload — the error is logged as fatal (`… fatal error after start, server keeps running: …`) and contained like any other: one provider does not take down a server that is already serving. A provider that must refuse should therefore decide at construction or in a boot hook.
 
 ### When to implement `dispose()`
 
