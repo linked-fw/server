@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from '@jest/globals';
 import express from 'express';
 import type { AddressInfo } from 'net';
 import { Server } from '@_linked/server-utils/utils/Server';
-import { LinkedServer } from '../shapes/LinkedServer.js';
+import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
 import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
@@ -40,18 +40,7 @@ function makeLinkedServer(): any {
 async function listen(linkedServer: any): Promise<string> {
   const app = express();
   app.use(express.json());
-  app.post(
-    '/call/:pkg/:method',
-    linkedServer.handleErrorsJson((req, res) =>
-      linkedServer.processBackendMethodCall(req, res)
-    )
-  );
-  app.post(
-    '/call/:pkg/:shape/:method',
-    linkedServer.handleErrorsJson((req, res) =>
-      linkedServer.processShapeMethodCall(req, res)
-    )
-  );
+  registerCallRoutes(app, linkedServer);
   const s = await new Promise<any>((resolve) => {
     const srv = app.listen(0, () => resolve(srv));
   });

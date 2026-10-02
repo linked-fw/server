@@ -1,9 +1,11 @@
 import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
+import { callable } from '@_linked/server-utils/utils/callable';
 import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { fromJSON } from '@_linked/core';
 import { LocalFileStore } from './shapes/filestores/LocalFileStore.js';
 import { getShapeIndex } from './utils/Shapes.js';
+import { authorizeGenericQuery } from './utils/queryPlane.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -45,23 +47,44 @@ export default class LincdServerBackendProvider extends BackendProvider {
   // `LinkedStorage` then routes it by the QUERY's shape — which is, and always was, what
   // decides the target dataset. The store instance never participated.
 
-  selectQuery(json: any) {
-    return LinkedStorage.selectQuery(fromJSON(json) as any);
+  //
+  // Every query is checked against the generic-plane rules first (session,
+  // protected shapes, registered authorizers): see utils/queryPlane. They are
+  // declared 'public' because that check, not the RPC layer, decides whether
+  // a session is required (it follows `rpcExposure`).
+
+  @callable('public')
+  async selectQuery(json: any) {
+    const query = fromJSON(json) as any;
+    await authorizeGenericQuery('select', json, query, 'selectQuery');
+    return LinkedStorage.selectQuery(query);
   }
 
-  askQuery(json: any) {
-    return LinkedStorage.askQuery(fromJSON(json) as any);
+  @callable('public')
+  async askQuery(json: any) {
+    const query = fromJSON(json) as any;
+    await authorizeGenericQuery('ask', json, query, 'askQuery');
+    return LinkedStorage.askQuery(query);
   }
 
-  updateQuery(json: any) {
-    return LinkedStorage.updateQuery(fromJSON(json) as any);
+  @callable('public')
+  async updateQuery(json: any) {
+    const query = fromJSON(json) as any;
+    await authorizeGenericQuery('update', json, query, 'updateQuery');
+    return LinkedStorage.updateQuery(query);
   }
 
-  createQuery(json: any) {
-    return LinkedStorage.createQuery(fromJSON(json) as any);
+  @callable('public')
+  async createQuery(json: any) {
+    const query = fromJSON(json) as any;
+    await authorizeGenericQuery('create', json, query, 'createQuery');
+    return LinkedStorage.createQuery(query);
   }
 
-  deleteQuery(json: any) {
-    return LinkedStorage.deleteQuery(fromJSON(json) as any);
+  @callable('public')
+  async deleteQuery(json: any) {
+    const query = fromJSON(json) as any;
+    await authorizeGenericQuery('delete', json, query, 'deleteQuery');
+    return LinkedStorage.deleteQuery(query);
   }
 }

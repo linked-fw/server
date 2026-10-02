@@ -58,12 +58,29 @@ export class LocalFileStore implements IFileStore {
   }
 
   /**
+   * Resolve a key against the base folder, refusing anything that ends up
+   * outside it (`../x`, `a/../../x`). Symlinks inside the folder are not followed
+   * for this check.
+   *
+   * Keys are joined, not resolved, so a leading `/` still means "relative to
+   * the base folder", as it always did.
+   */
+  private resolveInside(filePath: string): string {
+    const base = path.resolve(this.basePath);
+    const target = path.resolve(path.join(this.basePath, String(filePath ?? '')));
+    if (target !== base && !target.startsWith(base + path.sep)) {
+      throw new Error(`File path escapes the file store: ${filePath}`);
+    }
+    return target;
+  }
+
+  /**
    * Delete a file from the local filesystem
    * @param filePath The path to the file to delete, relative to the base upload folder
    * @returns A promise that resolves when the file is deleted
    */
-  deleteFile(filePath: string): Promise<void> {
-    const fileToDelete = path.join(this.basePath, filePath);
+  async deleteFile(filePath: string): Promise<void> {
+    const fileToDelete = this.resolveInside(filePath);
 
     return fs.rm(fileToDelete);
   }
@@ -73,8 +90,8 @@ export class LocalFileStore implements IFileStore {
    * @param filePath The path to the file to check, relative to the base upload folder
    * @returns A promise that resolves to true if the file exists, false otherwise
    */
-  fileExists(filePath: string): Promise<boolean> {
-    const fileToCheck = path.join(this.basePath, filePath);
+  async fileExists(filePath: string): Promise<boolean> {
+    const fileToCheck = this.resolveInside(filePath);
 
     return fs
       .access(fileToCheck)
@@ -87,8 +104,8 @@ export class LocalFileStore implements IFileStore {
    * @param filePath The path to the file to get, relative to the base upload folder
    * @returns A promise that resolves to the file contents as a buffer, or null if the file does not exist
    */
-  getFile(filePath: string): Promise<Buffer | null> {
-    const fileToGet = path.join(this.basePath, filePath);
+  async getFile(filePath: string): Promise<Buffer | null> {
+    const fileToGet = this.resolveInside(filePath);
 
     return fs.readFile(fileToGet).catch(() => null);
   }
@@ -291,7 +308,7 @@ export class LocalFileStore implements IFileStore {
 
     // resolved against basePath, exactly like every read method does, so what
     // is written here can be read back by the same key
-    const targetFilePath = path.join(this.basePath, target.storedPath);
+    const targetFilePath = this.resolveInside(target.storedPath);
 
     //make sure the target folder exists
     if (!fsSync.existsSync(path.dirname(targetFilePath))) {
@@ -316,7 +333,7 @@ export class LocalFileStore implements IFileStore {
    * @returns The size and sha256 of the file, or null if it does not exist
    */
   async statFile(filePath: string): Promise<FileStat | null> {
-    const fileToStat = path.join(this.basePath, filePath);
+    const fileToStat = this.resolveInside(filePath);
 
     let stat: fsSync.Stats;
     try {

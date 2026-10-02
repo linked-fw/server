@@ -7,6 +7,32 @@ import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { cached } from '@_linked/core/utils/cached';
 import { getShapeIndex, ShapeDetails } from '../utils/Shapes.js';
 import { SparqlDataset as SPARQLStore } from '@_linked/core/sparql/SparqlDataset';
+import { authorizeGenericQuery, toQueryBuilder } from '../utils/queryPlane.js';
+import { getRpcExposureMode } from '../utils/rpcExposure.js';
+
+/**
+ * The rehydrated builder of a query, for the access check only; the store is
+ * still handed the query exactly as it arrived. `undefined` (unanalysable)
+ * when it cannot be rehydrated.
+ */
+function analysable(query: any): any {
+  try {
+    return toQueryBuilder(query);
+  } catch {
+    return undefined;
+  }
+}
+
+/** An error carrying an HTTP status, such as a `ServerCallError` (401/403). */
+function isStatusError(error: any): error is { status: number; message: string } {
+  return (
+    !!error &&
+    typeof error.status === 'number' &&
+    error.status >= 400 &&
+    error.status < 600 &&
+    error.name === 'ServerCallError'
+  );
+}
 
 const cacheTime = process.env.NODE_ENV === 'development' ? 0 : Infinity;
 export type ShapeSummary = {
@@ -30,7 +56,9 @@ export class LincdAPI extends Shape {
     httpMethod: 'get' | 'post' | 'put' | 'delete'
   ) {
     let { method, action } = request.params;
-    const body = JSONParser.parseObject<any>(request.body);
+    const body = JSONParser.parseObject<any>(request.body, {
+      shapeClasses: getRpcExposureMode() === 'enforce' ? 'reject' : 'warn',
+    });
 
     //replace - with _ in action names
     let localMethod = httpMethod + '_' + method.replace(/-/g, '_');
@@ -38,7 +66,9 @@ export class LincdAPI extends Shape {
       throw new Error('Unknown method: ' + localMethod);
     }
 
-    //TODO: access rights, check if the current user is allowed to execute this method
+    // The query routes (`post_*`) check access themselves, through
+    // utils/queryPlane. The `get_*` routes describe shapes and stay reachable:
+    // apps read each other's `/api/all-shapes` server to server.
     try {
       const result = await this[localMethod](body, request, response);
       if (typeof result !== 'undefined' || !response.headersSent) {
@@ -46,6 +76,10 @@ export class LincdAPI extends Shape {
         response.json(jsonObject);
       }
     } catch (error) {
+      if (!response.headersSent && isStatusError(error)) {
+        response.status(error.status).json({ error: error.message });
+        return;
+      }
       console.error(`Error while processing ${localMethod}:`, error);
       if (!response.headersSent) {
         const message =
@@ -122,20 +156,26 @@ export class LincdAPI extends Shape {
     );
   }
 
-  post_select({ query }) {
+  async post_select({ query }) {
+    await authorizeGenericQuery('select', query, analysable(query), 'api/select');
     return LinkedStorage.selectQuery(query);
   }
-  post_create({ query }) {
+  async post_create({ query }) {
+    await authorizeGenericQuery('create', query, analysable(query), 'api/create');
     return LinkedStorage.createQuery(query);
   }
-  post_update({ query }) {
+  async post_update({ query }) {
+    await authorizeGenericQuery('update', query, analysable(query), 'api/update');
     return LinkedStorage.updateQuery(query);
   }
-  post_delete({ query }) {
+  async post_delete({ query }) {
+    await authorizeGenericQuery('delete', query, analysable(query), 'api/delete');
     return LinkedStorage.deleteQuery(query);
   }
 
-  post_select_raw({ query }) {
+  async post_select_raw({ query }) {
+    // A raw SPARQL string cannot be analysed for the shapes it touches.
+    await authorizeGenericQuery('select', query, undefined, 'api/select-raw');
     this.checkRawQuerySupport();
     return (LinkedStorage.getDefaultDataset() as unknown as SPARQLStore).rawQuery(
       query

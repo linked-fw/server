@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import express from 'express';
 import type { AddressInfo } from 'net';
-import { LinkedServer } from '../shapes/LinkedServer.js';
+import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
 import { createJsonBodyParser } from '../utils/jsonBodyParser.js';
 
 // Pins what the request body parser LinkedServer mounts actually does, so a
@@ -39,19 +39,7 @@ async function callApp(provider: any): Promise<string> {
   const linkedServer = makeLinkedServer(provider);
   const app = express();
   app.use(createJsonBodyParser());
-  app.post(
-    '/call/@:scope/:pkg/:method',
-    linkedServer.handleErrorsJson((req, res) => {
-      req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
-      return linkedServer.processBackendMethodCall(req, res);
-    })
-  );
-  app.post(
-    '/call/:pkg/:method',
-    linkedServer.handleErrorsJson((req, res) =>
-      linkedServer.processBackendMethodCall(req, res)
-    )
-  );
+  registerCallRoutes(app, linkedServer);
   return listen(app);
 }
 

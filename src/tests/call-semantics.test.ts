@@ -8,7 +8,7 @@ import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { LincdServerProxy } from '@_linked/server-utils/utils/LincdServerProxy';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
-import { LinkedServer } from '../shapes/LinkedServer.js';
+import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
 import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
 import { packageName } from '../package.js';
@@ -56,34 +56,8 @@ async function listen(app: any): Promise<string> {
 async function listenCalls(linkedServer: any): Promise<string> {
   const app = express();
   app.use(express.json());
-  // Mirrors LinkedServer's routes, including the `@scope/pkg` variants that
-  // LincdServerProxy uses for scoped package names like `@_linked/server`.
-  app.post(
-    '/call/@:scope/:pkg/:method',
-    linkedServer.handleErrorsJson((req, res) => {
-      req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
-      return linkedServer.processBackendMethodCall(req, res);
-    })
-  );
-  app.post(
-    '/call/@:scope/:pkg/:shape/:method',
-    linkedServer.handleErrorsJson((req, res) => {
-      req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
-      return linkedServer.processShapeMethodCall(req, res);
-    })
-  );
-  app.post(
-    '/call/:pkg/:method',
-    linkedServer.handleErrorsJson((req, res) =>
-      linkedServer.processBackendMethodCall(req, res)
-    )
-  );
-  app.post(
-    '/call/:pkg/:shape/:method',
-    linkedServer.handleErrorsJson((req, res) =>
-      linkedServer.processShapeMethodCall(req, res)
-    )
-  );
+  // The real routes, exactly as LinkedServer.start() registers them.
+  registerCallRoutes(app, linkedServer);
   return listen(app);
 }
 

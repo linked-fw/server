@@ -453,3 +453,40 @@ describe('LocalFileStore.listFiles', () => {
     expect(await listStore.listFiles('nothing-matches')).toEqual([]);
   });
 });
+
+describe('LocalFileStore path containment', () => {
+  // Every key resolves inside the store's base folder; one that would escape it
+  // is refused before the file system is touched.
+  const escapes = ['../outside.txt', 'a/../../outside.txt', '../../etc/passwd', 'images/../../x.txt'];
+
+  it.each(escapes)('refuses %s on every method', async (key) => {
+    const outside = path.join(tmpDir, 'data', 'outside.txt');
+    await fs.writeFile(outside, 'secret');
+    await expect(store.getFile(key)).rejects.toThrow(/escapes the file store/);
+    await expect(store.fileExists(key)).rejects.toThrow(/escapes the file store/);
+    await expect(store.deleteFile(key)).rejects.toThrow(/escapes the file store/);
+    await expect(statFileOf(store)(key)).rejects.toThrow(/escapes the file store/);
+    await expect(
+      store.saveFile(key, Buffer.from('x'), { mimeType: 'text/plain', preventDuplicates: false })
+    ).rejects.toThrow(/escapes the file store/);
+    // the file outside the store is untouched
+    expect(await fs.readFile(outside, 'utf8')).toBe('secret');
+  });
+
+  it('still treats a leading slash as relative to the base folder', async () => {
+    await store.saveFile('/leading-slash.txt', Buffer.from('ok'), {
+      mimeType: 'text/plain',
+      preventDuplicates: false,
+    });
+    expect((await store.getFile('leading-slash.txt'))?.toString()).toBe('ok');
+    expect(await store.fileExists('/leading-slash.txt')).toBe(true);
+  });
+
+  it('allows dot segments that stay inside', async () => {
+    await store.saveFile('inner/file.txt', Buffer.from('in'), {
+      mimeType: 'text/plain',
+      preventDuplicates: false,
+    });
+    expect((await store.getFile('inner/../inner/file.txt'))?.toString()).toBe('in');
+  });
+});
