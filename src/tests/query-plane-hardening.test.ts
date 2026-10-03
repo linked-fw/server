@@ -9,7 +9,6 @@ import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 import { callable, declareInternal, internal } from '@_linked/server-utils/utils/callable';
 import { getCallContext } from '@_linked/server-utils/utils/CallContext';
-import { registerProtectedShapes } from '@_linked/server-utils/utils/QueryAccess';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
@@ -154,8 +153,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   setRpcExposureMode(undefined);
-  registerProtectedShapes([], { deny: 'all', owner: 'rpc-test' });
-  registerProtectedShapes([], { deny: 'write', owner: 'rpc-test' });
   jest.restoreAllMocks();
   await Promise.all(
     servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve())))
@@ -227,31 +224,20 @@ import path from 'path';
 import { SparqlDataset } from '@_linked/core/sparql/SparqlDataset';
 import { runWithCallContext } from '@_linked/server-utils/utils/CallContext';
 import { enterRequestContext, mountUploads } from '../shapes/LinkedServer.js';
-import {
-  containsContextRef,
-  protectedNodeAsk,
-  setProtectedNodeProbe,
-} from '../utils/queryPlane.js';
+import { containsContextRef } from '../utils/queryPlane.js';
 import { getQueryContext, setQueryContext } from '@_linked/core/queries/QueryContext';
 import { logSafe } from '../utils/rpcExposure.js';
 import { getRawQueriesMode, setRawQueriesMode } from '../utils/rawQueries.js';
 
-/**
- * A SPARQL dataset that records every query it is sent. An ASK answers `true`
- * when it names one of `protectedIds`, which stands in for those nodes being
- * typed with a protected class in the store.
- */
+/** A SPARQL dataset that records every query it is sent. */
 class CapturingSparql extends (SparqlDataset as any) {
   sparql: string[] = [];
-  protectedIds = new Set<string>();
   constructor() {
     super({} as any);
   }
   async executeSparqlSelect(q: string) {
     this.sparql.push('SELECT:: ' + q);
-    if (/^\s*ASK/i.test(q)) {
-      return { head: {}, boolean: [...this.protectedIds].some((id) => q.includes(`<${id}>`)) };
-    }
+    if (/^\s*ASK/i.test(q)) return { head: {}, boolean: false };
     return { head: { vars: [] }, results: { bindings: [] } };
   }
   async executeSparqlUpdate(q: string) {
@@ -261,137 +247,42 @@ class CapturingSparql extends (SparqlDataset as any) {
   updates() {
     return this.sparql.filter((q) => q.startsWith('UPDATE::'));
   }
-  asks() {
-    return this.sparql.filter((q) => q.startsWith('SELECT:: ASK'));
-  }
 }
 
 afterEach(() => {
   setRawQueriesMode(undefined);
   delete process.env.LINKED_RAW_QUERIES;
-  setProtectedNodeProbe(undefined);
 });
 
 const SECRET_ID = 'http://ex/secret1';
 const ME = 'http://ex/u';
 
-describe('protected nodes on the generic plane', () => {
+describe('client-chosen ids', () => {
   let ds: CapturingSparql;
   beforeEach(() => {
     ds = new CapturingSparql();
-    ds.protectedIds.add(SECRET_ID);
     LinkedStorage.setDefaultDataset(ds as any);
-    registerProtectedShapes([RpcSecret], { deny: 'write', owner: 'rpc-test' });
   });
   const Person = RpcPerson as any;
 
-  it('refuses deleting a protected node through an unprotected shape', async () => {
-    const base = await listen(makeLinkedServer());
-    const del = Person.delete(SECRET_ID).toJSON();
-    const res = await call(base, '@_linked/server', 'deleteQuery', [del], ME);
-    expect(res.status).toBe(403);
-    expect(ds.updates()).toHaveLength(0);
-    expect(ds.asks()).toHaveLength(1);
-    expect(ds.asks()[0]).toContain('rdf-schema#subClassOf>*');
-  });
-
-  it('refuses updating a protected node through an unprotected shape', async () => {
-    const base = await listen(makeLinkedServer());
-    const upd = Person.update({ name: 'pwn' }).for(SECRET_ID).toJSON();
-    expect((await call(base, '@_linked/server', 'updateQuery', [upd], ME)).status).toBe(403);
-    expect(ds.updates()).toHaveLength(0);
-  });
-
-  it('still lets an unprotected node be updated, and links to a protected node', async () => {
-    const base = await listen(makeLinkedServer());
-    const upd = Person.update({ name: 'ok', secret: { id: SECRET_ID } }).for('http://ex/p1').toJSON();
-    expect((await call(base, '@_linked/server', 'updateQuery', [upd], ME)).status).toBe(200);
-    expect(ds.updates()).toHaveLength(1);
-    const del = Person.delete('http://ex/p1').toJSON();
-    expect((await call(base, '@_linked/server', 'deleteQuery', [del], ME)).status).toBe(200);
-  });
-
-  it('refuses a create that chooses its id', async () => {
+  it('refuses a create that chooses its id, on /call and /api', async () => {
     const base = await listen(makeLinkedServer());
     const create = Person.create({ __id: SECRET_ID, name: 'x' }).toJSON();
     expect((await call(base, '@_linked/server', 'createQuery', [create], ME)).status).toBe(403);
-    const other = Person.create({ __id: 'http://ex/fresh', name: 'x' }).toJSON();
-    expect((await call(base, '@_linked/server', 'createQuery', [other], ME)).status).toBe(403);
-    expect((await post(`${base}/api/create`, { query: other }, ME)).status).toBe(403);
+    expect((await post(`${base}/api/create`, { query: create }, ME)).status).toBe(403);
     expect(ds.updates()).toHaveLength(0);
     // a create without an id is fine
     const plain = Person.create({ name: 'x' }).toJSON();
     expect((await call(base, '@_linked/server', 'createQuery', [plain], ME)).status).toBe(200);
+    expect(ds.updates()).toHaveLength(1);
   });
 
-  it('applies the same check on /api/update and /api/delete', async () => {
+  it('still lets a node be updated and linked to another by id', async () => {
     const base = await listen(makeLinkedServer());
-    const del = Person.delete(SECRET_ID).toJSON();
-    expect((await post(`${base}/api/delete`, { query: del }, ME)).status).toBe(403);
-    const upd = Person.update({ name: 'pwn' }).for(SECRET_ID).toJSON();
-    expect((await post(`${base}/api/update`, { query: upd }, ME)).status).toBe(403);
-    expect(ds.updates()).toHaveLength(0);
-  });
-
-  it('refuses when the store cannot run the check', async () => {
-    LinkedStorage.setDefaultDataset({
-      init: async () => {},
-      selectQuery: async () => [],
-      createQuery: async () => ({}),
-      updateQuery: async () => ({}),
-      deleteQuery: async () => ({}),
-      askQuery: async () => false,
-    } as any);
-    const base = await listen(makeLinkedServer());
-    const upd = Person.update({ name: 'x' }).for('http://ex/p1').toJSON();
-    expect((await call(base, '@_linked/server', 'updateQuery', [upd], ME)).status).toBe(403);
-  });
-
-  it('uses a probe the app sets', async () => {
-    const seen: any[] = [];
-    setProtectedNodeProbe(async (check) => (seen.push(check), false));
-    const base = await listen(makeLinkedServer());
-    const del = Person.delete(SECRET_ID).toJSON();
-    expect((await call(base, '@_linked/server', 'deleteQuery', [del], ME)).status).toBe(200);
-    expect(seen[0].ids).toEqual([SECRET_ID]);
-    expect(ds.asks()).toHaveLength(0);
-  });
-});
-
-describe('protectedNodeAsk', () => {
-  const base = {
-    operation: 'delete' as const,
-    shape: 'http://ex/shape',
-    ids: [] as string[],
-    ownerIds: [] as string[],
-    scanClasses: [] as string[],
-    classes: ['http://ex/C'],
-    containsPredicates: [] as string[],
-  };
-
-  it('asks about ids, owned subtrees and co-typed instances', () => {
-    const q = protectedNodeAsk({
-      ...base,
-      ids: ['http://ex/a'],
-      ownerIds: ['http://ex/a'],
-      scanClasses: ['http://ex/Person'],
-      containsPredicates: ['http://ex/owns', 'http://ex/has'],
-    })!;
-    expect(q).toContain('VALUES ?n { <http://ex/a> }');
-    expect(q).toContain('?owner (<http://ex/owns>|<http://ex/has>)+ ?n');
-    expect(q).toContain('?n <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://ex/Person>');
-    expect(q).toContain('VALUES ?c { <http://ex/C> }');
-  });
-
-  it('asks nothing when there is nothing to check', () => {
-    expect(protectedNodeAsk(base)).toBeUndefined();
-    expect(protectedNodeAsk({ ...base, ids: ['http://ex/a'], classes: [] })).toBeUndefined();
-  });
-
-  it('refuses ids that are not plain IRIs', () => {
-    for (const bad of ['http://ex/a> } ; DROP ALL ; {', 'not an iri', 'http://ex/a\nb', 'http://ex/"x']) {
-      expect(() => protectedNodeAsk({ ...base, ids: [bad] })).toThrow(/Invalid node id/);
-    }
+    const upd = Person.update({ name: 'ok', secret: { id: SECRET_ID } }).for('http://ex/p1').toJSON();
+    expect((await call(base, '@_linked/server', 'updateQuery', [upd], ME)).status).toBe(200);
+    const del = Person.delete('http://ex/p1').toJSON();
+    expect((await post(`${base}/api/delete`, { query: del }, ME)).status).toBe(200);
   });
 });
 

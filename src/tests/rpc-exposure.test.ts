@@ -9,7 +9,7 @@ import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 import { callable, declareInternal, internal } from '@_linked/server-utils/utils/callable';
 import { getCallContext } from '@_linked/server-utils/utils/CallContext';
-import { registerProtectedShapes } from '@_linked/server-utils/utils/QueryAccess';
+import { withAccess } from '@_linked/server-utils/utils/QueryAccess';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
@@ -115,6 +115,13 @@ class TestProvider extends BackendProvider {
     return (this.lincdServer as any).callBackendMethod('pkg', 'contextKind', []);
   }
 
+  @callable('public')
+  async readSecrets() {
+    // a query the provider runs itself, not one the client built
+    await (RpcSecret as any).select((s: any) => s.token);
+    return 'read';
+  }
+
   setupAfterControllers() {}
 
   dispose() {
@@ -154,8 +161,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   setRpcExposureMode(undefined);
-  registerProtectedShapes([], { deny: 'all', owner: 'rpc-test' });
-  registerProtectedShapes([], { deny: 'write', owner: 'rpc-test' });
+  LinkedStorage.unsetDatasetForShape(RpcSecret);
+  LinkedStorage.unsetDatasetForShape(RpcPerson);
   jest.restoreAllMocks();
   await Promise.all(
     servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve())))
@@ -530,12 +537,26 @@ describe('generic query plane', () => {
     expect((await call(base, '@_linked/server', 'selectQuery', [plain()])).status).toBe(401);
   });
 
+  // A store that records what reaches it, with an access rule.
+  const store = (access: any) =>
+    withAccess(
+      {
+        init: async () => {},
+        selectQuery: async (q: any) => (received.push(q), []),
+        createQuery: async (q: any) => (received.push(q), {}),
+        updateQuery: async (q: any) => (received.push(q), {}),
+        deleteQuery: async (q: any) => (received.push(q), {}),
+        askQuery: async (q: any) => (received.push(q), false),
+      } as any,
+      access
+    );
+
   it.each([
     ['a direct select', direct],
     ['a nested traversal', nested],
     ['a cast', cast],
-  ])('answers 403 for %s of a protected shape', async (_label, query) => {
-    registerProtectedShapes([RpcSecret], { deny: 'all', owner: 'rpc-test' });
+  ])("answers 403 for %s of a shape in a read:'none' store", async (_label, query) => {
+    LinkedStorage.setDatasetForShapes(store({ read: 'none', write: 'none' }), RpcSecret);
     const base = await listen(makeLinkedServer());
     const res = await call(base, '@_linked/server', 'selectQuery', [query()], 'http://ex/u');
     expect(res.status).toBe(403);
@@ -544,8 +565,8 @@ describe('generic query plane', () => {
     expect(received).toHaveLength(0);
   });
 
-  it("answers 403 for a write to a deny:'write' shape, but allows reading it", async () => {
-    registerProtectedShapes([RpcPerson], { deny: 'write', owner: 'rpc-test' });
+  it("answers 403 for a write to a write:'none' store, but allows reading it", async () => {
+    LinkedStorage.setDatasetForShapes(store({ write: 'none' }), RpcPerson);
     const base = await listen(makeLinkedServer());
     const del = Person.delete('http://ex/p1').toJSON();
     const upd = Person.update({ name: 'x' }).for('http://ex/p1').toJSON();
@@ -554,13 +575,51 @@ describe('generic query plane', () => {
     expect((await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/u')).status).toBe(200);
   });
 
+  it('lets a function rule decide, with the caller and the query', async () => {
+    const seen: any[] = [];
+    LinkedStorage.setDatasetForShapes(
+      store({
+        read: (ctx: any) => (seen.push(ctx), ctx.linkedAuth?.userAccount?.id === 'http://ex/alice'),
+        write: () => false,
+      }),
+      RpcPerson
+    );
+    const base = await listen(makeLinkedServer());
+    expect((await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/alice')).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/bob')).status).toBe(403);
+    expect((await call(base, '@_linked/server', 'selectQuery', [plain()])).status).toBe(401);
+    const upd = Person.update({ name: 'x' }).for('http://ex/p1').toJSON();
+    expect((await call(base, '@_linked/server', 'updateQuery', [upd], 'http://ex/alice')).status).toBe(403);
+    expect(seen[0].operation).toBe('select');
+    expect(seen[0].shapes.has((RpcPerson as any).shape.id)).toBe(true);
+    expect(received).toHaveLength(1);
+  });
+
+  it('needs every store a query maps to to allow it', async () => {
+    LinkedStorage.setDatasetForShapes(store({ read: 'session' }), RpcPerson);
+    LinkedStorage.setDatasetForShapes(store({ read: () => false }), RpcSecret);
+    const base = await listen(makeLinkedServer());
+    expect((await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/u')).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'selectQuery', [nested()], 'http://ex/u')).status).toBe(403);
+    expect((await call(base, '@_linked/server', 'selectQuery', [cast()], 'http://ex/u')).status).toBe(403);
+    expect(received).toHaveLength(1);
+  });
+
   it('applies the same rules on the /api routes', async () => {
-    registerProtectedShapes([RpcSecret], { deny: 'all', owner: 'rpc-test' });
+    LinkedStorage.setDatasetForShapes(store({ read: 'none' }), RpcSecret);
     const base = await listen(makeLinkedServer());
     const ok = await post(`${base}/api/select`, { query: plain() }, 'http://ex/u');
     expect(ok.status).toBe(200);
     const refused = await post(`${base}/api/select`, { query: nested() }, 'http://ex/u');
     expect(refused.status).toBe(403);
+  });
+
+  it('does not apply to queries a provider runs while serving a request', async () => {
+    LinkedStorage.setDatasetForShapes(store({ read: 'none', write: 'none' }), RpcSecret);
+    const base = await listen(makeLinkedServer());
+    const res = await call(base, 'pkg', 'readSecrets', [], 'http://ex/u');
+    expect(res.status).toBe(200);
+    expect(received).toHaveLength(1);
   });
 
   it('refuses anonymous raw SPARQL in every mode', async () => {
@@ -572,7 +631,7 @@ describe('generic query plane', () => {
   });
 
   it('runs local queries outside a request without checks', async () => {
-    registerProtectedShapes([RpcSecret], { deny: 'all', owner: 'rpc-test' });
+    LinkedStorage.setDatasetForShapes(store({ read: 'none' }), RpcSecret);
     const server = makeLinkedServer();
     await expect(server.callBackendMethod('@_linked/server', 'selectQuery', [direct()])).resolves.toEqual([]);
   });

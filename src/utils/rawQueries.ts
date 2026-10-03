@@ -1,9 +1,9 @@
 /**
  * Who may run raw SPARQL through the generic query plane (`/api/select-raw`).
  *
- * Raw SPARQL cannot be analysed for the shapes it touches, so the protected
- * shapes and query authorizers of `@_linked/server-utils/utils/QueryAccess`
- * do not apply to it. This one setting decides instead:
+ * Raw SPARQL cannot be analysed for the shapes it touches, so the per-store
+ * access rules of `@_linked/server-utils/utils/QueryAccess` do not apply to
+ * it. This one setting decides instead:
  *
  * - `'session'` (the default): any signed-in session may run it; 401 without one.
  * - `'off'`: every raw query is refused (403).
