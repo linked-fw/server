@@ -20,6 +20,7 @@ import {
   type QueryOperation,
 } from '@_linked/server-utils/utils/QueryAccess';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
+import { getRawQueriesMode } from './rawQueries.js';
 import { getRpcExposureMode } from './rpcExposure.js';
 
 /** The DSL-JSON tag of a query-context reference (`CONTEXT_REF_KEY` in core). */
@@ -212,7 +213,7 @@ export async function authorizeGenericQuery(
   });
 }
 
-/** Check a raw SPARQL query; see `registerRawQueryAuthorizer`. */
+/** Check a raw SPARQL query against the `rawQueries` setting (see utils/rawQueries). */
 export async function authorizeRawQuery(query: unknown, endpoint: string): Promise<void> {
   if (typeof query !== 'string') {
     throw new ServerCallError(400, 'Invalid query');
@@ -222,6 +223,7 @@ export async function authorizeRawQuery(query: unknown, endpoint: string): Promi
     query,
     ir: undefined,
     raw: true,
+    rawQueries: getRawQueriesMode(),
     mode: getRpcExposureMode(),
     endpoint,
   });

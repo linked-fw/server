@@ -223,10 +223,8 @@ const undeclaredWarnings = () =>
 
 import fs from 'fs';
 import os from 'os';
-import { createHmac } from 'crypto';
 import path from 'path';
 import { SparqlDataset } from '@_linked/core/sparql/SparqlDataset';
-import { registerRawQueryAuthorizer } from '@_linked/server-utils/utils/QueryAccess';
 import { runWithCallContext } from '@_linked/server-utils/utils/CallContext';
 import { enterRequestContext, mountUploads } from '../shapes/LinkedServer.js';
 import {
@@ -236,6 +234,7 @@ import {
 } from '../utils/queryPlane.js';
 import { getQueryContext, setQueryContext } from '@_linked/core/queries/QueryContext';
 import { logSafe } from '../utils/rpcExposure.js';
+import { getRawQueriesMode, setRawQueriesMode } from '../utils/rawQueries.js';
 
 /**
  * A SPARQL dataset that records every query it is sent. An ASK answers `true`
@@ -267,9 +266,9 @@ class CapturingSparql extends (SparqlDataset as any) {
   }
 }
 
-const rawCleanups: (() => void)[] = [];
 afterEach(() => {
-  for (const off of rawCleanups.splice(0)) off();
+  setRawQueriesMode(undefined);
+  delete process.env.LINKED_RAW_QUERIES;
   setProtectedNodeProbe(undefined);
 });
 
@@ -559,89 +558,51 @@ describe('raw SPARQL', () => {
   });
   const q = { query: 'SELECT ?t WHERE { ?s <http://example.org/hardening-test/token> ?t }' };
 
-  it('is refused, anonymous or signed in, in warn mode, despite deny:all', async () => {
-    registerProtectedShapes([RpcSecret], { deny: 'all', owner: 'rpc-test' });
-    const base = await listen(makeLinkedServer());
-    expect((await post(`${base}/api/select-raw`, q)).status).toBe(403);
-    expect((await post(`${base}/api/select-raw`, q, ME)).status).toBe(403);
-    expect(ds.sparql).toHaveLength(0);
-  });
-
-  it('is answered when a raw query authorizer accepts it', async () => {
-    const seen: any[] = [];
-    rawCleanups.push(
-      registerRawQueryAuthorizer(
-        (ctx) => {
-          seen.push(ctx);
-          if (ctx.linkedAuth?.userAccount?.id !== ME) {
-            throw new ServerCallError(403, 'Query not permitted');
-          }
-        },
-        { owner: 'rpc-test' }
-      )
-    );
-    const base = await listen(makeLinkedServer());
-    expect((await post(`${base}/api/select-raw`, q, ME)).status).toBe(200);
-    expect(ds.sparql).toEqual(['SELECT:: ' + q.query]);
-    expect(seen[0].query).toBe(q.query);
-    expect((await post(`${base}/api/select-raw`, q, 'http://ex/other')).status).toBe(403);
-    expect(ds.sparql).toHaveLength(1);
-  });
-
-  // A server-to-server caller without a session, admitted by a raw authorizer
-  // that verifies an HMAC over the exact request body.
-  const SECRET = 'raw-test-secret';
-  const sign = (bytes: string | Uint8Array) =>
-    createHmac('sha256', SECRET).update(bytes).digest('hex');
-  const signedPost = (base: string, body: string, signature: string) =>
-    fetch(`${base}/api/select-raw`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-test-signature': signature },
-      body,
-    }).then((res) => res.status);
-
   for (const mode of ['warn', 'enforce'] as const) {
-    it(`admits a signed caller without a session in ${mode} mode, on the bytes it sent`, async () => {
+    it(`is answered for a signed-in session by default (${mode})`, async () => {
       setRpcExposureMode(mode);
-      const seen: any[] = [];
-      rawCleanups.push(
-        registerRawQueryAuthorizer(
-          (ctx) => {
-            seen.push(ctx);
-            if (ctx.linkedAuth?.userAccount) return;
-            const signature = ctx.request?.headers?.['x-test-signature'];
-            if (!ctx.rawBody || signature !== sign(ctx.rawBody)) {
-              throw new ServerCallError(401, 'Authentication required');
-            }
-          },
-          { owner: 'rpc-test' }
-        )
-      );
       const base = await listen(makeLinkedServer());
-      // whitespace the parsed body loses: the signature is over the bytes
-      const body = `{ "query" : ${JSON.stringify(q.query)} }`;
-      expect(await signedPost(base, body, sign(body))).toBe(200);
-      expect(seen[0].linkedAuth).toBeUndefined();
-      expect(Buffer.from(seen[0].rawBody).toString()).toBe(body);
-      expect(seen[0].body).toEqual(q);
+      expect((await post(`${base}/api/select-raw`, q, ME)).status).toBe(200);
       expect(ds.sparql).toEqual(['SELECT:: ' + q.query]);
-
-      expect(await signedPost(base, body, sign(JSON.stringify(q)))).toBe(401);
-      expect(await signedPost(base, body, '')).toBe(401);
-      expect((await post(`${base}/api/select-raw`, q)).status).toBe(401);
-      expect(ds.sparql).toHaveLength(1);
     });
 
-    it(`still refuses a signed caller without a session in ${mode} mode when no raw authorizer is registered`, async () => {
+    it(`is refused without a session (${mode})`, async () => {
       setRpcExposureMode(mode);
       const base = await listen(makeLinkedServer());
-      const body = JSON.stringify(q);
-      expect(await signedPost(base, body, sign(body))).toBe(403);
+      expect((await post(`${base}/api/select-raw`, q)).status).toBe(401);
+      expect(ds.sparql).toHaveLength(0);
+    });
+
+    it(`is refused, signed in or not, when rawQueries is 'off' (${mode})`, async () => {
+      setRpcExposureMode(mode);
+      setRawQueriesMode('off');
+      const base = await listen(makeLinkedServer());
+      expect((await post(`${base}/api/select-raw`, q, ME)).status).toBe(403);
+      expect((await post(`${base}/api/select-raw`, q)).status).toBe(403);
       expect(ds.sparql).toHaveLength(0);
     });
   }
 
-  it('keeps the raw bytes for /api/select-raw only', async () => {
+  it('reads LINKED_RAW_QUERIES when the config does not set it', async () => {
+    expect(getRawQueriesMode()).toBe('session');
+    process.env.LINKED_RAW_QUERIES = 'off';
+    expect(getRawQueriesMode()).toBe('off');
+    const base = await listen(makeLinkedServer());
+    expect((await post(`${base}/api/select-raw`, q, ME)).status).toBe(403);
+    // the config wins over the environment
+    setRawQueriesMode('session');
+    expect(getRawQueriesMode()).toBe('session');
+  });
+
+  it('turns raw queries off for an invalid value', () => {
+    process.env.LINKED_RAW_QUERIES = 'open';
+    expect(getRawQueriesMode()).toBe('off');
+    delete process.env.LINKED_RAW_QUERIES;
+    setRawQueriesMode('everyone');
+    expect(getRawQueriesMode()).toBe('off');
+  });
+
+  it('keeps no raw request body', async () => {
     const seen: any[] = [];
     const app = express();
     app.use(createJsonBodyParser());
@@ -654,11 +615,8 @@ describe('raw SPARQL', () => {
     });
     servers.push(s);
     const base = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
-    await post(`${base}/api/select-raw?x=1`, q);
-    await post(`${base}/api/select`, q);
-    await post(`${base}/call/@_linked/server/selectQuery`, { args: [] });
-    expect(Buffer.from(seen[0]).toString()).toBe(JSON.stringify(q));
-    expect(seen.slice(1)).toEqual([undefined, undefined]);
+    await post(`${base}/api/select-raw`, q);
+    expect(seen).toEqual([undefined]);
   });
 });
 
