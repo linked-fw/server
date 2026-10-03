@@ -50,11 +50,12 @@ export default class LincdServerBackendProvider extends BackendProvider {
   // decides the target dataset. The store instance never participated.
 
   //
-  // Every query is checked against the generic-plane rules first (session,
-  // protected shapes and nodes, registered authorizers): see utils/queryPlane.
-  // The store runs the builder that was checked. They are declared 'public'
-  // because that check, not the RPC layer, decides whether a session is
-  // required (always for mutations; for reads it follows `rpcExposure`).
+  // Every query is checked first against the access rules of the stores it
+  // maps to, declared in the app's storage config (`withAccess`; a store with
+  // no rule requires a session): see utils/queryPlane. INTERIM model, to be
+  // rethought. The store runs the builder that was checked. They are declared
+  // 'public' because that check, not the RPC layer, decides whether a session
+  // is required.
 
   @callable('public')
   async selectQuery(json: any) {
