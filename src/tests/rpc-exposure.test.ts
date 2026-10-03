@@ -563,12 +563,12 @@ describe('generic query plane', () => {
     expect(refused.status).toBe(403);
   });
 
-  it('refuses raw SPARQL in every mode without a raw query authorizer', async () => {
+  it('refuses anonymous raw SPARQL in every mode', async () => {
     const base = await listen(makeLinkedServer());
     const q = { query: 'SELECT * WHERE { ?s ?p ?o }' };
-    expect((await post(`${base}/api/select-raw`, q, 'http://ex/u')).status).toBe(403);
+    expect((await post(`${base}/api/select-raw`, q)).status).toBe(401);
     setRpcExposureMode('enforce');
-    expect((await post(`${base}/api/select-raw`, q, 'http://ex/u')).status).toBe(403);
+    expect((await post(`${base}/api/select-raw`, q)).status).toBe(401);
   });
 
   it('runs local queries outside a request without checks', async () => {

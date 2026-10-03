@@ -170,6 +170,7 @@ import {
   setRpcExposureMode,
   warnUndeclaredCall,
 } from '../utils/rpcExposure.js';
+import { setRawQueriesMode } from '../utils/rawQueries.js';
 
 //prevent errors in node.js when (s)css files are imported in js
 const isProduction = process.env.NODE_ENV === 'production';
@@ -522,6 +523,8 @@ export class LinkedServer extends Shape {
     this.initPackage();
     // 'warn' (default) or 'enforce'; see utils/rpcExposure.
     setRpcExposureMode((this.config?.server as any)?.rpcExposure);
+    // 'session' (default) or 'off'; see utils/rawQueries.
+    setRawQueriesMode((this.config?.server as any)?.rawQueries);
     // Static assets should come from the static store URL (versioned path),
     // not the upload store URL. An explicit STATIC_ACCESS_URL still wins;
     // otherwise the release manifest `linked build-app` wrote next to the

@@ -169,8 +169,8 @@ export class LincdAPI extends Shape {
   }
 
   async post_select_raw({ query }) {
-    // A raw SPARQL string cannot be analysed for the shapes it touches: it is
-    // refused unless the app registers a raw query authorizer.
+    // A raw SPARQL string cannot be analysed for the shapes it touches: the
+    // `rawQueries` setting decides (a session by default, or off).
     await authorizeRawQuery(query, 'api/select-raw');
     this.checkRawQuerySupport();
     return (LinkedStorage.getDefaultDataset() as unknown as SPARQLStore).rawQuery(
