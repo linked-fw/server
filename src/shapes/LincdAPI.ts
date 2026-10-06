@@ -4,8 +4,6 @@ import { server } from '../ontologies/server.js';
 import { JSONParser } from '@_linked/server-utils/utils/JSONParser';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
-import { cached } from '@_linked/core/utils/cached';
-import { getShapeIndex, ShapeDetails } from '../utils/Shapes.js';
 import { SparqlDataset as SPARQLStore } from '@_linked/core/sparql/SparqlDataset';
 import {
   authorizeGenericQuery,
@@ -25,15 +23,6 @@ function isStatusError(error: any): error is { status: number; message: string }
   );
 }
 
-const cacheTime = process.env.NODE_ENV === 'development' ? 0 : Infinity;
-export type ShapeSummary = {
-  id: string;
-  label: string;
-  description: string;
-  target: { id: string };
-  extends?: { id: string };
-  numInstances: number;
-};
 // Named explicitly: tsc emits `let X = class X`, and any later esbuild pass over that JS (Vite's
 // SSR `define` replacement runs one on every file mentioning a defined `process.env.*`) renames
 // the inner binding to `X2`, which would otherwise become this shape's IRI.
@@ -58,8 +47,7 @@ export class LincdAPI extends Shape {
     }
 
     // The query routes (`post_*`) check access themselves, through
-    // utils/queryPlane. The `get_*` routes describe shapes and stay reachable:
-    // apps read each other's `/api/all-shapes` server to server.
+    // utils/queryPlane.
     try {
       const result = await this[localMethod](body, request, response);
       if (typeof result !== 'undefined' || !response.headersSent) {
@@ -78,73 +66,6 @@ export class LincdAPI extends Shape {
         response.status(500).json({ error: message });
       }
     }
-  }
-
-  get_shape_details({
-    shapes,
-  }: {
-    shapes: string[];
-  }): Record<string, ShapeDetails> {
-    return cached(
-      () => {
-        const shapeIndex = getShapeIndex();
-        const filteredShapeIndex = {};
-        for (const shapeId of shapes) {
-          if (shapeIndex[shapeId]) {
-            filteredShapeIndex[shapeId] = shapeIndex[shapeId];
-          }
-        }
-        return filteredShapeIndex;
-      },
-      [shapes],
-      cacheTime
-    );
-  }
-
-  get_all_shapes(): Promise<{
-    shapes: Record<string, ShapeDetails>;
-    defaultGraph: string;
-  }> {
-    return cached(
-      async () => {
-        const shapeIndex = getShapeIndex();
-
-        const typesWithInstances = new Map<string, number>();
-        this.checkRawQuerySupport();
-        await (LinkedStorage.getDefaultDataset() as unknown as SPARQLStore)
-          .rawQuery(
-            `SELECT (COUNT(?s) AS ?count) ?type WHERE { ?s a ?type } GROUP BY ?type`
-          )
-          .then((results) => {
-            // rawQuery also types ASK results (a boolean envelope); this is a SELECT.
-            if (!results || !('results' in results)) return;
-            results.results.bindings.forEach((binding) => {
-              if (binding.type && binding.type.value) {
-                typesWithInstances.set(
-                  binding.type.value,
-                  parseInt(binding.count.value)
-                );
-              }
-            });
-          })
-          .catch(console.error);
-
-        const shapesWithInstances: Record<string, ShapeDetails> = {};
-        for (const shapeId in shapeIndex) {
-          const shape = shapeIndex[shapeId];
-          shapesWithInstances[shapeId] = {
-            ...shape,
-            numInstances: typesWithInstances.get(shape.targetClass?.id) || 0,
-          };
-        }
-        return {
-          shapes: shapesWithInstances,
-          defaultGraph: process.env.DATA_ROOT,
-        };
-      },
-      [],
-      cacheTime
-    );
   }
 
   async post_select({ query }) {

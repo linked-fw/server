@@ -433,11 +433,10 @@ describe('internal methods', () => {
   it('can be declared from outside on an imported provider class', async () => {
     const key = Symbol.for('@_linked/server-utils:internal');
     const base = await listen(makeLinkedServer());
-    const before = await call(base, '@_linked/server', 'getShapes');
+    const before = await call(base, '@_linked/server', 'selectQuery', [{}]);
     expect(before.status).not.toBe(501);
-    declareInternal(LincdServerBackendProvider, ['getShapes', 'selectQuery']);
+    declareInternal(LincdServerBackendProvider, ['selectQuery']);
     try {
-      expect((await call(base, '@_linked/server', 'getShapes')).status).toBe(501);
       // wins over the class's own @callable('public'), with a warning
       expect((await call(base, '@_linked/server', 'selectQuery', [{}])).status).toBe(501);
       expect(
@@ -446,7 +445,7 @@ describe('internal methods', () => {
     } finally {
       delete (LincdServerBackendProvider as any)[key];
     }
-    expect((await call(base, '@_linked/server', 'getShapes')).status).not.toBe(501);
+    expect((await call(base, '@_linked/server', 'selectQuery', [{}])).status).not.toBe(501);
   });
 });
 
@@ -665,9 +664,8 @@ describe('server-side rendering', () => {
 });
 
 describe('@_linked/server default provider', () => {
-  it('keeps getShapes internal: no client calls it, /api/all-shapes serves the index', () => {
+  it('exposes the query methods publicly', () => {
     const provider = new LincdServerBackendProvider({}, makeLinkedServer());
-    expect(resolveCallable(provider, 'getShapes').status).toBe('undeclared');
     for (const m of ['selectQuery', 'askQuery', 'createQuery', 'updateQuery', 'deleteQuery']) {
       expect(resolveCallable(provider, m)).toMatchObject({ status: 'callable', level: 'public' });
     }

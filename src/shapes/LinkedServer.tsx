@@ -154,7 +154,6 @@ import {
   ssrCssInlineUrls,
   ssrCssScope,
 } from '../utils/ssrCss.js';
-import { indexShapesIntoMemory } from '../utils/Shapes.js';
 import { materializeShapes } from '../utils/syncShapes.js';
 import {
   installSpaFallback,
@@ -423,7 +422,6 @@ export class LinkedServer extends Shape {
 
     await this.initBackendProviders();
 
-    await indexShapesIntoMemory();
     await this.materializeShapesIntoStore();
     return this;
   }
@@ -620,7 +618,6 @@ export class LinkedServer extends Shape {
     // before controllers
     await this.initBackendProviders();
 
-    await indexShapesIntoMemory();
     await this.materializeShapesIntoStore();
 
     //START OF EXPRESS ROUTES AND MIDDLEWARE
@@ -2572,8 +2569,11 @@ export class LinkedServer extends Shape {
 }
 
 /**
- * Register the RPC routes (`/call/...`) and the `LincdAPI` routes (`/api/...`)
- * of `linkedServer` on an express app.
+ * Register the RPC routes (`/call/...`) and the `LincdAPI` routes (`POST /api/...`)
+ * of `linkedServer` on an express app. `LincdAPI` answers POST only: its GET
+ * routes (`/api/all-shapes`, `/api/shape-details`) served the in-memory shape
+ * index, which is gone, so no `GET /api/...` is mounted and those paths are left
+ * to the app's own routes.
  *
  * `LinkedServer.start()` calls this; tests call it on a bare express app so they
  * drive exactly the routes a running server has.
@@ -2620,12 +2620,6 @@ export function registerCallRoutes(
     '/api/:method/:action?',
     server.handleErrorsJson(async (req, res) =>
       server.processAPICall(req, res, 'post')
-    )
-  );
-  app.get(
-    '/api/:method/:action?',
-    server.handleErrorsJson(async (req, res) =>
-      server.processAPICall(req, res, 'get')
     )
   );
 }
