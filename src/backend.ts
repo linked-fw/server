@@ -3,7 +3,6 @@ import { callable } from '@_linked/server-utils/utils/callable';
 import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { LocalFileStore } from './shapes/filestores/LocalFileStore.js';
-import { getShapeIndex } from './utils/Shapes.js';
 import { authorizeGenericQuery, toQueryBuilder } from './utils/queryPlane.js';
 import path from 'path';
 import fs from 'fs/promises';
@@ -23,13 +22,6 @@ export default class LincdServerBackendProvider extends BackendProvider {
         recursive: true,
       });
     }
-  }
-
-  // Not callable over RPC: no client calls it. Clients read the same index
-  // through LincdAPI's `/api/all-shapes` and `/api/shape-details`; backend code
-  // can still reach it with a local `Server.call`.
-  getShapes() {
-    return getShapeIndex();
   }
 
   // ── BackendAPIStore query execution ──────────────────────────────────────

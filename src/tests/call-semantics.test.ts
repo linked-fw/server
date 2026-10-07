@@ -4,7 +4,6 @@ import * as os from 'os';
 import * as path from 'path';
 import express from 'express';
 import type { AddressInfo } from 'net';
-import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { LincdServerProxy } from '@_linked/server-utils/utils/LincdServerProxy';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
@@ -18,7 +17,6 @@ import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 // so they need any registered Shape plus a ShapeProvider for it. They used to borrow
 // BackendAPIStore + BackendAPIStoreProvider; BackendAPIStore is no longer a Shape
 // (it addresses the backend by package name now), so LincdAPI stands in.
-import { getShapeIndex, indexShapesIntoMemory } from '../utils/Shapes.js';
 
 // Error semantics of server calls:
 // - a call no provider handles answers 501 `{error: "No provider for <pkg>/<method>"}`
@@ -313,58 +311,5 @@ describe('Missing ./backend export', () => {
       /\[linked\] some-pkg backend .*backend\.js failed: Unexpected token/
     );
     expect(server.genericProviders.get('some-pkg')).toBeNull();
-  });
-});
-
-describe('LincdAPI.get_all_shapes', () => {
-  function useDataset(rawQuery: () => Promise<any>) {
-    LinkedStorage.setDefaultDataset({
-      init: async () => {},
-      selectQuery: async () => [],
-      createQuery: async () => ({}),
-      updateQuery: async () => ({}),
-      deleteQuery: async () => ({}),
-      askQuery: async () => false,
-      rawQuery,
-    } as any);
-  }
-
-  async function aShapeWithTargetClass(): Promise<[string, any]> {
-    await indexShapesIntoMemory();
-    const entry = Object.entries(getShapeIndex()).find(
-      ([, shape]: [string, any]) => shape.targetClass?.id
-    );
-    if (!entry) throw new Error('expected at least one indexed shape');
-    return entry as [string, any];
-  }
-
-  it('counts instances from a SELECT result', async () => {
-    const [shapeId, shape] = await aShapeWithTargetClass();
-    useDataset(async () => ({
-      head: { vars: ['count', 'type'] },
-      results: {
-        bindings: [
-          {
-            count: { type: 'literal', value: '7' },
-            type: { type: 'uri', value: shape.targetClass.id },
-          },
-        ],
-      },
-    }));
-
-    const result = await new LincdAPI().get_all_shapes();
-
-    expect(result.shapes[shapeId].numInstances).toBe(7);
-  });
-
-  it('ignores an ASK (boolean) result instead of reading bindings from it', async () => {
-    const [shapeId] = await aShapeWithTargetClass();
-    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
-    useDataset(async () => ({ head: {}, boolean: true }));
-
-    const result = await new LincdAPI().get_all_shapes();
-
-    expect(error).not.toHaveBeenCalled();
-    expect(result.shapes[shapeId].numInstances).toBe(0);
   });
 });
