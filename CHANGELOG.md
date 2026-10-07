@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.23.1
+
+### Patch Changes
+
+- [#146](https://github.com/linked-fw/server/pull/146) [`93c8692`](https://github.com/linked-fw/server/commit/93c8692b9fb5eb89e222680dda8f78d7a850f1ee) Thanks [@flyon](https://github.com/flyon)! - Remove unused dependency n3
+
 ## 2.23.0
 
 ### Minor Changes
