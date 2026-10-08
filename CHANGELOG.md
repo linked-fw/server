@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.1
+
+### Patch Changes
+
+- [#151](https://github.com/linked-fw/server/pull/151) [`aed311b`](https://github.com/linked-fw/server/commit/aed311b190fba284550dc9f91d32fbbb6cc2dcb8) Thanks [@flyon](https://github.com/flyon)! - Remove unused dependencies: open, react-error-boundary, webpack, webpack-dev-middleware, webpack-hot-middleware, cross-env
+
 ## 2.24.0
 
 ### Minor Changes
