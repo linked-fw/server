@@ -11,8 +11,15 @@
  * Building the call with the Function constructor keeps it out of the source
  * any transform parses, so it always resolves through Node's ESM loader and
  * its cache: one instance per resolved file.
+ *
+ * The source carries a per-evaluation nonce. V8 reuses compiled
+ * Function-constructor code by source text across vm contexts, and a dynamic
+ * import in reused code resolves against the context that compiled it first —
+ * under a test runner that runs several files in one worker, that is an
+ * earlier, torn-down file. A unique source gives each evaluation of this
+ * module its own compilation.
  */
 export const nativeImport = new Function(
   'specifier',
-  'return import(specifier);'
+  `return import(specifier); // ${Date.now()}-${Math.random()}`
 ) as (specifier: string) => Promise<any>;
