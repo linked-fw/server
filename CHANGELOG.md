@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.2
+
+### Patch Changes
+
+- [#152](https://github.com/linked-fw/server/pull/152) [`43b7ec2`](https://github.com/linked-fw/server/commit/43b7ec24e2451f35a8c19d0c56b51a8161272e0b) Thanks [@flyon](https://github.com/flyon)! - Installed linked packages with a backend are now loaded once, through Node. Under an app's dev SSR runner the backend loader's `import()` was rewritten by Vite's SSR transform, so each installed package's backend was evaluated a second time and whichever copy registered last owned the shape registry — properties added to a shape by another package could go missing. The loader now uses a native `import()` the transform cannot rewrite.
+
 ## 2.24.1
 
 ### Patch Changes
