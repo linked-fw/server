@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.3
+
+### Patch Changes
+
+- [#155](https://github.com/linked-fw/server/pull/155) [`c0fcc6f`](https://github.com/linked-fw/server/commit/c0fcc6f42c8ef611ceca5ee997d3f09b3aa890bd) Thanks [@flyon](https://github.com/flyon)! - Publish only the files consumers need; the tarball no longer includes `.changeset/`, `.gitattributes`, `.github/`, `docs/`, `jest.config.cjs`, `renovate.json` or tsconfig files.
+
 ## 2.24.2
 
 ### Patch Changes
