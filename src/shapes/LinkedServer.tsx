@@ -36,6 +36,7 @@ import {
 import type { IFileStore } from '@_linked/core/interfaces/IFileStore';
 import { getResizedImagesStore } from '../utils/resizedImagesPurpose.js';
 import { paint } from '../utils/paint.js';
+import { nativeImport } from '../utils/nativeImport.js';
 import { createJsonBodyParser } from '../utils/jsonBodyParser.js';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { autoLoadOntologyData } from '@_linked/core/utils/Package';
@@ -1029,10 +1030,12 @@ export class LinkedServer extends Shape {
 
   /**
    * Node's `import()`. Called with the absolute file URL of a resolved backend
-   * entry (see resolveBackendEntry), never a bare name.
+   * entry (see resolveBackendEntry), never a bare name. Goes through
+   * nativeImport so a dev SSR runner bundling this file cannot rewrite it into
+   * its own loader and evaluate the package a second time.
    */
   protected importModule(specifier: string): Promise<any> {
-    return import(/* @vite-ignore */ specifier);
+    return nativeImport(specifier);
   }
 
   /**
