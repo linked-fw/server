@@ -17,6 +17,11 @@
   "main": "lib/esm/index.js",
   "types": "index.d.ts",
   "license": "ISC",
+  "files": [
+    "lib",
+    "styles",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "start": "npm exec linked dev",
     "test": "NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs",
