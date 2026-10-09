@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.8
+
+### Patch Changes
+
+- [#165](https://github.com/linked-fw/server/pull/165) [`ec659e5`](https://github.com/linked-fw/server/commit/ec659e5f01c3f893a0b7cf9472d9d39eb774acf9) Thanks [@flyon](https://github.com/flyon)! - The `build` script is now `linked build`, the same build CI and the release workflow already run, so a local build produces the published `lib/` (compiled output, copied `src` assets and rewritten ESM import specifiers). The `build-esm` and `copy-to-lib` scripts and the `copyfiles` dev dependency are removed, and the `@_linked/cli` dependency floor is raised to `^1.45.5`.
+
 ## 2.24.7
 
 ### Patch Changes
