@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.7
+
+### Patch Changes
+
+- [#96](https://github.com/linked-fw/server/pull/96) [`e226be6`](https://github.com/linked-fw/server/commit/e226be6625f8814cc39074a8e35a1702537c117e) Thanks [@abdipramana](https://github.com/abdipramana)! - Honor `SaveFileOptions.preservePath` in `LocalFileStore` so locally published release artifacts retain their exact manifest object keys, including case, `@`, and repeated dashes. Unsafe absolute, Windows-style, empty-segment, and traversal paths are rejected, while ordinary uploads keep their existing filename sanitisation behavior.
+
 ## 2.24.6
 
 ### Patch Changes
