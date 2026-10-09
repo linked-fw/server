@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.4
+
+### Patch Changes
+
+- [#157](https://github.com/linked-fw/server/pull/157) [`bc45c55`](https://github.com/linked-fw/server/commit/bc45c55513730b0692365f0e53ae8554e91ac4ac) Thanks [@flyon](https://github.com/flyon)! - typescript is no longer installed into consumers by this package: it was listed as a runtime dependency, but only the build uses the compiler, so it moved to devDependencies.
+
 ## 2.24.3
 
 ### Patch Changes
