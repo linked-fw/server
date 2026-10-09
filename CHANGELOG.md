@@ -1,5 +1,13 @@
 # @\_linked/server
 
+## 2.24.5
+
+### Patch Changes
+
+- [#159](https://github.com/linked-fw/server/pull/159) [`d04cf38`](https://github.com/linked-fw/server/commit/d04cf384c25c26bab35ea5e52f66c162ce5c9a49) Thanks [@flyon](https://github.com/flyon)! - `react` and `react-dom` are now peer dependencies (`^19.0.0`) instead of runtime dependencies. The server renders the application with the application's own React, so it must share one copy with the app; declaring them as dependencies could install a second copy alongside the app's and break server-side rendering (invalid hook calls, mismatched contexts).
+
+  Apps must declare `react` and `react-dom` themselves — apps created from the app template already do, so no change is needed there. npm installs missing peers automatically.
+
 ## 2.24.4
 
 ### Patch Changes
