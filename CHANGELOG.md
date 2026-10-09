@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.6
+
+### Patch Changes
+
+- [#161](https://github.com/linked-fw/server/pull/161) [`e3414ac`](https://github.com/linked-fw/server/commit/e3414ac3b25f4a700f9fe4369f8b226443beab85) Thanks [@flyon](https://github.com/flyon)! - Require sharp `^0.35.5`. The previous `^0.35.4` range still admitted 0.35.4, which bundles a librsvg affected by CVE-2026-96889 (GHSA-wq5f-xc86-pv6w). 0.35.5 ships libvips 8.18.7 / librsvg 2.63.2 and is the first release outside every open sharp advisory, including the libvips one (GHSA-f88m-g3jw-g9cj) and the libheif one (GHSA-rgj7-g3m4-5g8c).
+
 ## 2.24.5
 
 ### Patch Changes
