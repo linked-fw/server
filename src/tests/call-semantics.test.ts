@@ -7,11 +7,16 @@ import type { AddressInfo } from 'net';
 import { LincdServerProxy } from '@_linked/server-utils/utils/LincdServerProxy';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
-import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
+import {
+  isProviderClass,
+  LinkedServer,
+  registerCallRoutes,
+} from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
 import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
 import { packageName } from '../package.js';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
+import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 
 // These suites exercise LinkedServer's SHAPE-provider routing and error handling,
 // so they need any registered Shape plus a ShapeProvider for it. They used to borrow
@@ -311,5 +316,61 @@ describe('Missing ./backend export', () => {
       /\[linked\] some-pkg backend .*backend\.js failed: Unexpected token/
     );
     expect(server.genericProviders.get('some-pkg')).toBeNull();
+  });
+
+  it('constructs only the provider classes a backend entry exports', async () => {
+    installSomePkg(true);
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const helper = jest.fn();
+    class SomeBackendProvider extends BackendProvider {}
+    const server = linkedServerWithVite(new Error('unused'));
+    // What a backend entry like @_linked/auth's exports: the provider plus a
+    // string constant (SESSION_COOKIE_NAME) and, here, a plain function.
+    server.config.server.vite.ssrLoadModule = jest.fn(async () => ({
+      SESSION_COOKIE_NAME: 'linked.auth',
+      helper,
+      default: SomeBackendProvider,
+    }));
+
+    await server.indexPackageBackendProviders('some-pkg', false);
+
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(helper).not.toHaveBeenCalled();
+    expect(server.genericProviders.get('some-pkg')).toBeInstanceOf(SomeBackendProvider);
+  });
+});
+
+describe('isProviderClass', () => {
+  it('accepts BackendProvider and ShapeProvider subclasses', () => {
+    class Generic extends BackendProvider {}
+    class OfShape extends ShapeProvider {}
+    expect(isProviderClass(Generic)).toBe(true);
+    expect(isProviderClass(OfShape)).toBe(true);
+  });
+
+  it('accepts a subclass of a second copy of BackendProvider, by name', () => {
+    function BackendProvider() {}
+    function Copied() {}
+    Copied.prototype = Object.create(BackendProvider.prototype);
+    Copied.prototype.constructor = Copied;
+    expect(isProviderClass(Copied)).toBe(true);
+  });
+
+  it('accepts a class that only implements the hooks it needs', () => {
+    class DuckTyped {
+      setupBeforeControllers() {}
+    }
+    expect(isProviderClass(DuckTyped)).toBe(true);
+  });
+
+  it('rejects constants, plain functions and arrow functions', () => {
+    expect(isProviderClass('linked.auth')).toBe(false);
+    expect(isProviderClass(undefined)).toBe(false);
+    expect(isProviderClass(null)).toBe(false);
+    expect(isProviderClass({})).toBe(false);
+    expect(isProviderClass(() => {})).toBe(false);
+    expect(isProviderClass(function helper() {})).toBe(false);
   });
 });

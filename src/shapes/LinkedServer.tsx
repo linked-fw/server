@@ -78,6 +78,33 @@ function isShapeProvider(provider: any): boolean {
 }
 
 /**
+ * Whether an export of a package's backend entry is a provider class, and so
+ * is constructed at load. A backend entry may export more than its providers —
+ * auth exports SESSION_COOKIE_NAME, a string — and those are not ours to
+ * construct.
+ *
+ * A provider class is a class extending BackendProvider (ShapeProvider extends
+ * it). Like isShapeProvider, the check falls back to the class name, so a
+ * provider built against a second copy of server-utils still counts. Any other
+ * `class` is accepted too, as a provider that only implements the hooks it
+ * needs; a plain function, an arrow function or a non-function value is not.
+ */
+export function isProviderClass(value: unknown): boolean {
+  if (typeof value !== 'function' || !value.prototype) return false;
+  if (value === BackendProvider || value.prototype instanceof BackendProvider) {
+    return true;
+  }
+  for (
+    let proto = Object.getPrototypeOf(value.prototype);
+    proto && proto !== Object.prototype;
+    proto = Object.getPrototypeOf(proto)
+  ) {
+    if (proto.constructor?.name === 'BackendProvider') return true;
+  }
+  return /^class\b/.test(Function.prototype.toString.call(value));
+}
+
+/**
  * Call one provider's hook and contain its failure: a synchronous throw or a
  * rejection is logged, naming the package and the hook, and swallowed. Used
  * for hooks that run for every provider (boot lifecycle hooks and per-request
@@ -1556,6 +1583,9 @@ export class LinkedServer extends Shape {
       if (loaded) {
         for (const key of Object.keys(backendProviderExports)) {
           const providerClass = backendProviderExports[key];
+          // Only provider classes are constructed; any other export of the
+          // backend entry is left alone (see isProviderClass).
+          if (!isProviderClass(providerClass)) continue;
           let provider;
           //always send an instance of the express server
           //TODO: do not create an instance, just save the class and instantiate it when needed
