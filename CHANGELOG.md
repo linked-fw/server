@@ -1,5 +1,15 @@
 # @\_linked/server
 
+## 2.24.9
+
+### Patch Changes
+
+- [#171](https://github.com/linked-fw/server/pull/171) [`b0cd324`](https://github.com/linked-fw/server/commit/b0cd324137f83fa3b499c5765d7dd5ddbf7fa84f) Thanks [@flyon](https://github.com/flyon)! - Only construct the provider classes a package's backend entry exports. Every export used to be
+  passed to `new`, so a non-class export — `@_linked/auth`'s `SESSION_COOKIE_NAME` string — logged
+  `[linked] @_linked/auth SESSION_COOKIE_NAME constructor failed: providerClass is not a constructor`
+  at every boot. Constants, plain functions and arrow functions are now skipped silently; classes
+  extending `BackendProvider`, and any other `class`, are constructed as before.
+
 ## 2.24.8
 
 ### Patch Changes
