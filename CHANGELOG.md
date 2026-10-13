@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.10
+
+### Patch Changes
+
+- [#173](https://github.com/linked-fw/server/pull/173) [`3181adf`](https://github.com/linked-fw/server/commit/3181adfdd7609f32c6866e3733580b8059c2ce9e) Thanks [@flyon](https://github.com/flyon)! - At boot the server no longer tries to import a workspace linked package that has no JavaScript entry (no `main`, `module` or root `exports`), such as the pure-CSS `@_linked/css`. Before, a pure-CSS package checked out as a workspace member logged `Error loading '…': Failed to resolve entry for package` on every start. The new `hasModuleEntry(packageJson)` in `utils/linkedDependencies` makes that decision.
+
 ## 2.24.9
 
 ### Patch Changes
