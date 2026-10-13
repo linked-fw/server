@@ -49,6 +49,7 @@ import {pathToFileURL} from 'node:url';
 import { isFatalError } from '../utils/fatalError.js';
 import {
   discoverLinkedDependencies,
+  hasModuleEntry,
   isBundledBySsr,
   NODE_IMPORT_CONDITIONS,
   readInstalledPackage,
@@ -1414,6 +1415,16 @@ export class LinkedServer extends Shape {
   async indexLincdPackage(pkg: string, warnIfNotFound: boolean = false) {
     if (pkg === this.package.name) {
       return;
+    }
+    // A pure-CSS linked package has nothing to import whole.
+    const dir = this.linkedPackageDirs?.get(pkg);
+    if (dir) {
+      try {
+        const json = JSON.parse(
+          fsNative.readFileSync(path.join(dir, 'package.json'), 'utf-8')
+        );
+        if (!hasModuleEntry(json)) return;
+      } catch {}
     }
     try {
       // console.log(`🔍 Loading package: ${pkg}`);

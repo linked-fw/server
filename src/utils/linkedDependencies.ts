@@ -43,6 +43,28 @@ export function isLinkedPackageJson(json: any): boolean {
  * then each parent directory's `node_modules`. Returns null when it is not
  * installed (an optional dependency, say) rather than throwing.
  */
+/**
+ * Whether a package has a JavaScript entry the server can import: `main`,
+ * `module`, or an `exports` map with a root (`.`) entry or a single string.
+ * A linked package can be pure CSS (`@_linked/css`); importing that whole
+ * fails with "Failed to resolve entry", so the server skips it.
+ */
+export function hasModuleEntry(json: any): boolean {
+  if (!json) return false;
+  if (typeof json.main === 'string' || typeof json.module === 'string') {
+    return true;
+  }
+  const exp = json.exports;
+  if (typeof exp === 'string') return true;
+  if (exp && typeof exp === 'object') {
+    const keys = Object.keys(exp);
+    // Conditions only ({import, require, ...}) describe the root entry.
+    if (keys.length > 0 && keys.every((k) => !k.startsWith('.'))) return true;
+    return '.' in exp;
+  }
+  return false;
+}
+
 export function readInstalledPackage(
   name: string,
   fromDir: string
