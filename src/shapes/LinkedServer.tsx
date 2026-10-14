@@ -26,6 +26,7 @@ import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { autoLoadOntologyData } from '@_linked/core/utils/Package';
 import {
+  getAllShapeClasses,
   getShapeClass,
   getSuperShapesClasses,
 } from '@_linked/core/utils/ShapeClass';
@@ -200,7 +201,7 @@ export class LinkedServer extends Shape {
 
   /**
    * Materialize this server's registered shapes into the RDF store as SHACL
-   * (core `syncShapes` → pure `sh:NodeShape` + property shapes), so a running
+   * (core `syncShape` → pure `sh:NodeShape` + property shapes), so a running
    * app's app-data holds the shapes its instances validate/query against
    * (plan-010 T1e.2). This is the canonical, uniform reuse+create mechanism:
    * whatever shapes the app package registers (published re-exports + generated)
@@ -209,7 +210,7 @@ export class LinkedServer extends Shape {
    * Gated to servers whose DEFAULT dataset is a **concrete** materializable store
    * (detected via `rawQuery`) — i.e. an app pointing at its app-data FusekiStore.
    * CN's default is the context-routing `AppDataRouter` (no `rawQuery`; a bare
-   * `syncShapes` orphan-read would throw with no active project), so CN is skipped
+   * shape write would lack a concrete target), so CN is skipped
    * here — it materializes its own pinned native shapes in its storage config.
    */
   private async materializeShapesIntoStore(): Promise<void> {
@@ -226,19 +227,25 @@ export class LinkedServer extends Shape {
     const appData = LinkedStorage.getDefaultDataset();
     if (!appData) return;
     try {
-      const {syncShapes} = await import('@_linked/core');
-      // Explicit target: materialize EVERY registered shape into the app's own
-      // data store regardless of per-shape routing/pins — syncShapes(ds) threads
-      // ds through the orphan-read + every delete→recreate. (No reliance on
-      // "whatever the default resolves to per shape".)
-      const thunks = await syncShapes(appData as any);
+      const {syncShape} = await import('@_linked/core');
+      // App-data can have several legitimate shape producers (the app plus
+      // installed capabilities). Materialize only this process's registered
+      // shapes: a boot must never treat foreign shapes as orphans and sweep
+      // them from the shared dataset. `syncShape` retains the same targeted
+      // delete→recreate semantics without the store-wide orphan pass.
+      const thunks = [];
+      for (const [, shapeClass] of getAllShapeClasses()) {
+        const pkg = shapeClass?.packageName;
+        if (!shapeClass?.shape || !pkg || pkg === '@_linked/core') continue;
+        thunks.push(syncShape(shapeClass, appData as any));
+      }
       // Batched (not all-at-once) so we don't overwhelm Fuseki — the API hands
       // back unexecuted thunks precisely so the caller paces them.
       for (let i = 0; i < thunks.length; i += 8) {
         await Promise.all(thunks.slice(i, i + 8).map((run) => run()));
       }
       console.log(
-        `[LinkedServer] materialized ${thunks.length} shape(s) into app-data`,
+        `[LinkedServer] materialized ${thunks.length} registered shape(s) into app-data`,
       );
     } catch (err) {
       console.warn('[LinkedServer] shape materialization failed (non-fatal):', err);
