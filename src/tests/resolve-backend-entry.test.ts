@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { resolveBackendEntry } from '../utils/linkedDependencies.js';
+import {
+  resolveBackendEntry,
+  resolveDevBackendEntry,
+  resolveSourceBackendEntry,
+} from '../utils/linkedDependencies.js';
 
 let root: string;
 const touch = (rel: string) => {
@@ -102,5 +106,65 @@ describe('resolveBackendEntry', () => {
     expect(resolveBackendEntry(root, { main: 'dist/index.js' })).toBe(nextToMain);
     const top = touch('backend.js');
     expect(resolveBackendEntry(root, { main: 'dist/index.js' })).toBe(top);
+  });
+});
+
+describe('resolveDevBackendEntry (a package the dev Vite runner owns)', () => {
+  // The layout `linked create-package` writes: exports name only lib/esm.
+  const libOnlyExports = {
+    exports: {
+      '.': { types: './lib/esm/index.d.ts', import: './lib/esm/index.js' },
+      './*.js': { types: './lib/esm/*.d.ts', import: './lib/esm/*.js' },
+      './*': { types: './lib/esm/*.d.ts', import: './lib/esm/*.js' },
+    },
+  };
+
+  it('an unbuilt source workspace resolves to src/backend.ts', () => {
+    const src = touch('src/backend.ts');
+    touch('src/index.ts');
+    // What the server used to do: exports only, and lib/ is not there.
+    expect(
+      resolveBackendEntry(root, libOnlyExports, ['development', 'import', 'node', 'default'])
+    ).toBeNull();
+    expect(resolveDevBackendEntry(root, libOnlyExports)).toBe(src);
+  });
+
+  it('a built source workspace resolves to src too, as the Vite resolver does', () => {
+    const src = touch('src/backend.ts');
+    touch('lib/esm/backend.js');
+    expect(resolveDevBackendEntry(root, libOnlyExports)).toBe(src);
+  });
+
+  it('src/backend.tsx wins over src/backend.ts', () => {
+    touch('src/backend.ts');
+    const tsx = touch('src/backend.tsx');
+    expect(resolveSourceBackendEntry(root, libOnlyExports)).toBe(tsx);
+  });
+
+  it('maps a differently named lib/esm export target back to src', () => {
+    const src = touch('src/server/entry.ts');
+    const json = { exports: { './backend': { import: './lib/esm/server/entry.js' } } };
+    expect(resolveSourceBackendEntry(root, json)).toBe(src);
+    expect(resolveDevBackendEntry(root, json)).toBe(src);
+  });
+
+  it('a published lib-only package resolves to lib, as before', () => {
+    const lib = touch('lib/esm/backend.js');
+    expect(resolveSourceBackendEntry(root, libOnlyExports)).toBeNull();
+    expect(resolveDevBackendEntry(root, libOnlyExports)).toBe(lib);
+  });
+
+  it('a source package without a source backend falls back to its exports', () => {
+    touch('src/index.ts');
+    expect(resolveDevBackendEntry(root, libOnlyExports)).toBeNull();
+    const lib = touch('lib/esm/backend.js');
+    expect(resolveDevBackendEntry(root, libOnlyExports)).toBe(lib);
+  });
+
+  it('a package with src/ but without exports has no exports mapping to follow', () => {
+    touch('src/index.ts');
+    expect(resolveSourceBackendEntry(root, {})).toBeNull();
+    const src = touch('src/backend.ts');
+    expect(resolveSourceBackendEntry(root, {})).toBe(src);
   });
 });

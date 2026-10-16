@@ -194,17 +194,7 @@ export function resolveBackendEntry(
   pkgJson: any,
   conditions: readonly string[] = NODE_IMPORT_CONDITIONS
 ): string | null {
-  const exists = (rel: string) => {
-    const file = path.resolve(pkgRoot, rel);
-    // Never let an export target escape the package.
-    if (!file.startsWith(path.resolve(pkgRoot) + path.sep)) return null;
-    try {
-      return fs.statSync(file).isFile() ? file : null;
-    } catch {
-      return null;
-    }
-  };
-
+  const exists = (rel: string) => packageFile(pkgRoot, rel);
   const exportsField = pkgJson?.exports;
   if (exportsField === undefined || exportsField === null) {
     const candidates = ['backend.js', 'backend/index.js'];
@@ -218,7 +208,31 @@ export function resolveBackendEntry(
     }
     return null;
   }
+  return resolveBackendExport(exportsField, conditions, exists);
+}
 
+/** `<pkgRoot>/<rel>` when it is a file inside the package, else null. */
+function packageFile(pkgRoot: string, rel: string): string | null {
+  const file = path.resolve(pkgRoot, rel);
+  // Never let an export target escape the package.
+  if (!file.startsWith(path.resolve(pkgRoot) + path.sep)) return null;
+  try {
+    return fs.statSync(file).isFile() ? file : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The `./backend` subpath of an `exports` map, resolved per Node's
+ * PACKAGE_EXPORTS_RESOLVE (see resolveBackendEntry). `probe` turns a matched
+ * `./`-relative target into a file, or null when it does not resolve.
+ */
+function resolveBackendExport(
+  exportsField: any,
+  conditions: readonly string[],
+  probe: (rel: string) => string | null
+): string | null {
   // `"exports": "./x.js"`, an array, or a condition object at the top level
   // are all sugar for the "." subpath only.
   if (
@@ -260,7 +274,7 @@ export function resolveBackendEntry(
     if (typeof t === 'string') {
       if (!t.startsWith('./')) return null;
       const rel = patternMatch === null ? t : t.split('*').join(patternMatch);
-      return exists(rel);
+      return probe(rel);
     }
     if (Array.isArray(t)) {
       for (const item of t) {
@@ -281,6 +295,52 @@ export function resolveBackendEntry(
     return null;
   };
   return resolveTarget(target);
+}
+
+/**
+ * The SOURCE file a dev Vite runner loads for `<pkg>/backend` when the
+ * package is a source package — its real root has a `src/` directory, which is
+ * what makes `linked`'s Vite config register it as a workspace (cli
+ * `discoverWorkspaces` / `readSourcePackage`). Null when the package has no
+ * `src/` or no source backend; the caller then falls back to
+ * resolveBackendEntry (a built `lib/` copy, or nothing).
+ *
+ * Mirrors the cli's `resolveWorkspaceSpecifier` for the `./backend` subpath,
+ * which runs BEFORE `exports`: `src/backend.tsx`, `src/backend.ts`, then the
+ * package's own `exports` under `import`/`default` with a `./lib/esm/X.js`
+ * target mapped to `src/X.tsx` / `src/X.ts` (any other `./lib/esm/` target to
+ * the same path under src). So an unbuilt workspace, whose `exports` name only
+ * `lib/esm`, still has its backend found, and a built one reports the src file
+ * Vite actually evaluates rather than its stale `lib/`.
+ *
+ * Only meaningful when the dev Vite runner owns the package; Node (production,
+ * external packages) loads `lib/` and never sees src.
+ */
+export function resolveSourceBackendEntry(
+  pkgRoot: string,
+  pkgJson: any
+): string | null {
+  try {
+    if (!fs.statSync(path.join(pkgRoot, 'src')).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  for (const rel of ['src/backend.tsx', 'src/backend.ts']) {
+    const file = packageFile(pkgRoot, rel);
+    if (file) return file;
+  }
+  const exportsField = pkgJson?.exports;
+  if (exportsField === undefined || exportsField === null) return null;
+  const libPrefix = './lib/esm/';
+  return resolveBackendExport(exportsField, ['import'], (rel) => {
+    if (!rel.startsWith(libPrefix)) return null;
+    const sub = rel.slice(libPrefix.length);
+    if (/\.jsx?$/.test(sub)) {
+      const base = 'src/' + sub.replace(/\.jsx?$/, '');
+      return packageFile(pkgRoot, base + '.tsx') ?? packageFile(pkgRoot, base + '.ts');
+    }
+    return packageFile(pkgRoot, 'src/' + sub);
+  });
 }
 
 /** Node's PATTERN_KEY_COMPARE: < 0 means `a` is the more specific pattern. */
@@ -337,5 +397,25 @@ export function ssrNoExternalOf(vite: any): unknown {
   return (
     vite?.config?.ssr?.noExternal ??
     vite?.config?.environments?.ssr?.resolve?.noExternal
+  );
+}
+
+/**
+ * The backend entry of a package the dev Vite runner owns (see isBundledBySsr):
+ * its source backend when it is a source package (resolveSourceBackendEntry),
+ * otherwise what `exports` names under the `development` condition and Node's
+ * import conditions. A registry install has no src/, so it resolves exactly
+ * as before.
+ */
+export function resolveDevBackendEntry(
+  pkgRoot: string,
+  pkgJson: any
+): string | null {
+  return (
+    resolveSourceBackendEntry(pkgRoot, pkgJson) ??
+    resolveBackendEntry(pkgRoot, pkgJson, [
+      'development',
+      ...NODE_IMPORT_CONDITIONS,
+    ])
   );
 }

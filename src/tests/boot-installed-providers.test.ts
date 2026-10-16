@@ -8,6 +8,7 @@ import {
   discoverLinkedDependencies,
   isBundledBySsr,
   resolveBackendEntry,
+  resolveDevBackendEntry,
 } from '../utils/linkedDependencies.js';
 
 // A package INSTALLED into the app's node_modules (a real directory, not a
@@ -216,6 +217,37 @@ describe('boot indexes installed linked packages', () => {
     expect(viaVite).not.toContain('@_linked/fixture-auth/backend');
     expect(viaVite).not.toContain('custom-linked/backend');
     expect(g.__constructed.auth).toBe(1);
+  });
+
+  it('in dev, loads an UNBUILT source workspace\'s src/backend.ts through Vite', async () => {
+    // A workspace member as `linked create-package` writes it: exports name
+    // only lib/esm, and it has not been built, so only src/ exists.
+    const root = 'node_modules/@_linked/fixture-nested';
+    fs.rmSync(path.join(appDir, root, 'lib'), { recursive: true, force: true });
+    writeFile(`${root}/src/index.ts`, 'export {};\n');
+    writeFile(`${root}/src/backend.ts`, providerSource('nested-src'));
+    const viaVite: string[] = [];
+    const vite = {
+      config: { ssr: { noExternal: ['@_linked/fixture-nested'] } },
+      pluginContainer: { resolveId: async (id: string) => ({ id }) },
+      // Stands in for linked's Vite resolver, which maps a workspace's
+      // `<pkg>/backend` to src before exports. The source is plain JS, so a
+      // .mjs copy stands in for the transform.
+      ssrLoadModule: async (id: string) => {
+        viaVite.push(id);
+        const dir = path.join(appDir, 'node_modules', id.replace(/\/backend$/, ''));
+        const json = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
+        const file = resolveDevBackendEntry(dir, json)!;
+        const copy = file.replace(/\.ts$/, '.mjs');
+        fs.copyFileSync(file, copy);
+        return import(pathToFileURL(copy).href);
+      },
+    };
+    const server = makeServer(vite);
+    await server.initBackendProviders();
+
+    expect(viaVite).toContain('@_linked/fixture-nested/backend');
+    expect(g.__constructed['nested-src']).toBe(1);
   });
 });
 
