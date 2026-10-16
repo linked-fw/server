@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.24.11
+
+### Patch Changes
+
+- [#175](https://github.com/linked-fw/server/pull/175) [`37318c4`](https://github.com/linked-fw/server/commit/37318c468ea9d18a33aa44dd441899e8fb0fbf8b) Thanks [@flyon](https://github.com/flyon)! - In dev, a source workspace's backend is found from `src/` (`src/backend.tsx`, `src/backend.ts`, or its `exports` target mapped from `lib/esm` back to `src`), the way linked's Vite resolver loads it. An unbuilt workspace, whose `exports` name only `lib/esm`, no longer has its `src/backend.ts` silently skipped. Published packages and production are unchanged.
+
 ## 2.24.10
 
 ### Patch Changes
