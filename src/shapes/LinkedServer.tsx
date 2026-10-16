@@ -54,6 +54,7 @@ import {
   NODE_IMPORT_CONDITIONS,
   readInstalledPackage,
   resolveBackendEntry,
+  resolveDevBackendEntry,
   ssrNoExternalOf,
 } from '../utils/linkedDependencies.js';
 
@@ -1547,14 +1548,15 @@ export class LinkedServer extends Shape {
       }
       if (dir && json) {
         if (viteOwnsPackage) {
-          // Vite resolves a bundled package with the `development` condition
-          // (a workspace's `./backend` may point at src only there). It is
-          // still loaded by its bare name, so it is the same module id the
+          // A source package (one with src/) is a workspace to linked's Vite
+          // config, whose resolver maps `<pkg>/backend` to src BEFORE
+          // `exports` (resolveDevBackendEntry mirrors it). Checking only
+          // `exports` missed an unbuilt workspace, whose `exports` name only
+          // lib/esm: its src/backend.ts was never loaded. Otherwise Vite
+          // resolves a bundled package with the `development` condition. It
+          // is still loaded by its bare name, so it is the same module id the
           // rest of the SSR graph imports.
-          entry = resolveBackendEntry(dir, json, [
-            'development',
-            ...NODE_IMPORT_CONDITIONS,
-          ]);
+          entry = resolveDevBackendEntry(dir, json);
           if (entry) load = () => vite.ssrLoadModule(`${pkg}/backend`);
         } else {
           // Node caches ESM by resolved real file URL, and a bare import of
