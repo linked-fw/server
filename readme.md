@@ -19,6 +19,9 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Generic backend providers](#generic-backend-providers)
   - [Gotchas](#gotchas)
   - [Error semantics](#error-semantics)
+- [Query stores](#query-stores)
+  - [BackendAPIStore](#backendapistore)
+  - [GatewayStore](#gatewaystore)
 - [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
 - [Provider lifecycle and HMR](#provider-lifecycle-and-hmr)
   - [When a provider throws, and refusing to start](#when-a-provider-throws-and-refusing-to-start)
@@ -231,6 +234,72 @@ What the caller sees depends on how it calls:
   - A provider method that throws always rejects.
   - An unmatched call resolves `undefined` by default and rejects with a 501 `ServerCallError` when `rejectOnError` is set.
 - **`BackendAPIStore`.** It always uses `rejectOnError`, so a failed query rejects with the status and message. A successful call resolves with whatever the provider returned, `undefined` included.
+
+## Query stores
+
+Two `IDataset` implementations in this package forward Linked Queries over HTTP instead of
+answering them. Both ship `query.toJSON()` and resolve with the plain JSON rows the other side
+returns; neither offers raw SPARQL (`rawQuery`), dataset administration or a change feed.
+
+| | `BackendAPIStore` | `GatewayStore` |
+| --- | --- | --- |
+| Runs in | the browser (or any client of this package's `/call` routes) | a backend process |
+| Sends to | this app's own backend, through `Server.call` (`/call/<package>/<method>`) | a gateway of another service: `POST {endpoint}/query` |
+| Authenticated by | the user's session | a bearer credential the gateway issued to this process |
+| Who picks the dataset | the backend's `LinkedStorage` | the gateway, from the credential |
+
+### BackendAPIStore
+
+Export path `@_linked/server/shapes/quadstores/BackendAPIStore`. Selected in
+`linked.frontend.datasets.json`; `config` may carry a `name` or `id`, neither of which affects
+routing. Its error semantics are under [Error semantics](#error-semantics).
+
+### GatewayStore
+
+Export path `@_linked/server/shapes/quadstores/GatewayStore` (named export `GatewayStore`, so
+`loadStores` resolves it by the last path segment). It is for a backend whose data lives behind
+a gateway run by the host that started it — for example an app process started by Create Now,
+whose queries go to CN's gateway so that branch forks, authorization and audit apply to app
+traffic.
+
+```json
+{
+  "datasets": {
+    "gateway": {
+      "store": "@_linked/server/shapes/quadstores/GatewayStore",
+      "config": { "endpoint": "${CN_EG_GATEWAY:-}", "credential": "${CN_APP_SERVICE_SECRET:-}" }
+    }
+  }
+}
+```
+
+```typescript
+export interface GatewayStoreConfig {
+  endpoint: string;   // base URL of the gateway, routes are appended: `${endpoint}/query`, `${endpoint}/health`
+  credential: string; // sent as `Authorization: Bearer <credential>`
+  fetch?: typeof fetch; // transport override, default `globalThis.fetch`
+}
+```
+
+- The constructor throws at once when `endpoint` or `credential` is empty. The `:-` defaults in
+  the JSON keep `parseDatasetsConfig` from throwing when the variables are unset; a storage file
+  instantiates the alias only when the host set them (the presence of `CN_EG_GATEWAY` is the
+  mode switch; `CN_APP_SERVICE_SECRET` is injected into the process environment, never written
+  to `.env`).
+- `init()` is `GET {endpoint}/health` and resolves with the gateway's answer
+  (`{projectId, branchName, dataset}`). It throws `GatewayUnreachableError` when the gateway
+  cannot be reached or refuses the credential. `LinkedStorage.setDefaultDataset` does not await
+  `init()`, so a boot that must fail loudly awaits `init()` itself before registering the store.
+  Calling it again is harmless.
+- Every query method posts `{ "v": 1, "op": "select" | "ask" | "update" | "create" | "delete", "query": <query.toJSON()> }`
+  and resolves with the body's `result`. A count arrives through `selectQuery` with `op: "select"`
+  (the gateway dispatches on the query's own `op`). Nothing about the project, branch or actor is
+  in the body: the credential decides all three.
+- Errors: a network failure and a `401` reject with `GatewayUnreachableError` (`status` 0 or 401);
+  any other non-2xx answer rejects with `GatewayStoreError`, whose `code` is the body's `code`
+  (`bad-request`, `wire-version`, `unknown-shape`, `refused`, `fork-failed`, `query-failed`),
+  else `http-<status>`, with the parsed body on `body`. `GatewayUnreachableError extends
+  GatewayStoreError`.
 
 ## API-only servers (`server.apiOnly`)
 
