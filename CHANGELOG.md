@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 3.1.0
+
+### Minor Changes
+
+- [#181](https://github.com/linked-fw/server/pull/181) [`059dd58`](https://github.com/linked-fw/server/commit/059dd584bc95efac30ba5e9831b69a9931236690) Thanks [@flyon](https://github.com/flyon)! - Query-plane shape catalog hook: `setQueryCatalogResolver(resolver)` in `@_linked/server/utils/queryPlane` lets the host supply the `ShapeCatalog` each generic query request (`/call/@_linked/server/*Query`, `/api/*`) is decoded in. The access check and the store lower the query in that catalog. A resolver that throws a `ServerCallError` answers with its status; any other throw answers 500 `Shape catalog unavailable`. Without a resolver, behaviour is unchanged. Requires `@_linked/core` 2.35.0.
+
 ## 3.0.0
 
 ### Major Changes
