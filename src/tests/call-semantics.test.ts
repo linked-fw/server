@@ -13,19 +13,19 @@ import {
   registerCallRoutes,
 } from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
-import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
+import { RemoteDataset } from '../shapes/quadstores/RemoteDataset.js';
 import { packageName } from '../package.js';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 
 // These suites exercise LinkedServer's SHAPE-provider routing and error handling,
 // so they need any registered Shape plus a ShapeProvider for it. They used to borrow
-// BackendAPIStore + BackendAPIStoreProvider; BackendAPIStore is no longer a Shape
+// the query store and its shape provider; the store is no longer a Shape
 // (it addresses the backend by package name now), so LincdAPI stands in.
 
 // Error semantics of server calls:
 // - a call no provider handles answers 501 `{error: "No provider for <pkg>/<method>"}`
-// - BackendAPIStore rejects only on a failed call, and resolves `undefined` results
+// - RemoteDataset rejects only on a failed call, and resolves `undefined` results
 
 const servers: any[] = [];
 const originalCall = Server.call;
@@ -152,10 +152,10 @@ describe('LinkedServer unmatched calls', () => {
   });
 });
 
-describe('BackendAPIStore call results', () => {
+describe('RemoteDataset call results', () => {
   // The store addresses the backend by PACKAGE now, so the expected name comes
   // from the package module -- the same source the store itself uses. It used to
-  // read `BackendAPIStore.packageName`, a static that existed only while the
+  // read a `packageName` static on the store class, which existed only while the
   // store was a Shape, which silently read `undefined` once it stopped being one.
   const storePkg: string = packageName;
 
@@ -172,14 +172,14 @@ describe('BackendAPIStore call results', () => {
       calls.push(args);
       return null;
     };
-    const store = new BackendAPIStore({ id: 'http://example.org/store' });
+    const store = new RemoteDataset({ id: 'http://example.org/store' });
     await store.selectQuery({ toJSON: () => ({}) } as any);
     expect(calls[0][1]).toEqual({ method: 'selectQuery', rejectOnError: true });
   });
 
   it('resolves an undefined result', async () => {
     (Server as any).call = async () => undefined;
-    const store = new BackendAPIStore({ id: 'http://example.org/store' });
+    const store = new RemoteDataset({ id: 'http://example.org/store' });
 
     await expect(
       store.updateQuery({ toJSON: () => ({}) } as any)
@@ -198,7 +198,7 @@ describe('BackendAPIStore call results', () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     const base = await listenCalls(linkedServer);
     routeServerCallTo(base);
-    const store = new BackendAPIStore({ id: 'http://example.org/store' });
+    const store = new RemoteDataset({ id: 'http://example.org/store' });
 
     const err: any = await store
       .selectQuery({ toJSON: () => ({}) } as any)
@@ -219,7 +219,7 @@ describe('BackendAPIStore call results', () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     const base = await listenCalls(linkedServer);
     routeServerCallTo(base);
-    const store = new BackendAPIStore({ id: 'http://example.org/store' });
+    const store = new RemoteDataset({ id: 'http://example.org/store' });
 
     await expect(
       store.askQuery({ toJSON: () => ({}) } as any)

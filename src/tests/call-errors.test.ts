@@ -3,13 +3,13 @@ import express from 'express';
 import type { AddressInfo } from 'net';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
-import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
+import { RemoteDataset } from '../shapes/quadstores/RemoteDataset.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 
 // These suites exercise LinkedServer's SHAPE-provider routing and error handling,
 // so they need any registered Shape plus a ShapeProvider for it. They used to borrow
-// BackendAPIStore + BackendAPIStoreProvider; BackendAPIStore is no longer a Shape
+// the query store and its shape provider; the store is no longer a Shape
 // (it addresses the backend by package name now), so LincdAPI stands in.
 
 // A provider method that throws must answer with an error status and a JSON
@@ -115,12 +115,12 @@ describe('LinkedServer call errors', () => {
   });
 });
 
-describe('BackendAPIStore failed calls', () => {
+describe('RemoteDataset failed calls', () => {
   it('rejects when Server.call rejects (a non-2xx response with rejectOnError)', async () => {
     (Server as any).call = async () => {
       throw new Error('internal server error');
     };
-    const store = new BackendAPIStore({ id: 'http://example.org/store' });
+    const store = new RemoteDataset({ id: 'http://example.org/store' });
     const query: any = { toJSON: () => ({}) };
 
     await expect(store.selectQuery(query)).rejects.toThrow(
@@ -130,7 +130,7 @@ describe('BackendAPIStore failed calls', () => {
 
   it('resolves a null result from a successful call', async () => {
     (Server as any).call = async () => null;
-    const store = new BackendAPIStore({ id: 'http://example.org/store' });
+    const store = new RemoteDataset({ id: 'http://example.org/store' });
     const query: any = { toJSON: () => ({}) };
 
     await expect(store.deleteQuery(query)).resolves.toBeNull();

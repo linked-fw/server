@@ -24,23 +24,27 @@ export default class LincdServerBackendProvider extends BackendProvider {
     }
   }
 
-  // ── BackendAPIStore query execution ──────────────────────────────────────
-  //
-  // These answer the frontend `BackendAPIStore`, which calls
-  // `Server.call(packageName, {method}, json)` — the PACKAGE form, so the request
-  // arrives here on the generic provider rather than through Shape resolution.
-  //
-  // They used to live on `BackendAPIStoreProvider`, a `ShapeProvider`, whose methods
-  // took the store as a first argument and never read it. Reaching that provider meant
-  // the transport had to carry a `shapeURI` and an `instanceNode`, and the server had to
-  // rebuild the store with `new (providerShapeClass)({id})` — instantiating a Shape only
-  // to discard it. Addressing by package removes all of that.
-  //
-  // A query cannot cross the wire live (core 2.10.0 contract flip), so the client ships
-  // `toJSON()` and `fromJSON()` rehydrates it here into a live, closed query.
-  // `LinkedStorage` then routes it by the QUERY's shape — which is, and always was, what
-  // decides the target dataset. The store instance never participated.
+  /**
+   * Reachability check for a `RemoteDataset` pointed at this server: reads nothing, changes
+   * nothing. A plain linked server has no token concept, so it always answers `{ok: true}`;
+   * a host that serves the wire with tokens answers 401 for a refused one.
+   */
+  @callable('public')
+  async ping(): Promise<{ ok: true }> {
+    return { ok: true };
+  }
 
+  // ── Generic query execution ──────────────────────────────────────────────
+  //
+  // These answer `RemoteDataset`: a browser's store calls
+  // `Server.call(packageName, {method}, json)` (the PACKAGE form), and a remote app's store
+  // posts the same `{args}` body to `{url}/call/@_linked/server/<method>`. Either way the
+  // request arrives here on the generic provider rather than through Shape resolution.
+  //
+  // A query cannot cross the wire live, so the client ships `toJSON()` and `fromJSON()`
+  // rehydrates it here into a live, closed query. `LinkedStorage` then routes it by the
+  // QUERY's shape, which is what decides the target dataset; the store instance never
+  // participates.
   //
   // Every query is checked first against the access rules of the stores it
   // maps to, declared in the app's storage config (`withAccess`; a store with

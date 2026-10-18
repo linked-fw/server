@@ -4,7 +4,7 @@ import './ontologies/server.register.js';
 //SHAPES FIRST
 import './shapes/index.js';
 // Not shapes (plain store classes); kept so the entry's module graph is unchanged.
-import './shapes/quadstores/BackendAPIStore.js';
+import './shapes/quadstores/RemoteDataset.js';
 import './shapes/filestores/LocalFileStore.js';
 
 //THEN COMPONENTS
