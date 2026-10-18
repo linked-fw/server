@@ -6,6 +6,8 @@ summary: GatewayStore, an IDataset that forwards Linked Queries to a gateway ove
 
 # GatewayStore
 
+Superseded by [003](003-remote-dataset.md): `GatewayStore` is removed; `RemoteDataset` with a `url` takes its place.
+
 `src/shapes/quadstores/GatewayStore.ts`, exported at
 `@_linked/server/shapes/quadstores/GatewayStore`. A backend process selects it from
 `linked.backend.datasets.json` when the host that started it (Create Now) wants the process's

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from '@jest/globals';
 import { AskBuilder } from '@_linked/core/queries/AskBuilder';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { Server } from '@_linked/server-utils/utils/Server';
-import { BackendAPIStore } from '../shapes/quadstores/BackendAPIStore.js';
+import { RemoteDataset } from '../shapes/quadstores/RemoteDataset.js';
 import LincdServerBackendProvider from '../backend.js';
 import { packageName } from '../package.js';
 
@@ -17,14 +17,14 @@ afterEach(() => {
   (Server as any).call = originalCall;
 });
 
-describe('BackendAPIStore.askQuery', () => {
+describe('RemoteDataset.askQuery', () => {
   it('forwards the ask as DSL-JSON via Server.call', async () => {
     const calls: any[] = [];
     (Server as any).call = async (...args: any[]) => {
       calls.push(args);
       return true;
     };
-    const store = new BackendAPIStore({ id: 'http://example.org/store' });
+    const store = new RemoteDataset({ id: 'http://example.org/store' });
     const query = AskBuilder.forNode(IRI);
 
     await expect(store.askQuery(query)).resolves.toBe(true);

@@ -20,8 +20,9 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Gotchas](#gotchas)
   - [Error semantics](#error-semantics)
 - [Query stores](#query-stores)
-  - [BackendAPIStore](#backendapistore)
-  - [GatewayStore](#gatewaystore)
+  - [Without `url`](#without-url)
+  - [With `url`](#with-url)
+  - [`ping`](#ping)
 - [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
 - [Provider lifecycle and HMR](#provider-lifecycle-and-hmr)
   - [When a provider throws, and refusing to start](#when-a-provider-throws-and-refusing-to-start)
@@ -233,73 +234,86 @@ What the caller sees depends on how it calls:
 - **`Server.call` on the backend.** Here it calls the `LinkedServer` directly.
   - A provider method that throws always rejects.
   - An unmatched call resolves `undefined` by default and rejects with a 501 `ServerCallError` when `rejectOnError` is set.
-- **`BackendAPIStore`.** It always uses `rejectOnError`, so a failed query rejects with the status and message. A successful call resolves with whatever the provider returned, `undefined` included.
+- **`RemoteDataset` without `url`.** It always uses `rejectOnError`, so a failed query rejects with the status and message. A successful call resolves with whatever the provider returned, `undefined` included.
 
 ## Query stores
 
-Two `IDataset` implementations in this package forward Linked Queries over HTTP instead of
-answering them. Both ship `query.toJSON()` and resolve with the plain JSON rows the other side
-returns; neither offers raw SPARQL (`rawQuery`), dataset administration or a change feed.
+`RemoteDataset` is an `IDataset` whose Linked Queries are answered by a linked server instead of
+by the store itself. It ships `query.toJSON()` and resolves with the plain JSON the server
+returns; it offers no raw SPARQL (`rawQuery`), dataset administration or change feed.
 
-| | `BackendAPIStore` | `GatewayStore` |
+Export path `@_linked/server/shapes/quadstores/RemoteDataset` (named export `RemoteDataset`, so
+`loadStores` resolves it by the last path segment). One class, two forms:
+
+| | no `url` | with `url` |
 | --- | --- | --- |
-| Runs in | the browser (or any client of this package's `/call` routes) | a backend process |
-| Sends to | this app's own backend, through `Server.call` (`/call/<package>/<method>`) | a gateway of another service: `POST {endpoint}/query` |
-| Authenticated by | the user's session | a bearer credential the gateway issued to this process |
-| Who picks the dataset | the backend's `LinkedStorage` | the gateway, from the credential |
+| Answered by | this app's own backend | a remote data server, e.g. a host's gateway |
+| Sends through | `Server.call`'s package form (`/call/@_linked/server/<method>`); on a backend, `Server`'s local shortcut | `globalThis.fetch` to `{url}/call/@_linked/server/<method>`, never `Server` |
+| Authenticated by | the user's session | `Authorization: Bearer <token>` |
+| `init()` | resolves at once | posts `ping`, throws a typed error when the server cannot be used |
+| Typical config | `linked.frontend.datasets.json` | `linked.backend.datasets.json` |
 
-### BackendAPIStore
+```typescript
+export interface RemoteDatasetConfig {
+  url?: string;   // data server base, e.g. http://localhost:4040/gateway; routes are appended
+  token?: string; // sent as Authorization: Bearer <token> when set and url is set
+  name?: string;  // id = ${DATA_ROOT}/backend-api-store/<name>; does not affect routing
+  id?: string;
+}
+```
 
-Export path `@_linked/server/shapes/quadstores/BackendAPIStore`. Selected in
-`linked.frontend.datasets.json`; `config` may carry a `name` or `id`, neither of which affects
-routing. Its error semantics are under [Error semantics](#error-semantics).
+`new RemoteDataset('main')` is the `name` form.
 
-### GatewayStore
+### Without `url`
 
-Export path `@_linked/server/shapes/quadstores/GatewayStore` (named export `GatewayStore`, so
-`loadStores` resolves it by the last path segment). It is for a backend whose data lives behind
-a gateway run by the host that started it — for example an app process started by Create Now,
-whose queries go to CN's gateway so that branch forks, authorization and audit apply to app
-traffic.
+Every query is `Server.call(packageName, { method, rejectOnError: true }, query.toJSON())`, and
+this package's generic provider answers it from the backend's `LinkedStorage`. Its error
+semantics are under [Error semantics](#error-semantics). `token` is ignored.
+
+### With `url`
 
 ```json
 {
   "datasets": {
-    "gateway": {
-      "store": "@_linked/server/shapes/quadstores/GatewayStore",
-      "config": { "endpoint": "${CN_EG_GATEWAY:-}", "credential": "${CN_APP_SERVICE_SECRET:-}" }
+    "appData": {
+      "store": "@_linked/server/shapes/quadstores/RemoteDataset",
+      "config": { "url": "${DATA_SERVER_URL:-}", "token": "${DATA_SERVER_TOKEN:-}" }
     }
   }
 }
 ```
 
-```typescript
-export interface GatewayStoreConfig {
-  endpoint: string;   // base URL of the gateway, routes are appended: `${endpoint}/query`, `${endpoint}/health`
-  credential: string; // sent as `Authorization: Bearer <credential>`
-  fetch?: typeof fetch; // transport override, default `globalThis.fetch`
-}
-```
+- Each method posts `{"args": [<query.toJSON()>]}` to `{url}/call/@_linked/server/<method>`
+  (`selectQuery`, which also carries counts, `askQuery`, `updateQuery`, `createQuery`,
+  `deleteQuery`) with `Content-Type` and `Accept` set to `application/json` and, when `token` is
+  non-empty, `Authorization: Bearer <token>`. It resolves the parsed body; `null` is a valid
+  result. No other headers are sent and nothing is retried, so a write is never applied twice.
+- Trailing slashes are trimmed from `url`. A `url` that is present but empty (an unset
+  `${DATA_SERVER_URL:-}`) never falls back to the no-url form: `init()` and every method throw
+  `RemoteDatasetUnreachableError` with `url: ''`.
+- `init()` posts `{"args": []}` to `{url}/call/@_linked/server/ping`. A success is memoized; after
+  a failure the next `init()` asks again. `LinkedStorage.setDefaultDataset` does not await
+  `init()`, so a boot that must fail loudly awaits it itself before registering the store.
+- Errors, each carrying `url` (the base), `status` (0 when no HTTP answer came back) and `code`
+  (the error body's `code`, when the server sent one). Messages name the url and the method,
+  never the token.
 
-- The constructor throws at once when `endpoint` or `credential` is empty. The `:-` defaults in
-  the JSON keep `parseDatasetsConfig` from throwing when the variables are unset; a storage file
-  instantiates the alias only when the host set them (the presence of `CN_EG_GATEWAY` is the
-  mode switch; `CN_APP_SERVICE_SECRET` is injected into the process environment, never written
-  to `.env`).
-- `init()` is `GET {endpoint}/health` and resolves with the gateway's answer
-  (`{projectId, branchName, dataset}`). It throws `GatewayUnreachableError` when the gateway
-  cannot be reached or refuses the credential. `LinkedStorage.setDefaultDataset` does not await
-  `init()`, so a boot that must fail loudly awaits `init()` itself before registering the store.
-  Calling it again is harmless.
-- Every query method posts `{ "v": 1, "op": "select" | "ask" | "update" | "create" | "delete", "query": <query.toJSON()> }`
-  and resolves with the body's `result`. A count arrives through `selectQuery` with `op: "select"`
-  (the gateway dispatches on the query's own `op`). Nothing about the project, branch or actor is
-  in the body: the credential decides all three.
-- Errors: a network failure and a `401` reject with `GatewayUnreachableError` (`status` 0 or 401);
-  any other non-2xx answer rejects with `GatewayStoreError`, whose `code` is the body's `code`
-  (`bad-request`, `wire-version`, `unknown-shape`, `refused`, `fork-failed`, `query-failed`),
-  else `http-<status>`, with the parsed body on `body`. `GatewayUnreachableError extends
-  GatewayStoreError`.
+  | Answer | Error |
+  | --- | --- |
+  | no HTTP answer | `RemoteDatasetUnreachableError` (status 0) |
+  | 401 or 403 | `RemoteDatasetUnauthorizedError` |
+  | on `ping` only: 404, 501, 502, 503, 504, or a body that is not JSON | `RemoteDatasetUnreachableError` |
+  | any other non-2xx | `RemoteDatasetError` |
+
+  `RemoteDatasetUnreachableError` and `RemoteDatasetUnauthorizedError` extend
+  `RemoteDatasetError`, which extends `Error`; match them with `instanceof`.
+
+### `ping`
+
+`POST /call/@_linked/server/ping` (a `public` method of this package's generic provider) reads
+nothing, changes nothing and answers `{ "ok": true }`. A plain linked server has no token
+concept; a host that serves the wire with tokens checks the token itself and answers 401 for a
+refused one.
 
 ## API-only servers (`server.apiOnly`)
 

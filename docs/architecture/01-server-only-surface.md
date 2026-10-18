@@ -46,7 +46,7 @@ Three exports are client-safe and are published from here anyway:
 
 | Export | Who uses it |
 |---|---|
-| `BackendAPIStore` | the store a **browser** uses to talk to the backend; constructed by an app's frontend storage config |
+| `RemoteDataset` | without `url`, the store a **browser** uses to talk to the backend; constructed by an app's frontend storage config |
 | `getAccessUrlLocalFileStore` | the same frontend config |
 | `LincdWebApp` | constructed in a React hook |
 
