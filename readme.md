@@ -23,6 +23,7 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Without `url`](#without-url)
   - [With `url`](#with-url)
   - [`ping`](#ping)
+  - [Shape catalog per request](#shape-catalog-per-request)
 - [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
 - [Provider lifecycle and HMR](#provider-lifecycle-and-hmr)
   - [When a provider throws, and refusing to start](#when-a-provider-throws-and-refusing-to-start)
@@ -314,6 +315,33 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
 nothing, changes nothing and answers `{ "ok": true }`. A plain linked server has no token
 concept; a host that serves the wire with tokens checks the token itself and answers 401 for a
 refused one.
+
+### Shape catalog per request
+
+The generic query endpoints (`/call/@_linked/server/*Query` and `/api/*`) rebuild the client's
+DSL-JSON with core's `fromJSON`. By default it decodes against the global shape registry. A
+host that serves several shape sets at once (for example one per project branch) supplies a
+`ShapeCatalog` (from `@_linked/core`) per request:
+
+```typescript
+import { setQueryCatalogResolver } from '@_linked/server/utils/queryPlane';
+
+// query: the DSL-JSON the client sent. Read the request itself through getCallContext().
+setQueryCatalogResolver(async (query) => catalogForThisRequest(query));
+```
+
+- The resolver is called once per request, before the query is decoded. `undefined` means the
+  global registry. With no resolver set, behaviour is unchanged.
+- The builder keeps the catalog it was decoded in, so the access check (`withAccess` rules) and
+  the store lower the query against the same shapes. A shape the catalog does not hold answers
+  `400 Invalid query`.
+- A resolver that throws a `ServerCallError` answers with its status and message. Any other
+  throw is logged and answers `500 {"error": "Shape catalog unavailable"}`.
+- A live builder passed in by backend code already carries its catalog; the resolver is not
+  called for it.
+- `setQueryCatalogResolver(undefined)` removes the resolver. `resolveQueryCatalog(query)` and
+  `toQueryBuilder(query, catalog)` are exported for hosts that serve the same wire on their own
+  routes.
 
 ## API-only servers (`server.apiOnly`)
 
