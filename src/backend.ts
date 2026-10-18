@@ -3,7 +3,11 @@ import { callable } from '@_linked/server-utils/utils/callable';
 import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { LocalFileStore } from './shapes/filestores/LocalFileStore.js';
-import { authorizeGenericQuery, toQueryBuilder } from './utils/queryPlane.js';
+import {
+  authorizeGenericQuery,
+  resolveQueryCatalog,
+  toQueryBuilder,
+} from './utils/queryPlane.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -44,7 +48,8 @@ export default class LincdServerBackendProvider extends BackendProvider {
   // A query cannot cross the wire live, so the client ships `toJSON()` and `fromJSON()`
   // rehydrates it here into a live, closed query. `LinkedStorage` then routes it by the
   // QUERY's shape, which is what decides the target dataset; the store instance never
-  // participates.
+  // participates. The host's catalog resolver (`setQueryCatalogResolver`) picks the shape
+  // catalog the JSON is decoded in; the builder keeps it for both lowerings.
   //
   // Every query is checked first against the access rules of the stores it
   // maps to, declared in the app's storage config (`withAccess`; a store with
@@ -55,35 +60,35 @@ export default class LincdServerBackendProvider extends BackendProvider {
 
   @callable('public')
   async selectQuery(json: any) {
-    const query = toQueryBuilder(json);
+    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
     await authorizeGenericQuery('select', json, query, 'selectQuery');
     return LinkedStorage.selectQuery(query);
   }
 
   @callable('public')
   async askQuery(json: any) {
-    const query = toQueryBuilder(json);
+    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
     await authorizeGenericQuery('ask', json, query, 'askQuery');
     return LinkedStorage.askQuery(query);
   }
 
   @callable('public')
   async updateQuery(json: any) {
-    const query = toQueryBuilder(json);
+    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
     await authorizeGenericQuery('update', json, query, 'updateQuery');
     return LinkedStorage.updateQuery(query);
   }
 
   @callable('public')
   async createQuery(json: any) {
-    const query = toQueryBuilder(json);
+    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
     await authorizeGenericQuery('create', json, query, 'createQuery');
     return LinkedStorage.createQuery(query);
   }
 
   @callable('public')
   async deleteQuery(json: any) {
-    const query = toQueryBuilder(json);
+    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
     await authorizeGenericQuery('delete', json, query, 'deleteQuery');
     return LinkedStorage.deleteQuery(query);
   }

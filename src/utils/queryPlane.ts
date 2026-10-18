@@ -10,11 +10,16 @@
  * module turns the incoming query into the builder the store runs and the IR
  * the rules read.
  *
+ * The host can supply the shape catalog a request's query is decoded in
+ * (`setQueryCatalogResolver`), so one server can resolve the same shape IRI
+ * differently per request (for example per project branch).
+ *
  * INTERIM: that per-store access model needs to be revised and rethought from
  * the ground up (see QueryAccess).
  */
 import { fromJSON } from '@_linked/core';
 import { lower } from '@_linked/core/queries/lower';
+import type { ShapeCatalog } from '@_linked/core/utils/ShapeCatalog';
 import {
   checkQueryAccess,
   type QueryOperation,
@@ -50,9 +55,63 @@ export function containsContextRef(json: unknown): boolean {
 }
 
 /**
- * A rehydrated query builder from the DSL-JSON a client sent. The result is
- * what the store runs, so the access check and the store see the same query.
- * A body that is not a query answers 400.
+ * Supplies the shape catalog a generic query request is decoded in, from the
+ * DSL-JSON the client sent (the request context is available through the
+ * host's own means, e.g. `getCallContext`). `undefined` means the global
+ * shape registry.
+ */
+export type QueryCatalogResolver = (
+  query: unknown
+) => ShapeCatalog | undefined | Promise<ShapeCatalog | undefined>;
+
+let queryCatalogResolver: QueryCatalogResolver | undefined;
+
+/**
+ * Set (or, with `undefined`, clear) the host's catalog resolver for the
+ * generic query endpoints. Without one, every query decodes in the global
+ * shape registry.
+ */
+export function setQueryCatalogResolver(resolver: QueryCatalogResolver | undefined): void {
+  queryCatalogResolver = resolver;
+}
+
+/** A live builder passed by backend code (never a plain object from JSON). */
+function isLiveBuilder(query: any): boolean {
+  return (
+    !!query &&
+    typeof query === 'object' &&
+    Object.getPrototypeOf(query) !== Object.prototype &&
+    typeof query.__queryKind === 'string'
+  );
+}
+
+/**
+ * The catalog `query` is decoded in: the host resolver's answer, or
+ * `undefined` (the global registry) without a resolver. A live builder already
+ * carries its catalog, so the resolver is not asked for it.
+ *
+ * A `ServerCallError` the resolver throws is passed on as is (the host chose
+ * the status); any other failure is logged and answers 500.
+ */
+export async function resolveQueryCatalog(query: unknown): Promise<ShapeCatalog | undefined> {
+  const resolver = queryCatalogResolver;
+  if (!resolver || isLiveBuilder(query)) return undefined;
+  try {
+    return await resolver(query);
+  } catch (error) {
+    if (ServerCallError.is(error)) throw error;
+    console.error('[queryPlane] the shape catalog resolver failed:', error);
+    throw new ServerCallError(500, 'Shape catalog unavailable');
+  }
+}
+
+/**
+ * A rehydrated query builder from the DSL-JSON a client sent, decoded in
+ * `catalog` (`undefined`: the global registry, whatever catalog is active;
+ * see `resolveQueryCatalog`). The builder keeps that catalog, so
+ * the access-check lowering and the store's lowering both resolve against it.
+ * The result is what the store runs, so the access check and the store see
+ * the same query. A body that is not a query answers 400.
  *
  * A query-context reference (`{"@ctx": "user"}`) also answers 400. Core
  * resolves one at lowering time against a process-wide context map, which on a
@@ -62,20 +121,12 @@ export function containsContextRef(json: unknown): boolean {
  * names its nodes by id.
  *
  * Without context references, lowering a rehydrated builder is a pure function
- * of the builder (closed and never mutated after `fromJSON`) and the shape
- * registry: the IR `authorizeGenericQuery` checks is the IR the store lowers
+ * of the builder (closed and never mutated after `fromJSON`) and its shape
+ * catalog: the IR `authorizeGenericQuery` checks is the IR the store lowers
  * from the same builder.
  */
-export function toQueryBuilder(query: any): any {
-  // A live builder passed by backend code (never a plain object from JSON).
-  if (
-    query &&
-    typeof query === 'object' &&
-    Object.getPrototypeOf(query) !== Object.prototype &&
-    typeof query.__queryKind === 'string'
-  ) {
-    return query;
-  }
+export function toQueryBuilder(query: unknown, catalog?: ShapeCatalog): any {
+  if (isLiveBuilder(query)) return query;
   if (containsContextRef(query)) {
     throw new ServerCallError(
       400,
@@ -83,7 +134,7 @@ export function toQueryBuilder(query: any): any {
     );
   }
   try {
-    const builder = fromJSON(query);
+    const builder = fromJSON(query as any, { catalog });
     if (!builder || typeof builder !== 'object') throw new Error('not a query');
     return builder;
   } catch {

@@ -8,6 +8,7 @@ import { SparqlDataset as SPARQLStore } from '@_linked/core/sparql/SparqlDataset
 import {
   authorizeGenericQuery,
   authorizeRawQuery,
+  resolveQueryCatalog,
   toQueryBuilder,
 } from '../utils/queryPlane.js';
 import { getRpcExposureMode } from '../utils/rpcExposure.js';
@@ -69,22 +70,22 @@ export class LincdAPI extends Shape {
   }
 
   async post_select({ query }) {
-    const builder = toQueryBuilder(query);
+    const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
     await authorizeGenericQuery('select', query, builder, 'api/select');
     return LinkedStorage.selectQuery(builder);
   }
   async post_create({ query }) {
-    const builder = toQueryBuilder(query);
+    const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
     await authorizeGenericQuery('create', query, builder, 'api/create');
     return LinkedStorage.createQuery(builder);
   }
   async post_update({ query }) {
-    const builder = toQueryBuilder(query);
+    const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
     await authorizeGenericQuery('update', query, builder, 'api/update');
     return LinkedStorage.updateQuery(builder);
   }
   async post_delete({ query }) {
-    const builder = toQueryBuilder(query);
+    const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
     await authorizeGenericQuery('delete', query, builder, 'api/delete');
     return LinkedStorage.deleteQuery(builder);
   }
