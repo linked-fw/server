@@ -41,6 +41,7 @@ import { createJsonBodyParser } from '../utils/jsonBodyParser.js';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { autoLoadOntologyData } from '@_linked/core/utils/Package';
 import {
+  getAllShapeClasses,
   getShapeClass,
   getSuperShapesClasses,
 } from '@_linked/core/utils/ShapeClass';
@@ -187,9 +188,11 @@ import {
 import { materializeShapes } from '../utils/syncShapes.js';
 import {
   AdminRequestError,
+  assertReloadablePackages,
   registerAdminRoutes,
   type ShapeSyncResult,
 } from '../utils/adminChannel.js';
+import { envMs, withTimeout } from '../utils/withTimeout.js';
 import { invalidateSourceUnder } from '../utils/reloadSource.js';
 import {
   installSpaFallback,
@@ -532,35 +535,67 @@ export class LinkedServer extends Shape {
    * changed the app's shape code, so the app — the only process that loads that
    * code — writes its own shapes and their hashes.
    *
-   * `packages` names the packages whose source changed. In dev (Vite) their
-   * modules are invalidated and their backends reloaded first
-   * ({@link onSourceChange}), so a shape added since the boot is registered
-   * before the sync; without Vite (a built app) the sync covers the shapes the
-   * process loaded. Runs as the system, never as the caller of a request.
+   * `packages` names the packages whose source changed: the app itself or its
+   * direct dependencies, never `@_linked/*` ({@link assertReloadablePackages}). In
+   * dev (Vite) their modules are invalidated and their backends reloaded first
+   * ({@link onSourceChange}), so a shape added since the boot is registered before
+   * the sync; without Vite (a built app) nothing is reloaded. The answer names the
+   * packages reloaded and the node shapes registered after it, so the host can check
+   * that the shape it wrote is there. Runs as the system, never as the caller of a
+   * request, one at a time; a run that takes longer than
+   * `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120 s) fails and releases the queue.
    */
   async resyncShapes({packages = []}: {packages?: string[]} = {}): Promise<ShapeSyncResult> {
+    assertReloadablePackages(packages, this.reloadablePackages());
+    const timeoutMs = envMs('LINKED_SHAPE_SYNC_TIMEOUT_MS', 120_000);
     const run = this.shapeSyncQueue.then(() =>
-      runAsSystem(async () => {
-        for (const pkg of packages) await this.reloadPackageFromDisk(pkg);
-        return this.syncRegisteredShapes();
-      }, 'shape sync requested by the host')
+      withTimeout(
+        runAsSystem(async () => {
+          const reloaded: string[] = [];
+          for (const pkg of packages) {
+            if (await this.reloadPackageFromDisk(pkg)) reloaded.push(pkg);
+          }
+          const result = await this.syncRegisteredShapes();
+          return { ...result, reloaded, shapes: [...getAllShapeClasses().keys()].sort() };
+        }, 'shape sync requested by the host'),
+        timeoutMs,
+        `the shape sync did not finish within ${timeoutMs} ms`
+      )
     );
     this.shapeSyncQueue = run.catch(() => undefined);
     return run;
   }
 
-  /** Re-read one package's source from disk (dev only); see {@link resyncShapes}. */
-  private async reloadPackageFromDisk(pkg: string): Promise<void> {
+  /** The packages a host may ask to reload: the app itself and its direct dependencies. */
+  private reloadablePackages(): Set<string> {
+    const names = new Set<string>();
+    if (this.package?.name) names.add(this.package.name);
+    try {
+      const json = JSON.parse(fsNative.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
+      if (json.name) names.add(json.name);
+      for (const field of ['dependencies', 'devDependencies']) {
+        for (const name of Object.keys(json[field] ?? {})) names.add(name);
+      }
+    } catch {}
+    return names;
+  }
+
+  /**
+   * Re-read one package's source from disk (dev only); see {@link resyncShapes}.
+   * Resolves whether it reloaded anything.
+   */
+  private async reloadPackageFromDisk(pkg: string): Promise<boolean> {
     const root = pkg === this.package?.name ? process.cwd() : this.packageDirFor(pkg);
     if (!root) throw new AdminRequestError(`unknown package: ${pkg}`);
     const graph = (this.config.server as any)?.vite?.moduleGraph;
-    if (!graph) return; // a built app: there is no source to reload
+    if (!graph) return false; // a built app: there is no source to reload
     const roots = [root];
     try {
       roots.push(fsNative.realpathSync(root));
     } catch {}
     invalidateSourceUnder(graph, roots);
     await this.onSourceChange(pkg);
+    return true;
   }
 
   // async serveData(req,res) {
@@ -1704,13 +1739,21 @@ export class LinkedServer extends Shape {
    * don't accumulate), drops them from the registry, and re-runs
    * indexPackageBackendProviders to pick up the freshly-imported module.
    * Reloads run one at a time: each re-registers routes on the shared express
-   * stack.
+   * stack. One that takes longer than `LINKED_SOURCE_RELOAD_TIMEOUT_MS` (default
+   * 60 s) rejects and releases the queue.
    *
    * Dispose calls have a 5 s soft timeout. A hanging dispose logs a
    * warning and is abandoned so HMR doesn't stall the whole dev loop.
    */
   async onSourceChange(pkg: string): Promise<void> {
-    const run = this.sourceReloadQueue.then(() => this.reloadPackageSource(pkg));
+    const timeoutMs = envMs('LINKED_SOURCE_RELOAD_TIMEOUT_MS', 60_000);
+    const run = this.sourceReloadQueue.then(() =>
+      withTimeout(
+        this.reloadPackageSource(pkg),
+        timeoutMs,
+        `the reload of ${pkg} did not finish within ${timeoutMs} ms`
+      )
+    );
     this.sourceReloadQueue = run.catch(() => undefined);
     return run;
   }

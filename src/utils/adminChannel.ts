@@ -11,8 +11,10 @@
  * - `POST /admin/sync-shapes` → re-syncs the app's shapes into its app data, as
  *   the boot does, and answers 200 with {@link ShapeSyncResult}. Body (optional):
  *   `{packages: string[]}`, packages whose source changed on disk: in dev they are
- *   reloaded first, so the sync sees shapes added or changed since the boot. A
- *   failed sync answers 500 `{error}`; an unknown package 400 `{error}`.
+ *   reloaded first, so the sync sees shapes added or changed since the boot. Each
+ *   name must be a valid npm package name and the app itself or one of its direct
+ *   dependencies, never an `@_linked/*` framework package; anything else answers
+ *   400 `{error}`. A failed or timed-out sync answers 500 `{error}`.
  */
 import { timingSafeEqual } from 'crypto';
 import type express from 'express';
@@ -25,6 +27,36 @@ export interface ShapeSyncResult {
   orphanScope?: 'all' | 'none';
   /** Set when no sync ran: shape sync is turned off, or there is no default dataset. */
   skipped?: 'disabled' | 'no-default-dataset';
+  /**
+   * The requested packages whose source was reloaded before the sync (dev only: a built
+   * app reloads nothing). Set by `POST /admin/sync-shapes`.
+   */
+  reloaded?: string[];
+  /** The node shape IRIs registered in the process after the reload. Set by `POST /admin/sync-shapes`. */
+  shapes?: string[];
+}
+
+/** npm's package-name rule: optional `@scope/`, lower case, URL-safe, no leading `.` or `_` (a scope may start with `_`, as `@_linked` does). */
+const NPM_NAME = /^(?:@[a-z0-9-~_][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+
+/** Whether `name` is a valid npm package name (and so can never be a path like `..`). */
+export function isValidPackageName(name: string): boolean {
+  return name.length <= 214 && NPM_NAME.test(name) && !name.split('/').some((part) => part === '.' || part === '..');
+}
+
+/**
+ * Refuse a package a host may not ask to reload: not a valid npm name, a framework
+ * (`@_linked/*`) package, or not in `allowed` (the app's own name and its direct
+ * dependencies). Throws {@link AdminRequestError}.
+ */
+export function assertReloadablePackages(packages: string[], allowed: ReadonlySet<string>): void {
+  for (const pkg of packages) {
+    if (!isValidPackageName(pkg)) throw new AdminRequestError(`not a package name: ${JSON.stringify(pkg)}`);
+    if (pkg.startsWith('@_linked/')) throw new AdminRequestError(`framework packages are not reloaded: ${pkg}`);
+    if (!allowed.has(pkg)) {
+      throw new AdminRequestError(`unknown package: ${pkg} is neither the app nor one of its direct dependencies`);
+    }
+  }
 }
 
 /** Thrown by a handler for a request the channel refuses with 400. */
@@ -58,6 +90,9 @@ export function parseSyncShapesBody(body: unknown): { packages: string[] } {
   if (packages === undefined) return { packages: [] };
   if (!Array.isArray(packages) || packages.some((p) => typeof p !== 'string' || !p)) {
     throw new AdminRequestError('packages must be a list of package names');
+  }
+  for (const p of packages as string[]) {
+    if (!isValidPackageName(p)) throw new AdminRequestError(`not a package name: ${JSON.stringify(p)}`);
   }
   return { packages: [...new Set(packages as string[])] };
 }

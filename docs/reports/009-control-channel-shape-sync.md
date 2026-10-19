@@ -27,7 +27,7 @@ with main until its first write, that rewrite is a write.
 |---|---|
 | `GET /admin/health` | 200 `{status: 'ok'}` |
 | `POST /admin/restart` | 202, then the process exits |
-| `POST /admin/sync-shapes` | 200 `{written, orphanScope}` or `{written: 0, skipped}`; 400 `{error}` for a malformed body or an unknown package; 500 `{error}` when the sync fails |
+| `POST /admin/sync-shapes` | 200 `{written, orphanScope, reloaded, shapes}` or `{written: 0, skipped, …}`; 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
 
 All of them need `x-cn-admin-secret` equal to `CN_APP_ADMIN_SECRET` (401 otherwise) and
 answer 404 when the process has no secret.
@@ -60,3 +60,10 @@ installed and `appData` on a scratch Fuseki dataset: boot wrote 20 shapes; after
 `Task.ts` and its barrel line, `POST /admin/sync-shapes {"packages":["…-assets"]}` answered
 `{"written":2,"orphanScope":"none"}` (Task and Thing); a second call answered
 `{"written":0}`; a restarted app logged `0 shape(s) written`.
+
+## 3.6.1: review hardening
+
+- **The answer says what was reloaded and registered.** `reloaded` lists the requested packages whose source was reloaded (none in a built app) and `shapes` the node shape IRIs registered afterwards. A `{written: 0}` alone could not tell "the stored shapes match" from "nothing was reloaded, so the new shape is not there"; a host checks the shape it wrote is in `shapes`.
+- **`packages` is validated.** Each name must be a valid npm package name (never a path such as `..`), not an `@_linked/*` package, and the app itself or one of its direct dependencies (`assertReloadablePackages`); otherwise 400.
+- **Queues cannot hang.** The sync queue and the source-reload queue time each operation out (`LINKED_SHAPE_SYNC_TIMEOUT_MS`, default 120 s; `LINKED_SOURCE_RELOAD_TIMEOUT_MS`, default 60 s): the caller gets the failure and the next operation runs.
+- **README:** the control channel, and the side effects of a reload (providers disposed for a moment) and of a restart (in-flight requests dropped).

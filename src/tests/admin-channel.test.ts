@@ -4,11 +4,14 @@ import * as path from 'path';
 import type { AddressInfo } from 'net';
 import {
   AdminRequestError,
+  assertReloadablePackages,
+  isValidPackageName,
   parseSyncShapesBody,
   registerAdminRoutes,
   type ShapeSyncResult,
 } from '../utils/adminChannel.js';
 import { invalidateSourceUnder } from '../utils/reloadSource.js';
+import { envMs, withTimeout } from '../utils/withTimeout.js';
 
 const SECRET = 's3cret-s3cret';
 const servers: any[] = [];
@@ -161,5 +164,49 @@ describe('invalidateSourceUnder', () => {
     ]);
     expect(invalidateSourceUnder(g, [root]).sort()).toEqual([entry, barrel].sort());
     expect(g.changed.sort()).toEqual([entry, barrel].sort());
+  });
+});
+
+describe('package names a host may ask to reload', () => {
+  it('accepts npm package names and refuses paths and junk', () => {
+    for (const ok of ['my-assets', '@acme/my-app', 'a.b_c~d']) expect(isValidPackageName(ok)).toBe(true);
+    for (const bad of ['..', '../x', 'a/../b', '@acme/..', '/abs', 'Upper', '.hidden', '_x', 'a b', '@x', ''])
+      expect(isValidPackageName(bad)).toBe(false);
+  });
+
+  it('the body parser refuses a name that is not a package name', () => {
+    expect(() => parseSyncShapesBody({ packages: ['../../etc'] })).toThrow(AdminRequestError);
+  });
+
+  it('allows only the app and its direct dependencies, never @_linked/*', () => {
+    const allowed = new Set(['app', 'app-assets', '@_linked/core']);
+    expect(() => assertReloadablePackages(['app', 'app-assets'], allowed)).not.toThrow();
+    expect(() => assertReloadablePackages(['@_linked/core'], allowed)).toThrow(/framework packages/);
+    expect(() => assertReloadablePackages(['other'], allowed)).toThrow(/neither the app nor one of its direct dependencies/);
+    expect(() => assertReloadablePackages(['..'], allowed)).toThrow(/not a package name/);
+  });
+});
+
+describe('withTimeout', () => {
+  it('passes a result through and rejects a hung operation with the message', async () => {
+    await expect(withTimeout(Promise.resolve(3), 50, 'slow')).resolves.toBe(3);
+    await expect(withTimeout(new Promise(() => {}), 20, 'the sync did not finish')).rejects.toThrow('the sync did not finish');
+  });
+
+  it('a queue built on it is released after a timeout', async () => {
+    let queue: Promise<unknown> = Promise.resolve();
+    const enqueue = <T>(op: () => Promise<T>) => {
+      const run = queue.then(() => withTimeout(op(), 20, 'timed out'));
+      queue = run.catch(() => undefined);
+      return run;
+    };
+    await expect(enqueue(() => new Promise(() => {}))).rejects.toThrow('timed out');
+    await expect(enqueue(async () => 'next')).resolves.toBe('next');
+  });
+
+  it('envMs reads a positive number, else the fallback', () => {
+    expect(envMs('X', 5, { X: '100' })).toBe(100);
+    expect(envMs('X', 5, { X: 'abc' })).toBe(5);
+    expect(envMs('X', 5, {})).toBe(5);
   });
 });
