@@ -51,3 +51,7 @@ store is a plain `fetch` client, injectable through `config.fetch` for tests.
 `src/tests/gateway-store.test.ts`: the wire shape of every op with a fake `fetch`, the count path,
 `init()`'s route and idempotence, and the error mapping (network, 401, 503 `fork-failed`, 403,
 400, non-JSON body, 200 without `result`).
+
+## PR
+
+https://github.com/linked-fw/server/pull/177 (2.25.0; removed in 3.0.0 by https://github.com/linked-fw/server/pull/179)
