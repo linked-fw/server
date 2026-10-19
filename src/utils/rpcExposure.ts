@@ -10,7 +10,7 @@
  * The class that owns the method (the first prototype on the chain that has it)
  * decides. When that class declares it, its own level applies. When it does not
  * (an override of an inherited method), the method keeps the strictest level
- * declared for it by any class up the chain (`'user'` over `'public'`), so an
+ * declared for it by any class up the chain (`'signed-in'` over `'public'`), so an
  * override never loses a session requirement. Only when no class declares it is
  * the method undeclared.
  *
@@ -27,8 +27,9 @@
  *   it is also declared callable. Backend-to-backend calls still reach it.
  * - **undeclared** — no class on the chain declares it. In `warn` mode it runs
  *   and is logged once; in `enforce` mode it is 501.
- * - **callable** — declared (directly or inherited, see above). A `'user'`
- *   method answers 401 without a session.
+ * - **callable** — declared (directly or inherited, see above). A `'signed-in'`
+ *   method answers 401 without a session. `'user'`, the deprecated alias, is
+ *   treated exactly like `'signed-in'` and reported as `'signed-in'`.
  *
  * Backend-to-backend calls (`Server.call` on the server) skip everything except
  * the reserved names, internal methods included.
@@ -36,13 +37,22 @@
 import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 import {
-  getOwnCallableLevel,
+  getOwnCallableLevel as getDeclaredLevel,
   isDeclaredInternal,
-  type CallableLevel,
+  type CallableLevel as DeclaredLevel,
 } from '@_linked/server-utils/utils/callable';
 import { sharedState } from '@_linked/core/utils/sharedState';
 
 export type RpcExposureMode = 'warn' | 'enforce';
+
+/** A level as the server reports it: the deprecated `'user'` reads `'signed-in'`. */
+export type CallableLevel = Exclude<DeclaredLevel, 'user'>;
+
+/** The level `cls` itself declares for `method`, with `'user'` read as `'signed-in'`. */
+function getOwnCallableLevel(cls: Function, method: string): CallableLevel | undefined {
+  const level = getDeclaredLevel(cls, method);
+  return level === 'user' ? 'signed-in' : level;
+}
 
 export type CallableResolution =
   | { status: 'callable'; level: CallableLevel; owner: Function; inherited?: boolean }
@@ -146,7 +156,7 @@ export function resolveCallable(provider: any, method: string): CallableResoluti
   return { status: 'undeclared', owner: start };
 }
 
-const STRICTNESS: Record<CallableLevel, number> = { public: 0, user: 1 };
+const STRICTNESS: Record<CallableLevel, number> = { public: 0, 'signed-in': 1 };
 
 /** The strictest level any class from `cls` up declares for `method`. */
 function strictestDeclaredLevel(cls: unknown, method: string): CallableLevel | undefined {
@@ -237,7 +247,7 @@ export function warnUndeclaredCall(
   warnedUndeclared.add(key);
   console.warn(
     `[linked] undeclared RPC ${logSafe(pkg)} ${className}.${logSafe(method)} (session: ${hasSession ? 'yes' : 'no'}). ` +
-      `Declare it with @callable('public' | 'user') if the client calls it; ` +
+      `Declare it with @callable('public' | 'signed-in') if the client calls it; ` +
       `undeclared methods are refused (501) once rpcExposure is 'enforce'.`
   );
 }

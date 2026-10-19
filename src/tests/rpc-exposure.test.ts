@@ -61,12 +61,18 @@ class TestProvider extends BackendProvider {
     return 'pong';
   }
 
-  @callable('user')
+  @callable('signed-in')
   whoami() {
     return this.request?.linkedAuth?.userAccount?.id;
   }
 
+  // the deprecated alias of 'signed-in'
   @callable('user')
+  legacyWhoami() {
+    return this.request?.linkedAuth?.userAccount?.id;
+  }
+
+  @callable('signed-in')
   async slowWhoami(delay: number) {
     await tick(delay);
     return this.request?.linkedAuth?.userAccount?.id;
@@ -232,7 +238,7 @@ describe('resolveCallable', () => {
 
   it('resolves declarations on the provider class', () => {
     expect(resolveCallable(provider, 'ping')).toMatchObject({ status: 'callable', level: 'public', owner: TestProvider });
-    expect(resolveCallable(provider, 'whoami')).toMatchObject({ status: 'callable', level: 'user' });
+    expect(resolveCallable(provider, 'whoami')).toMatchObject({ status: 'callable', level: 'signed-in' });
     expect(resolveCallable(provider, 'undeclared')).toMatchObject({ status: 'undeclared', owner: TestProvider });
     expect(resolveCallable(provider, 'nope')).toEqual({ status: 'missing' });
   });
@@ -286,7 +292,7 @@ describe('resolveCallable', () => {
     }
     const sub = new Sub({}, {});
     expect(resolveCallable(sub, 'ping')).toMatchObject({ status: 'callable', level: 'public', inherited: true });
-    expect(resolveCallable(sub, 'whoami')).toMatchObject({ status: 'callable', level: 'user', inherited: true });
+    expect(resolveCallable(sub, 'whoami')).toMatchObject({ status: 'callable', level: 'signed-in', inherited: true });
     expect(resolveCallable(sub, 'fresh').status).toBe('undeclared');
 
     // an explicit declaration on the override is the class's own choice...
@@ -303,13 +309,34 @@ describe('resolveCallable', () => {
         return 'below';
       }
     }
-    expect(resolveCallable(new Below({}, {}), 'whoami')).toMatchObject({ status: 'callable', level: 'user' });
+    expect(resolveCallable(new Below({}, {}), 'whoami')).toMatchObject({ status: 'callable', level: 'signed-in' });
+  });
+
+  it("reports the deprecated 'user' as 'signed-in', and ranks it the same", () => {
+    const provider = new TestProvider({}, {});
+    expect(resolveCallable(provider, 'legacyWhoami')).toMatchObject({ status: 'callable', level: 'signed-in' });
+    class Relaxed extends TestProvider {
+      @callable('public')
+      legacyWhoami() {
+        return 'relaxed';
+      }
+    }
+    class Below extends Relaxed {
+      legacyWhoami() {
+        return 'below';
+      }
+    }
+    expect(resolveCallable(new Below({}, {}), 'legacyWhoami')).toMatchObject({
+      status: 'callable',
+      level: 'signed-in',
+      inherited: true,
+    });
   });
 
   it('a method assigned onto the instance keeps the level its class declares', () => {
     const p: any = new TestProvider({}, {});
     p.whoami = () => 'assigned';
-    expect(resolveCallable(p, 'whoami')).toMatchObject({ status: 'callable', level: 'user', inherited: true });
+    expect(resolveCallable(p, 'whoami')).toMatchObject({ status: 'callable', level: 'signed-in', inherited: true });
   });
 });
 
@@ -366,14 +393,17 @@ describe('RPC exposure over HTTP', () => {
     }
   });
 
-  it("answers 401 for a 'user' method without a session, and runs it with one", async () => {
-    const base = await listen(makeLinkedServer());
-    expect((await call(base, 'pkg', 'whoami')).status).toBe(401);
-    expect(await call(base, 'pkg', 'whoami', [], 'http://ex/alice')).toMatchObject({
-      status: 200,
-      json: 'http://ex/alice',
-    });
-  });
+  it.each(['whoami', 'legacyWhoami'])(
+    "answers 401 for a 'signed-in' method (%s) without a session, and runs it with one",
+    async (method) => {
+      const base = await listen(makeLinkedServer());
+      expect((await call(base, 'pkg', method)).status).toBe(401);
+      expect(await call(base, 'pkg', method, [], 'http://ex/alice')).toMatchObject({
+        status: 200,
+        json: 'http://ex/alice',
+      });
+    }
+  );
 
   it('answers 501 on the generic route for a provider with static rpc = false', async () => {
     const base = await listen(makeLinkedServer());
