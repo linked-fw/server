@@ -1,13 +1,14 @@
 ---
 summary: >
-  DONE. /resized/* no longer fetches anything: both branches read and write
+  /resized/* no longer fetches anything: both branches read and write
   through LinkedFileStorage. The `?src=` parameter still accepts a full URL, so
   nothing broke -- the URL is resolved to a store key and the bytes are read
   directly, which turned out not to need the major release this item assumed.
-  Kept as the record of why the route looks the way it does.
+  Moved from docs/backlog/001 once done; the record of why the route looks the
+  way it does.
 ---
 
-# 001 — Resize by store key instead of fetching a URL
+# 008 — Resize by store key instead of fetching a URL
 
 > **Done.** Delivered without the breaking change this item expected: see *Resolution* at the end.
 

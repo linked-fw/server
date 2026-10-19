@@ -7,7 +7,7 @@ summary: The generic query plane decodes each request's DSL-JSON in a shape cata
 
 # 004 — Query-plane catalog hook
 
-Consumer: Create Now plan 068 phase 3, which resolves each project branch's shapes against its
+Consumer: Create Now plan 068, which resolves each project branch's shapes against its
 own `ShapeCatalog` (core report 037) instead of re-registering them process-wide. CN supplies
 the catalog of the admitted (project, branch) and none for its own pinned shapes.
 
@@ -66,3 +66,12 @@ With the catalog dropped from `fromJSON`, 3 of the 8 fail.
 ## Deviations
 
 None from the contract.
+
+## Later changes
+
+Since 3.3.0 the resolver lives on `globalThis` (core `sharedState`), so a second copy of this
+package in the process decodes in the same catalog: report [005](005-shared-state-across-copies.md).
+
+## PR
+
+https://github.com/linked-fw/server/pull/181 (3.1.0)
