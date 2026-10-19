@@ -17,6 +17,7 @@ If you want to further adjust the functionality of LincdServer yourself, either 
 - [Calling methods on the backend](#calling-methods-on-the-backend)
   - [Shape providers](#shape-providers)
   - [Generic backend providers](#generic-backend-providers)
+  - [Which methods a client may call (`server.rpcExposure`)](#which-methods-a-client-may-call-serverrpcexposure)
   - [Gotchas](#gotchas)
   - [Error semantics](#error-semantics)
 - [Query stores](#query-stores)
@@ -198,6 +199,21 @@ Server.call(packageName, 'login', email, password).then((user) => {
 ```
 
 Note that you can have **only one** generic backend provider per package.
+
+### Which methods a client may call (`server.rpcExposure`)
+
+A `/call/...` request reaches only provider methods declared with `@callable('public' | 'user')`; `@internal()` methods are never reachable over HTTP. The declarations, what each level does, and the rule for methods that act for a signed-in user are documented in one place: [server-utils: Which provider methods a client may call](https://github.com/linked-fw/server-utils#which-provider-methods-a-client-may-call).
+
+`server.rpcExposure` sets what happens to an undeclared method: `'warn'` (the default) runs it and logs it once, `'enforce'` answers `501`. Without the config key, the `LINKED_RPC_EXPOSURE` environment variable sets it.
+
+```typescript
+new LinkedServer({
+  server: {
+    rpcExposure: 'enforce',
+    //...
+  },
+});
+```
 
 ### Gotchas
 
