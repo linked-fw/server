@@ -26,6 +26,7 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [`ping`](#ping)
   - [Shape catalog per request](#shape-catalog-per-request)
 - [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
+- [Host control channel (`/admin/*`)](#host-control-channel-admin)
 - [Provider lifecycle and HMR](#provider-lifecycle-and-hmr)
   - [When a provider throws, and refusing to start](#when-a-provider-throws-and-refusing-to-start)
   - [When to implement `dispose()`](#when-to-implement-dispose)
@@ -401,6 +402,24 @@ new LinkedServer({
 ```
 
 With `apiOnly` the server skips page rendering. It installs no SPA catch-all, so a `GET` for a page that no route handles gets express's plain `404` instead of the app shell. The `/call/...` and `/api/...` routes and the routes that providers register work as usual.
+
+## Host control channel (`/admin/*`)
+
+A host that starts the app process (Create Now) controls it over HTTP routes on the app's own port. They exist only when the process was started with `CN_APP_ADMIN_SECRET` in its environment; without it they answer 404. Every request carries the secret in `x-cn-admin-secret` (401 otherwise).
+
+| Route | Answer |
+|---|---|
+| `GET /admin/health` | 200 `{status: 'ok'}` once the server listens (the boot shape sync has finished by then) |
+| `POST /admin/restart` | 202, then the process exits; the host starts it again |
+| `POST /admin/sync-shapes` | 200 `{written, orphanScope, reloaded, shapes}` (or `{written: 0, skipped, …}` when shape sync is off); 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
+
+`POST /admin/sync-shapes` re-syncs the registered shapes into the app's data exactly as the boot does (core `syncShapes`: only shapes whose stored `core:shapeHash` differs are written, with the boot's orphan policy and `syncShapesOnBoot` / `LINKED_SYNC_SHAPES_ON_BOOT` switches). The optional body `{packages: [...]}` names packages whose source the host changed; each must be a valid npm package name and the app itself or one of its direct dependencies, never an `@_linked/*` package. In dev their modules are invalidated in Vite and their backends reloaded before the sync, so a shape file written a moment ago is registered; a built app reloads nothing. `reloaded` lists the packages actually reloaded and `shapes` the node shape IRIs registered afterwards, so the host can check that the shape it wrote is there. Syncs run one at a time, as the system; one that takes longer than `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120000) fails and releases the queue. A source reload by itself (HMR) never syncs shapes.
+
+Side effects to expect:
+
+- **A reload briefly disposes the package's providers.** Reloading a package (on HMR, or for `sync-shapes`) runs `dispose()` on its providers and constructs new ones; a request to that package's routes or methods that arrives in between can fail. Reloads run one at a time; one that takes longer than `LINKED_SOURCE_RELOAD_TIMEOUT_MS` (default 60000) rejects and releases the queue.
+- **A restart drops in-flight requests.** `POST /admin/restart` exits the process 50 ms after answering. A host that restarts an app whose server has no `sync-shapes` route (an older `@_linked/server`) to make its boot sync the shapes drops whatever that app was serving.
+- The channel listens on the app's public port, like every other route; only the secret protects it.
 
 ## Provider lifecycle and HMR
 
