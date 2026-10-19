@@ -668,3 +668,15 @@ that it exists before calling it.
 
 - [ ] Add tests
 - [ ] Refactor `NodeFileStore` to `LocalQuadStore` as to not confuse FileStores with QuadStores
+
+## Shared state and error brands
+
+A module of this package can be evaluated twice in one process (Vite's SSR runner and Node under
+`linked start`). The settings `LinkedServer` applies from config — `server.rawQueries`,
+`server.rpcExposure` — and the host's `setQueryCatalogResolver` are kept on `globalThis` with
+`sharedState` from `@_linked/core`, so a second copy never falls back to its default. The process
+setup (the cookie-jar `fetch`, the `process` error listeners) runs once per process. The error
+classes `RemoteDatasetError`, `RemoteDatasetUnreachableError`, `RemoteDatasetUnauthorizedError` and
+`FatalStartupError` are branded: match them with `isLinkedError(err, RemoteDatasetUnreachableError)`
+from `@_linked/core`, not `instanceof`. See
+[shared state and error brands](https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md).

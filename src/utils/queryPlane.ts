@@ -27,6 +27,7 @@ import {
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { getRawQueriesMode } from './rawQueries.js';
 import { getRpcExposureMode } from './rpcExposure.js';
+import { sharedState } from '@_linked/core/utils/sharedState';
 
 /** The DSL-JSON tag of a query-context reference (`CONTEXT_REF_KEY` in core). */
 const CONTEXT_REF_KEY = '@ctx';
@@ -64,7 +65,14 @@ export type QueryCatalogResolver = (
   query: unknown
 ) => ShapeCatalog | undefined | Promise<ShapeCatalog | undefined>;
 
-let queryCatalogResolver: QueryCatalogResolver | undefined;
+/**
+ * The host's resolver, shared by every copy of this module in the process: the host sets it
+ * through one copy, and the query endpoint served by another must use it rather than decode in
+ * the global registry. See https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md.
+ */
+const queryPlaneState = sharedState('@_linked/server', 'queryPlane', () => ({
+  catalogResolver: undefined as QueryCatalogResolver | undefined,
+}));
 
 /**
  * Set (or, with `undefined`, clear) the host's catalog resolver for the
@@ -72,7 +80,7 @@ let queryCatalogResolver: QueryCatalogResolver | undefined;
  * shape registry.
  */
 export function setQueryCatalogResolver(resolver: QueryCatalogResolver | undefined): void {
-  queryCatalogResolver = resolver;
+  queryPlaneState.catalogResolver = resolver;
 }
 
 /** A live builder passed by backend code (never a plain object from JSON). */
@@ -94,7 +102,7 @@ function isLiveBuilder(query: any): boolean {
  * the status); any other failure is logged and answers 500.
  */
 export async function resolveQueryCatalog(query: unknown): Promise<ShapeCatalog | undefined> {
-  const resolver = queryCatalogResolver;
+  const resolver = queryPlaneState.catalogResolver;
   if (!resolver || isLiveBuilder(query)) return undefined;
   try {
     return await resolver(query);

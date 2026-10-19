@@ -29,6 +29,7 @@ import {
 } from '@_linked/server-utils/utils/CallContext';
 import { Shape } from '@_linked/core/shapes/Shape';
 import { LinkedErrorLogging } from '@_linked/core/utils/LinkedErrorLogging';
+import { sharedState } from '@_linked/core/utils/sharedState';
 import {
   FileStorePurposes,
   LinkedFileStorage,
@@ -206,37 +207,52 @@ const isProduction = process.env.NODE_ENV === 'production';
 const isDevelopment = process.env.NODE_ENV === 'development';
 
 declare var globalThis: any;
-// Install a global fetch that persists cookies across redirects using a CookieJar.
-// This ensures server-side requests behave more like browsers when handling Set-Cookie + redirects.
-const __lincdCookieJar = new CookieJar();
-// Wrap native fetch with fetch-cookie so it reads/writes cookies in the jar.
-const __lincdFetchWithCookies = fetchCookie(fetch, __lincdCookieJar);
 
-// Expose (optionally) for debugging/tests; not required by app logic.
-(globalThis as any).__lincdCookieJar = __lincdCookieJar;
+// The process-wide setup below runs once per process, not once per copy of this module: a
+// second copy would wrap the already-wrapped fetch in a second cookie jar and register every
+// process listener twice. See
+// https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md.
+const processSetup = sharedState('@_linked/server', 'LinkedServer.processSetup', () => ({
+  done: false,
+}));
+if (!processSetup.done) {
+  processSetup.done = true;
+  installProcessSetup();
+}
 
-// Set the global fetch used throughout the server code path
-(globalThis as any).fetch = __lincdFetchWithCookies;
+function installProcessSetup() {
+  // Install a global fetch that persists cookies across redirects using a CookieJar.
+  // This ensures server-side requests behave more like browsers when handling Set-Cookie + redirects.
+  const __lincdCookieJar = new CookieJar();
+  // Wrap native fetch with fetch-cookie so it reads/writes cookies in the jar.
+  const __lincdFetchWithCookies = fetchCookie(fetch, __lincdCookieJar);
 
-process.on('uncaughtException', (err) => {
-  console.warn(paint('red', 'Asynchronous error caught.'));
-  console.error(err);
+  // Expose (optionally) for debugging/tests; not required by app logic.
+  (globalThis as any).__lincdCookieJar = __lincdCookieJar;
 
-  // error logging
-  LinkedErrorLogging.log(err);
-});
-process.on('unhandledRejection', (err) => {
-  console.warn(paint('red', 'Unhandled rejection caught.'));
-  console.error(err);
+  // Set the global fetch used throughout the server code path
+  (globalThis as any).fetch = __lincdFetchWithCookies;
 
-  // error logging
-  LinkedErrorLogging.log(err as Error);
-});
+  process.on('uncaughtException', (err) => {
+    console.warn(paint('red', 'Asynchronous error caught.'));
+    console.error(err);
 
-process.on('warning', (e) => console.warn(e.stack));
+    // error logging
+    LinkedErrorLogging.log(err);
+  });
+  process.on('unhandledRejection', (err) => {
+    console.warn(paint('red', 'Unhandled rejection caught.'));
+    console.error(err);
 
-//allow more listeners for when we have many concurrent users
-events.EventEmitter.prototype.setMaxListeners(500);
+    // error logging
+    LinkedErrorLogging.log(err as Error);
+  });
+
+  process.on('warning', (e) => console.warn(e.stack));
+
+  //allow more listeners for when we have many concurrent users
+  events.EventEmitter.prototype.setMaxListeners(500);
+}
 
 // const jsdom = require("jsdom");
 // const { JSDOM } = jsdom;
