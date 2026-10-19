@@ -19,7 +19,9 @@ const {
   RemoteDatasetError,
   RemoteDatasetUnauthorizedError,
   RemoteDatasetUnreachableError,
+  END_USER_HEADER,
 } = await import('../shapes/quadstores/RemoteDataset.js');
+const { runWithCallContext, runAsSystem } = await import('@_linked/server-utils/utils/CallContext');
 const { LinkedServer, registerCallRoutes } = await import('../shapes/LinkedServer.js');
 const { default: LincdServerBackendProvider } = await import('../backend.js');
 const { packageName } = await import('../package.js');
@@ -363,6 +365,48 @@ describe('RemoteDataset url form: other errors', () => {
         expect(String(err.stack)).not.toContain(TOKEN);
       }
     }
+  });
+});
+
+describe('RemoteDataset url form: the end user', () => {
+  const WEBID = 'https://alice.example/profile/card#me';
+  const signedIn = (webId: string | undefined) => ({
+    kind: 'http' as const,
+    request: webId ? { linkedAuth: { userAccount: { id: 'urn:acct', accountOf: { id: webId } } } } : {},
+    response: {},
+  });
+  const sentHeaders = (call: Call) => call.init.headers as Record<string, string>;
+
+  it('sends the signed-in user\'s WebID as x-linked-end-user', async () => {
+    expect(END_USER_HEADER).toBe('x-linked-end-user');
+    const calls = stubFetch(() => jsonResponse(200, true));
+    const query = AskBuilder.forNode(IRI);
+    await runWithCallContext(signedIn(WEBID), () => store().askQuery(query));
+    expect(sentHeaders(calls[0])[END_USER_HEADER]).toBe(WEBID);
+    expect(sentHeaders(calls[0]).Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('sends no end user in a system context, for an anonymous request, or outside any call', async () => {
+    const calls = stubFetch(() => jsonResponse(200, true));
+    const query = AskBuilder.forNode(IRI);
+    // A system context opened from inside a signed-in request still has no user.
+    await runWithCallContext(signedIn(WEBID), () => runAsSystem(() => store().askQuery(query), 'job'));
+    await runWithCallContext(signedIn(undefined), () => store().askQuery(query));
+    await store().askQuery(query);
+    expect(calls).toHaveLength(3);
+    for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
+  });
+
+  it('forwardEndUser: false (or "false") sends no end user', async () => {
+    const calls = stubFetch(() => jsonResponse(200, true));
+    const query = AskBuilder.forNode(IRI);
+    expect(store().forwardEndUser).toBe(true);
+    await runWithCallContext(signedIn(WEBID), async () => {
+      await store({ forwardEndUser: false }).askQuery(query);
+      await store({ forwardEndUser: 'false' }).askQuery(query);
+    });
+    expect(calls).toHaveLength(2);
+    for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
   });
 });
 
