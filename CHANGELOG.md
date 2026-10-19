@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 3.5.0
+
+### Minor Changes
+
+- [#193](https://github.com/linked-fw/server/pull/193) [`e4f2510`](https://github.com/linked-fw/server/commit/e4f251007b3f8f28ada5ed2d83daef4cda8ec15c) Thanks [@flyon](https://github.com/flyon)! - The server enforces and reports the `'signed-in'` callable level from `@_linked/server-utils` 1.14: a `'signed-in'` method answers 401 without a session. A method declared with the deprecated alias `'user'` is treated exactly the same, and `resolveCallable` reports it as `'signed-in'`. Requires `@_linked/server-utils` ^1.14.0.
+
 ## 3.4.1
 
 ### Patch Changes
