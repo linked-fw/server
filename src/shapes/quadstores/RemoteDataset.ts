@@ -1,7 +1,7 @@
 import { packageName } from '../../package.js';
 import { brandLinkedError } from '@_linked/core/utils/linkedError';
 import { Server } from '@_linked/server-utils/utils/Server';
-import { getCallContext } from '@_linked/server-utils/utils/CallContext';
+import type { CallContext } from '@_linked/server-utils/utils/CallContext';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
 import type { CountQuery } from '@_linked/core/queries/CountQuery';
@@ -50,13 +50,24 @@ export interface RemoteDatasetConfig {
  */
 export const END_USER_HEADER = 'x-linked-end-user';
 
+// The store `@_linked/server-utils/utils/CallContext` keeps the call context in, shared on
+// `globalThis` under this key. Read here instead of importing that module: it imports
+// `node:async_hooks`, and this store also runs in the browser (the no-url form). In a browser,
+// and in a server before any call ran, the key is unset and there is no context.
+const CALL_CONTEXT_KEY = Symbol.for('@_linked/server-utils:callContext');
+
+function currentCallContext(): CallContext | undefined {
+  const store = (globalThis as Record<symbol, { getStore?: () => unknown } | undefined>)[CALL_CONTEXT_KEY];
+  return typeof store?.getStore === 'function' ? (store.getStore() as CallContext | undefined) : undefined;
+}
+
 /**
  * The WebID of the signed-in user behind the current call: the http context's
  * `request.linkedAuth.userAccount.accountOf.id`. Undefined in a system context
  * (`runAsSystem`), outside any call, and for a request without a session.
  */
 export function currentEndUserWebId(): string | undefined {
-  const ctx = getCallContext();
+  const ctx = currentCallContext();
   if (!ctx || ctx.kind !== 'http') return undefined;
   const webId = ctx.request?.linkedAuth?.userAccount?.accountOf?.id;
   return typeof webId === 'string' && webId ? webId : undefined;
