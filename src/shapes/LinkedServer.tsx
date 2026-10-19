@@ -1,5 +1,4 @@
 'use strict';
-import { timingSafeEqual } from 'crypto';
 import events from 'events';
 import express, { Express as ExpressServer } from 'express';
 import fetchCookie from 'fetch-cookie';
@@ -186,6 +185,12 @@ import {
   ssrCssScope,
 } from '../utils/ssrCss.js';
 import { materializeShapes } from '../utils/syncShapes.js';
+import {
+  AdminRequestError,
+  registerAdminRoutes,
+  type ShapeSyncResult,
+} from '../utils/adminChannel.js';
+import { invalidateSourceUnder } from '../utils/reloadSource.js';
 import {
   installSpaFallback,
   repinSpaFallback,
@@ -475,41 +480,87 @@ export class LinkedServer extends Shape {
   /**
    * Materialize this server's registered shapes into the RDF store as SHACL
    * (core `syncShapes` → pure `sh:NodeShape` + property shapes), so a running
-   * app's app-data holds the shapes its instances validate/query against
-   * (plan-010 T1e.2). Whatever shapes the app package registers (published
-   * re-exports + generated) get written on boot (and re-run on shape-file HMR).
+   * app's app-data holds the shapes its instances validate/query against.
+   * Whatever shapes the app package registers (published re-exports +
+   * generated) are written on boot, and again when the host asks for it over
+   * the control channel ({@link resyncShapes}). A source reload (HMR) does not
+   * sync shapes by itself.
+   *
+   * Core writes only the shapes whose stored hash differs, so a sync of
+   * unchanged shapes writes nothing.
    *
    * Additive only: store shapes this process did not register are left alone
    * unless the operator sets `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` — see
    * `bootOrphanScope` in utils/syncShapes for why.
    *
-   * Gated to servers whose DEFAULT dataset is a **concrete** materializable store
-   * (detected via `rawQuery`) — i.e. an app pointing at its app-data FusekiStore.
-   * CN's default is the context-routing `AppDataRouter` (no `rawQuery`), so CN is
-   * skipped here — it materializes its own pinned native shapes in its storage
-   * config.
+   * Opt-out via `linked.config` `syncShapesOnBoot` (default true); env
+   * LINKED_SYNC_SHAPES_ON_BOOT overrides for deployment. CN sets
+   * `syncShapesOnBoot: false` in its own linked.config — its default dataset is
+   * a context-router that can't materialize context-free, and it syncs its own
+   * pinned shapes separately (linked.backend.storage.js).
    */
   private async materializeShapesIntoStore(): Promise<void> {
-    // Opt-out via `linked.config` `syncShapesOnBoot` (default true); env
-    // LINKED_SYNC_SHAPES_ON_BOOT overrides for deployment. CN sets
-    // `syncShapesOnBoot: false` in its own linked.config — its default dataset is
-    // a context-router that can't materialize context-free, and it syncs its own
-    // pinned shapes separately (linked.backend.storage.js).
-    const configFlag = (this.config as any)?.syncShapesOnBoot;
-    const envFlag = process.env.LINKED_SYNC_SHAPES_ON_BOOT;
-    if (configFlag === false || envFlag === 'false') {
-      return;
-    }
-    const appData = LinkedStorage.getDefaultDataset();
-    if (!appData) return;
     try {
-      const {syncShapes} = await import('@_linked/core');
-      // Explicit target: materialize EVERY registered shape into the app's own
-      // data store regardless of per-shape routing/pins.
-      await materializeShapes(appData, syncShapes as any);
+      await this.syncRegisteredShapes();
     } catch (err) {
       console.warn('[LinkedServer] shape materialization failed (non-fatal):', err);
     }
+  }
+
+  /** One shape sync into the default dataset; throws when it fails. */
+  private async syncRegisteredShapes(): Promise<ShapeSyncResult> {
+    const configFlag = (this.config as any)?.syncShapesOnBoot;
+    const envFlag = process.env.LINKED_SYNC_SHAPES_ON_BOOT;
+    if (configFlag === false || envFlag === 'false') {
+      return { written: 0, skipped: 'disabled' };
+    }
+    const appData = LinkedStorage.getDefaultDataset();
+    if (!appData) return { written: 0, skipped: 'no-default-dataset' };
+    const {syncShapes} = await import('@_linked/core');
+    // Explicit target: materialize EVERY registered shape into the app's own
+    // data store regardless of per-shape routing/pins.
+    const {count, orphanScope} = await materializeShapes(appData, syncShapes as any);
+    return { written: count, orphanScope };
+  }
+
+  /** Tail of the {@link resyncShapes} queue: one re-sync at a time. */
+  private shapeSyncQueue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Re-sync the registered shapes into app data, as the boot does, and report
+   * what was written. The host calls it (`POST /admin/sync-shapes`) after it
+   * changed the app's shape code, so the app — the only process that loads that
+   * code — writes its own shapes and their hashes.
+   *
+   * `packages` names the packages whose source changed. In dev (Vite) their
+   * modules are invalidated and their backends reloaded first
+   * ({@link onSourceChange}), so a shape added since the boot is registered
+   * before the sync; without Vite (a built app) the sync covers the shapes the
+   * process loaded. Runs as the system, never as the caller of a request.
+   */
+  async resyncShapes({packages = []}: {packages?: string[]} = {}): Promise<ShapeSyncResult> {
+    const run = this.shapeSyncQueue.then(() =>
+      runAsSystem(async () => {
+        for (const pkg of packages) await this.reloadPackageFromDisk(pkg);
+        return this.syncRegisteredShapes();
+      }, 'shape sync requested by the host')
+    );
+    this.shapeSyncQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Re-read one package's source from disk (dev only); see {@link resyncShapes}. */
+  private async reloadPackageFromDisk(pkg: string): Promise<void> {
+    const root = pkg === this.package?.name ? process.cwd() : this.packageDirFor(pkg);
+    if (!root) throw new AdminRequestError(`unknown package: ${pkg}`);
+    const graph = (this.config.server as any)?.vite?.moduleGraph;
+    if (!graph) return; // a built app: there is no source to reload
+    const roots = [root];
+    try {
+      roots.push(fsNative.realpathSync(root));
+    } catch {}
+    invalidateSourceUnder(graph, roots);
+    await this.onSourceChange(pkg);
   }
 
   // async serveData(req,res) {
@@ -752,39 +803,12 @@ export class LinkedServer extends Shape {
       res.sendStatus(200);
     });
 
-    // CN control channel (plan-010 T1b.3). Present only when CN spawned this
-    // process with a shared secret (CN_APP_ADMIN_SECRET); a standalone app run
-    // without the secret leaves the channel closed (404). Auth is the
-    // x-cn-admin-secret header matching that env value.
-    const adminSecret = process.env.CN_APP_ADMIN_SECRET;
-    // Constant-time compare so the secret can't be recovered by timing the 401
-    // response. timingSafeEqual requires equal-length buffers, so guard length.
-    const secretMatches = (provided: string | undefined): boolean => {
-      if (!adminSecret || !provided) return false;
-      const a = Buffer.from(provided);
-      const b = Buffer.from(adminSecret);
-      return a.length === b.length && timingSafeEqual(a, b);
-    };
-    const requireAdmin = (req: express.Request, res: express.Response): boolean => {
-      if (!adminSecret) {
-        res.sendStatus(404); // no control channel in this mode
-        return false;
-      }
-      if (!secretMatches(req.get('x-cn-admin-secret'))) {
-        res.sendStatus(401);
-        return false;
-      }
-      return true;
-    };
-    this.server.get('/admin/health', (req, res) => {
-      if (!requireAdmin(req, res)) return;
-      res.status(200).json({ status: 'ok' });
-    });
-    this.server.post('/admin/restart', (req, res) => {
-      if (!requireAdmin(req, res)) return;
-      res.sendStatus(202);
-      // CN's provisioner respawns on exit (see ChildProcessProvisioner).
-      setTimeout(() => process.exit(0), 50);
+    // The host's control channel (/admin/*), open only when the host started
+    // this process with CN_APP_ADMIN_SECRET; see utils/adminChannel.
+    registerAdminRoutes(this.server, process.env.CN_APP_ADMIN_SECRET, {
+      // The host's provisioner starts the app again after it exits.
+      exit: () => process.exit(0),
+      syncShapes: (request) => this.resyncShapes(request),
     });
 
     // after controller
@@ -1653,18 +1677,6 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Plan-011 phase 2 — HMR re-index entry point.
-   *
-   * Called by the CLI orchestrator's Vite watcher whenever a `.ts`/`.tsx`
-   * file inside a workspace package changes. Disposes the package's
-   * existing providers (so routes, listeners, timers don't accumulate),
-   * drops them from the registry, and re-runs indexPackageBackendProviders
-   * to pick up the freshly-imported module.
-   *
-   * Dispose calls have a 5 s soft timeout. A hanging dispose logs a
-   * warning and is abandoned so HMR doesn't stall the whole dev loop.
-   */
-  /**
    * Install the client-shell catch-all as the last ordinary layer on the
    * router stack. See utils/spaFallback.ts for why ordering has to be
    * re-asserted rather than assumed.
@@ -1680,7 +1692,30 @@ export class LinkedServer extends Shape {
     );
   }
 
+  /** Tail of the {@link onSourceChange} queue: reloads never interleave. */
+  private sourceReloadQueue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Reload one package's backend providers from source.
+   *
+   * Called by the CLI orchestrator's Vite watcher whenever a `.ts`/`.tsx`
+   * file inside a workspace package changes, and by {@link resyncShapes}.
+   * Disposes the package's existing providers (so routes, listeners, timers
+   * don't accumulate), drops them from the registry, and re-runs
+   * indexPackageBackendProviders to pick up the freshly-imported module.
+   * Reloads run one at a time: each re-registers routes on the shared express
+   * stack.
+   *
+   * Dispose calls have a 5 s soft timeout. A hanging dispose logs a
+   * warning and is abandoned so HMR doesn't stall the whole dev loop.
+   */
   async onSourceChange(pkg: string): Promise<void> {
+    const run = this.sourceReloadQueue.then(() => this.reloadPackageSource(pkg));
+    this.sourceReloadQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async reloadPackageSource(pkg: string): Promise<void> {
     const disposeWithTimeout = async (p: any, label: string) => {
       if (!p?.dispose) return;
       try {
