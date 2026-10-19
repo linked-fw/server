@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 3.6.1
+
+### Patch Changes
+
+- [#200](https://github.com/linked-fw/server/pull/200) [`935d0ca`](https://github.com/linked-fw/server/commit/935d0caf014cae8c71ae3b40963305ac8d43792c) Thanks [@flyon](https://github.com/flyon)! - `POST /admin/sync-shapes` now answers which packages it reloaded (`reloaded`) and the node shapes registered afterwards (`shapes`), refuses (400) package names that are not valid npm names, `@_linked/*` packages, or neither the app nor one of its direct dependencies, and times out a hung sync (`LINKED_SHAPE_SYNC_TIMEOUT_MS`, default 120 s) or source reload (`LINKED_SOURCE_RELOAD_TIMEOUT_MS`, default 60 s) so the queue is released. The README documents the control channel and the side effects of a reload and a restart.
+
 ## 3.6.0
 
 ### Minor Changes
