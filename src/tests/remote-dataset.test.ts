@@ -397,6 +397,13 @@ describe('RemoteDataset url form: the end user', () => {
     for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
   });
 
+  it('imports nothing server-only: the no-url form runs in the browser', async () => {
+    const { readFile } = await import('fs/promises');
+    const source = await readFile(new URL('../shapes/quadstores/RemoteDataset.ts', import.meta.url), 'utf8');
+    const imports = [...source.matchAll(/^import\s+(?!type\b)[^;]*from\s+'([^']+)'/gm)].map((m) => m[1]);
+    expect(imports.filter((m) => /CallContext|async_hooks|^node:|^fs|^path$/.test(m))).toEqual([]);
+  });
+
   it('forwardEndUser: false (or "false") sends no end user', async () => {
     const calls = stubFetch(() => jsonResponse(200, true));
     const query = AskBuilder.forNode(IRI);
