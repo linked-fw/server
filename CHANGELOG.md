@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 3.4.1
+
+### Patch Changes
+
+- [#192](https://github.com/linked-fw/server/pull/192) [`9109073`](https://github.com/linked-fw/server/commit/9109073db79ed4b8fe90cdf89cda61f45905a7e2) Thanks [@flyon](https://github.com/flyon)! - `RemoteDataset` no longer imports `@_linked/server-utils/utils/CallContext` (which imports `node:async_hooks`): it reads the call context from the store that module shares on `globalThis`, so the store loads in the browser again.
+
 ## 3.4.0
 
 ### Minor Changes
