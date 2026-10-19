@@ -215,10 +215,35 @@ describe('RemoteDataset url form: init()', () => {
   it('pings with {args: []} and memoizes a success', async () => {
     const calls = stubFetch(() => jsonResponse(200, { ok: true }));
     const s = store();
-    await expect(s.init()).resolves.toBeUndefined();
+    await expect(s.init()).resolves.toEqual({ ok: true });
     await s.init();
     expect(calls).toHaveLength(1);
     expectWire(calls[0], 'ping', []);
+  });
+
+  it('resolves the ping body and keeps it as info', async () => {
+    const body = { ok: true, projectId: 'p1', branchName: 'change-1', dataset: 'acme-shop-data', forked: false };
+    stubFetch(() => jsonResponse(200, body));
+    const s = store();
+    expect(s.info).toBeUndefined();
+    const info = await s.init();
+    expect(info).toEqual(body);
+    expect(s.info).toBe(info);
+    expect(Object.isFrozen(s.info)).toBe(true);
+    await expect(s.init()).resolves.toBe(info);
+  });
+
+  it('a ping body that is not an object reads as {}', async () => {
+    stubFetch(() => jsonResponse(200, null));
+    const s = store();
+    await expect(s.init()).resolves.toEqual({});
+    expect(s.info).toEqual({});
+  });
+
+  it('the no-url form resolves undefined and has no info', async () => {
+    const s = new RemoteDataset();
+    await expect(s.init()).resolves.toBeUndefined();
+    expect(s.info).toBeUndefined();
   });
 
   it('asks again on the next init() after a failure', async () => {
@@ -230,7 +255,8 @@ describe('RemoteDataset url form: init()', () => {
     const s = store();
     await expect(s.init()).rejects.toBeInstanceOf(RemoteDatasetUnreachableError);
     up = true;
-    await expect(s.init()).resolves.toBeUndefined();
+    expect(s.info).toBeUndefined();
+    await expect(s.init()).resolves.toEqual({ ok: true });
     await s.init();
     expect(calls).toHaveLength(2);
   });
@@ -377,6 +403,6 @@ describe('ping over the call routes', () => {
   });
 
   it('lets a RemoteDataset pointed at the server init()', async () => {
-    await expect(new RemoteDataset({ url: `${base}/` }).init()).resolves.toBeUndefined();
+    await expect(new RemoteDataset({ url: `${base}/` }).init()).resolves.toEqual({ ok: true });
   });
 });

@@ -65,6 +65,13 @@ export class RemoteDatasetUnreachableError extends RemoteDatasetError {}
 /** The data server answered 401 or 403: it refused this dataset's token. */
 export class RemoteDatasetUnauthorizedError extends RemoteDatasetError {}
 
+/**
+ * What the data server's `ping` answered, as is. The generic `@_linked/server` ping answers
+ * `{ok: true}`; a gateway may add fields that say which dataset it serves, such as
+ * `{ok, projectId, branchName, dataset, forked}`. A body that is not a JSON object reads as `{}`.
+ */
+export type RemoteDatasetPingInfo = Readonly<Record<string, unknown>>;
+
 type Method =
   | 'ping'
   | 'selectQuery'
@@ -94,7 +101,8 @@ const PING_UNREACHABLE_STATUSES = new Set([404, 501, 502, 503, 504]);
  * store instance crosses the wire. Query routing is decided by the query's shape.
  *
  * `LinkedStorage.setDefaultDataset` calls `init()` without awaiting it, so a boot that must
- * fail loudly awaits `init()` itself first; a successful `init()` is memoized.
+ * fail loudly awaits `init()` itself first; a successful `init()` is memoized, and resolves
+ * the ping body (also readable as `info`), so a boot can log which dataset the server serves.
  */
 export class RemoteDataset implements IDataset {
   /**
@@ -105,7 +113,8 @@ export class RemoteDataset implements IDataset {
   /** The data server base url, trailing slashes trimmed; undefined in the no-url form. */
   readonly url?: string;
   private readonly token?: string;
-  private initialized?: Promise<void>;
+  private initialized?: Promise<RemoteDatasetPingInfo | undefined>;
+  private pingInfo?: RemoteDatasetPingInfo;
 
   constructor(config?: RemoteDatasetConfig | string) {
     if (!config) return;
@@ -127,12 +136,32 @@ export class RemoteDataset implements IDataset {
     }
   }
 
-  init(): Promise<void> {
+  /**
+   * The body of the last successful `ping` (see {@link init}); undefined before one, and
+   * always in the no-url form.
+   */
+  get info(): RemoteDatasetPingInfo | undefined {
+    return this.pingInfo;
+  }
+
+  /**
+   * In the url form, asks the server's `ping` and resolves its body (also kept as
+   * {@link info}); resolves undefined in the no-url form.
+   */
+  init(): Promise<RemoteDatasetPingInfo | undefined> {
     // No initialization needed when queries are routed to the app's own backend.
-    if (this.url === undefined) return Promise.resolve();
+    if (this.url === undefined) return Promise.resolve(undefined);
     if (!this.initialized) {
       this.initialized = this.post('ping', []).then(
-        () => undefined,
+        (body) => {
+          const info: RemoteDatasetPingInfo = Object.freeze(
+            body && typeof body === 'object' && !Array.isArray(body)
+              ? { ...(body as Record<string, unknown>) }
+              : {},
+          );
+          this.pingInfo = info;
+          return info;
+        },
         (err) => {
           // Not memoized: the next init() asks again.
           this.initialized = undefined;

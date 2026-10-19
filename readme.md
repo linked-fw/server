@@ -295,6 +295,17 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
 - `init()` posts `{"args": []}` to `{url}/call/@_linked/server/ping`. A success is memoized; after
   a failure the next `init()` asks again. `LinkedStorage.setDefaultDataset` does not await
   `init()`, so a boot that must fail loudly awaits it itself before registering the store.
+- `init()` resolves the ping body, which the store also keeps as the readonly `info`
+  (`RemoteDatasetPingInfo`, frozen; `{}` when the body is not a JSON object; `undefined` before
+  a successful ping and in the no-url form). The generic ping answers `{ok: true}`; a gateway may
+  add fields naming the dataset it serves (CN's adds `projectId`, `branchName`, `dataset`,
+  `forked`), so a boot can log where its data goes:
+
+  ```ts
+  const info = await store.init();
+  console.log(`[storage] appData: RemoteDataset at ${store.url}` +
+    (typeof info?.dataset === 'string' ? ` → dataset ${info.dataset}` : ''));
+  ```
 - Errors, each carrying `url` (the base), `status` (0 when no HTTP answer came back) and `code`
   (the error body's `code`, when the server sent one). Messages name the url and the method,
   never the token.
