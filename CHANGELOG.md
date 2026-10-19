@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 3.4.0
+
+### Minor Changes
+
+- [#190](https://github.com/linked-fw/server/pull/190) [`1059665`](https://github.com/linked-fw/server/commit/10596652c4f481c96c50cb711ba63df0051e4e1e) Thanks [@flyon](https://github.com/flyon)! - `RemoteDataset`'s url form sends the signed-in user's WebID of the current call as `x-linked-end-user` (exported as `END_USER_HEADER`). A system context, an anonymous request and code outside any call send none; `forwardEndUser: false` turns it off.
+
 ## 3.3.0
 
 ### Minor Changes
