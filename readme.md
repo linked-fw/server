@@ -313,6 +313,15 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
   code outside any call send no such header. The token still decides which data the store
   reaches; the data server decides what to do with the end user. `forwardEndUser: false` (or the
   string `"false"`) turns it off. No other headers are sent.
+
+  > **Warning: on by default.** Every query of a signed-in user's request sends that user's WebID
+  > to the data server at `url`. Point `url` only at a server you would give your users'
+  > identities to (for an app CN hosts, CN's gateway). To send none, set it off in the dataset's
+  > config:
+  >
+  > ```json
+  > "config": { "url": "${DATA_SERVER_URL:-}", "token": "${DATA_SERVER_TOKEN:-}", "forwardEndUser": false }
+  > ```
 - Trailing slashes are trimmed from `url`. A `url` that is present but empty (an unset
   `${DATA_SERVER_URL:-}`) never falls back to the no-url form: `init()` and every method throw
   `RemoteDatasetUnreachableError` with `url: ''`.
