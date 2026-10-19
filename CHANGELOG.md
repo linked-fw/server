@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 3.2.0
+
+### Minor Changes
+
+- [#185](https://github.com/linked-fw/server/pull/185) [`0525786`](https://github.com/linked-fw/server/commit/05257867d02ad8057a8691f61e94f1bbb937c56d) Thanks [@flyon](https://github.com/flyon)! - `RemoteDataset.init()` now resolves the data server's `ping` body, and the store keeps it as the readonly `info` (type `RemoteDatasetPingInfo`). A gateway that names the dataset it serves (for example `{ok, projectId, branchName, dataset, forked}`) lets an app log at startup which dataset its data goes to. The no-url form resolves `undefined`, as before.
+
 ## 3.1.0
 
 ### Minor Changes
