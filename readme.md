@@ -276,6 +276,7 @@ export interface RemoteDatasetConfig {
   token?: string; // sent as Authorization: Bearer <token> when set and url is set
   name?: string;  // id = ${DATA_ROOT}/backend-api-store/<name>; does not affect routing
   id?: string;
+  forwardEndUser?: boolean | string; // url form: send the signed-in user's WebID (default true)
 }
 ```
 
@@ -304,7 +305,14 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
   (`selectQuery`, which also carries counts, `askQuery`, `updateQuery`, `createQuery`,
   `deleteQuery`) with `Content-Type` and `Accept` set to `application/json` and, when `token` is
   non-empty, `Authorization: Bearer <token>`. It resolves the parsed body; `null` is a valid
-  result. No other headers are sent and nothing is retried, so a write is never applied twice.
+  result. Nothing is retried, so a write is never applied twice.
+- **The end user.** When the query is made while a signed-in user's HTTP request is being
+  answered (the call context is `http` and its request has
+  `linkedAuth.userAccount.accountOf.id`), the post also carries `x-linked-end-user: <WebID>`
+  (exported as `END_USER_HEADER`). A system context (`runAsSystem`), an anonymous request and
+  code outside any call send no such header. The token still decides which data the store
+  reaches; the data server decides what to do with the end user. `forwardEndUser: false` (or the
+  string `"false"`) turns it off. No other headers are sent.
 - Trailing slashes are trimmed from `url`. A `url` that is present but empty (an unset
   `${DATA_SERVER_URL:-}`) never falls back to the no-url form: `init()` and every method throw
   `RemoteDatasetUnreachableError` with `url: ''`.

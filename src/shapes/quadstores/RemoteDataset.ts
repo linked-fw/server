@@ -1,6 +1,7 @@
 import { packageName } from '../../package.js';
 import { brandLinkedError } from '@_linked/core/utils/linkedError';
 import { Server } from '@_linked/server-utils/utils/Server';
+import { getCallContext } from '@_linked/server-utils/utils/CallContext';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
 import type { CountQuery } from '@_linked/core/queries/CountQuery';
@@ -34,6 +35,31 @@ export interface RemoteDatasetConfig {
   name?: string;
   /** Or pass a fully-qualified URI directly. */
   id?: string;
+  /**
+   * In the url form, send the signed-in user's WebID of the current call as
+   * `x-linked-end-user` (see {@link END_USER_HEADER}). Default true; `false` (or the
+   * string `'false'`, as an interpolated config gives it) turns it off.
+   */
+  forwardEndUser?: boolean | string;
+}
+
+/**
+ * The header the url form sends with a query made while a signed-in user's HTTP request is
+ * being answered: that user's WebID. The data server decides what to do with it; the bearer
+ * token still decides which data the store reaches.
+ */
+export const END_USER_HEADER = 'x-linked-end-user';
+
+/**
+ * The WebID of the signed-in user behind the current call: the http context's
+ * `request.linkedAuth.userAccount.accountOf.id`. Undefined in a system context
+ * (`runAsSystem`), outside any call, and for a request without a session.
+ */
+export function currentEndUserWebId(): string | undefined {
+  const ctx = getCallContext();
+  if (!ctx || ctx.kind !== 'http') return undefined;
+  const webId = ctx.request?.linkedAuth?.userAccount?.accountOf?.id;
+  return typeof webId === 'string' && webId ? webId : undefined;
 }
 
 /**
@@ -121,6 +147,8 @@ export class RemoteDataset implements IDataset {
   /** The data server base url, trailing slashes trimmed; undefined in the no-url form. */
   readonly url?: string;
   private readonly token?: string;
+  /** Whether the url form sends {@link END_USER_HEADER}; see `RemoteDatasetConfig.forwardEndUser`. */
+  readonly forwardEndUser: boolean = true;
   private initialized?: Promise<RemoteDatasetPingInfo | undefined>;
   private pingInfo?: RemoteDatasetPingInfo;
 
@@ -134,6 +162,9 @@ export class RemoteDataset implements IDataset {
       this.url = config.url.trim().replace(/\/+$/, '');
       const token = typeof config.token === 'string' ? config.token.trim() : '';
       if (token) this.token = token;
+    }
+    if (config.forwardEndUser === false || config.forwardEndUser === 'false') {
+      this.forwardEndUser = false;
     }
     if (config.id) {
       this.id = config.id;
@@ -242,6 +273,10 @@ export class RemoteDataset implements IDataset {
       Accept: 'application/json',
     };
     if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    if (this.forwardEndUser) {
+      const endUser = currentEndUserWebId();
+      if (endUser) headers[END_USER_HEADER] = endUser;
+    }
 
     let response: Response;
     try {
