@@ -2062,7 +2062,10 @@ export class LinkedServer extends Shape {
     }
   }
 
-  /** A declared `'user'` method needs a session: 401 without one, in every mode. */
+  /**
+   * A declared `'signed-in'` method (or one declared with its deprecated alias
+   * `'user'`) needs a session: 401 without one, in every mode.
+   */
   private assertSessionForLevel(
     pkg: string,
     method: string,
@@ -2071,7 +2074,7 @@ export class LinkedServer extends Shape {
   ) {
     if (
       resolution.status === 'callable' &&
-      resolution.level === 'user' &&
+      resolution.level === 'signed-in' &&
       !hasSession(request)
     ) {
       throw new ServerCallError(401, 'Authentication required');

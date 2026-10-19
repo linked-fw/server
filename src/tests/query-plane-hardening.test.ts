@@ -60,12 +60,12 @@ class TestProvider extends BackendProvider {
     return 'pong';
   }
 
-  @callable('user')
+  @callable('signed-in')
   whoami() {
     return this.request?.linkedAuth?.userAccount?.id;
   }
 
-  @callable('user')
+  @callable('signed-in')
   async slowWhoami(delay: number) {
     await tick(delay);
     return this.request?.linkedAuth?.userAccount?.id;
