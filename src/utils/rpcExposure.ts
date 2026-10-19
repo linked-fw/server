@@ -40,6 +40,7 @@ import {
   isDeclaredInternal,
   type CallableLevel,
 } from '@_linked/server-utils/utils/callable';
+import { sharedState } from '@_linked/core/utils/sharedState';
 
 export type RpcExposureMode = 'warn' | 'enforce';
 
@@ -184,7 +185,14 @@ export function isGenericRpcDisabled(provider: any): boolean {
   );
 }
 
-let configuredMode: RpcExposureMode | undefined;
+/**
+ * The configured mode, shared by every copy of this module in the process: `LinkedServer` sets
+ * it from config through one copy, and the dispatcher on another copy must not fall back to
+ * `'warn'`. See https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md.
+ */
+const rpcExposureState = sharedState('@_linked/server', 'rpcExposure', () => ({
+  mode: undefined as RpcExposureMode | undefined,
+}));
 
 function parseMode(value: unknown): RpcExposureMode | undefined {
   return value === 'warn' || value === 'enforce' ? value : undefined;
@@ -196,7 +204,7 @@ function parseMode(value: unknown): RpcExposureMode | undefined {
  */
 export function setRpcExposureMode(mode: unknown): void {
   if (mode === undefined || mode === null) {
-    configuredMode = undefined;
+    rpcExposureState.mode = undefined;
     return;
   }
   const parsed = parseMode(mode);
@@ -206,12 +214,12 @@ export function setRpcExposureMode(mode: unknown): void {
     );
     return;
   }
-  configuredMode = parsed;
+  rpcExposureState.mode = parsed;
 }
 
 /** `server.rpcExposure`, else `LINKED_RPC_EXPOSURE`, else `'warn'`. */
 export function getRpcExposureMode(): RpcExposureMode {
-  return configuredMode ?? parseMode(process.env.LINKED_RPC_EXPOSURE) ?? 'warn';
+  return rpcExposureState.mode ?? parseMode(process.env.LINKED_RPC_EXPOSURE) ?? 'warn';
 }
 
 const warnedUndeclared = new Set<string>();

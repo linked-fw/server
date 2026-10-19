@@ -1,4 +1,5 @@
 import { packageName } from '../../package.js';
+import { brandLinkedError } from '@_linked/core/utils/linkedError';
 import { Server } from '@_linked/server-utils/utils/Server';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
@@ -64,6 +65,13 @@ export class RemoteDatasetUnreachableError extends RemoteDatasetError {}
 
 /** The data server answered 401 or 403: it refused this dataset's token. */
 export class RemoteDatasetUnauthorizedError extends RemoteDatasetError {}
+
+// Branded, so `isLinkedError(err, RemoteDatasetUnreachableError)` from `@_linked/core` matches an
+// error thrown by another copy of this module, where `instanceof` does not. See
+// https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md.
+brandLinkedError(RemoteDatasetError, '@_linked/server', 'RemoteDatasetError');
+brandLinkedError(RemoteDatasetUnreachableError, '@_linked/server', 'RemoteDatasetUnreachableError');
+brandLinkedError(RemoteDatasetUnauthorizedError, '@_linked/server', 'RemoteDatasetUnauthorizedError');
 
 /**
  * What the data server's `ping` answered, as is. The generic `@_linked/server` ping answers

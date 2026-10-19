@@ -11,10 +11,18 @@
  * Set it with `server.rawQueries` in the app's config, or `LINKED_RAW_QUERIES`.
  */
 import type { RawQueriesMode } from '@_linked/server-utils/utils/QueryAccess';
+import { sharedState } from '@_linked/core/utils/sharedState';
 
 export type { RawQueriesMode };
 
-let configuredMode: RawQueriesMode | undefined;
+/**
+ * The configured mode, shared by every copy of this module in the process: `LinkedServer` sets
+ * it from config through one copy, and the query plane on another copy must not fall back to
+ * the permissive default. See https://github.com/linked-fw/cli/blob/main/docs/architecture/shared-state-and-error-brands.md.
+ */
+const rawQueriesState = sharedState('@_linked/server', 'rawQueries', () => ({
+  mode: undefined as RawQueriesMode | undefined,
+}));
 let invalidEnvWarned = false;
 
 function parseMode(value: unknown): RawQueriesMode | undefined {
@@ -27,7 +35,7 @@ function parseMode(value: unknown): RawQueriesMode | undefined {
  */
 export function setRawQueriesMode(mode: unknown): void {
   if (mode === undefined || mode === null) {
-    configuredMode = undefined;
+    rawQueriesState.mode = undefined;
     return;
   }
   const parsed = parseMode(mode);
@@ -35,10 +43,10 @@ export function setRawQueriesMode(mode: unknown): void {
     console.warn(
       `[linked] server.rawQueries must be 'off' or 'session', got ${JSON.stringify(mode)}; raw queries are off`
     );
-    configuredMode = 'off';
+    rawQueriesState.mode = 'off';
     return;
   }
-  configuredMode = parsed;
+  rawQueriesState.mode = parsed;
 }
 
 /**
@@ -46,7 +54,7 @@ export function setRawQueriesMode(mode: unknown): void {
  * `LINKED_RAW_QUERIES` turns raw queries off.
  */
 export function getRawQueriesMode(): RawQueriesMode {
-  if (configuredMode) return configuredMode;
+  if (rawQueriesState.mode) return rawQueriesState.mode;
   const env = process.env.LINKED_RAW_QUERIES;
   if (env === undefined || env === '') return 'session';
   const parsed = parseMode(env);

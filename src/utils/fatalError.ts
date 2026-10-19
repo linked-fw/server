@@ -1,3 +1,5 @@
+import { brandLinkedError } from '@_linked/core/utils/linkedError';
+
 /**
  * The fatal-error contract between providers and the server's boot.
  *
@@ -40,6 +42,8 @@ export class FatalStartupError extends Error implements FatalError {
     this.fatal = true;
   }
 }
+
+brandLinkedError(FatalStartupError, '@_linked/server', 'FatalStartupError');
 
 /** True for an error that carries the fatal contract: own `fatal === true`. */
 export function isFatalError(err: unknown): err is FatalError {
