@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 3.3.0
+
+### Minor Changes
+
+- [#187](https://github.com/linked-fw/server/pull/187) [`33a34ea`](https://github.com/linked-fw/server/commit/33a34eaf62deb591140542d8d324ae3ea0eb74a4) Thanks [@flyon](https://github.com/flyon)! - A second copy of this package in one process no longer falls back to defaults: `server.rawQueries`, `server.rpcExposure` and the host's query catalog resolver live on `globalThis` (core's `sharedState`), and the process setup (cookie-jar `fetch`, `process` error listeners) runs once per process. `RemoteDatasetError`, its two subclasses and `FatalStartupError` are branded, so `isLinkedError(err, RemoteDatasetUnreachableError)` from `@_linked/core` matches one thrown by another copy. Requires `@_linked/core` 2.36.0.
+
 ## 3.2.0
 
 ### Minor Changes
