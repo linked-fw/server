@@ -9,6 +9,10 @@
  *   hierarchy. A running app is never stopped by it: its findings are logged and counted.
  * - The in-memory class hierarchy (core `loadOntologyHierarchy`, when the installed core has it)
  *   is loaded also when the sync is off; the sync loads it itself when it runs.
+ * - Before either, every linked package directory the server discovered registers its ontologies
+ *   (core `registerInstalledOntologies`, when the installed core has it): a package the app only
+ *   deep-imports shape files from never evaluates its register modules, so its data would be
+ *   missing from both.
  *
  * Both core modules are server only and not in core's index, so they are imported dynamically.
  * Kept apart from `LinkedServer` so the order and the failure handling can be tested without
@@ -27,6 +31,8 @@ export interface OntologyCore {
   >;
   /** Absent in a core without the in-memory class hierarchy. */
   loadOntologyHierarchy?: () => Promise<unknown>;
+  /** Absent in a core that cannot register installed packages' ontologies. */
+  registerInstalledOntologies?: (packageDirs: string[]) => Promise<string[]>;
 }
 
 /** What the ontology sync and the shape check did, as `POST /admin/sync-shapes` reports it. */
@@ -62,19 +68,34 @@ export function bootSyncsOntologies(
   return shapeSyncOn(env, configFlag) && env.LINKED_SYNC_ONTOLOGIES_ON_BOOT !== 'false';
 }
 
-/** Import core's ontology sync, shape check and (when present) hierarchy loader. */
+/**
+ * Import core's ontology sync, shape check and (when present) hierarchy loader and installed
+ * packages' registration.
+ */
 export async function loadOntologyCore(): Promise<OntologyCore> {
   const sync = await import('@_linked/core/ontology/syncOntologies');
   const check = await import('@_linked/core/shapes/checkShapeHierarchy');
   const hierarchy = await import('@_linked/core/ontology/hierarchy');
   const loadOntologyHierarchy = (hierarchy as {loadOntologyHierarchy?: () => Promise<unknown>})
     .loadOntologyHierarchy;
+  let registerInstalledOntologies: OntologyCore['registerInstalledOntologies'];
+  try {
+    const registerInstalled = (await import('@_linked/core/ontology/registerInstalled')) as {
+      registerInstalledOntologies?: OntologyCore['registerInstalledOntologies'];
+    };
+    if (typeof registerInstalled.registerInstalledOntologies === 'function') {
+      registerInstalledOntologies = registerInstalled.registerInstalledOntologies;
+    }
+  } catch {
+    // A core without the module: packages register only through the app's own imports.
+  }
   return {
     syncOntologies: (ds, options) =>
       sync.syncOntologies(ds as Parameters<typeof sync.syncOntologies>[0], options),
     checkShapeHierarchy: (options) => check.checkShapeHierarchy(options),
     loadOntologyHierarchy:
       typeof loadOntologyHierarchy === 'function' ? loadOntologyHierarchy : undefined,
+    registerInstalledOntologies,
   };
 }
 
@@ -82,8 +103,9 @@ const asError = (err: unknown): Error => (err instanceof Error ? err : new Error
 const list = (names: string[]) => (names.length ? names.join(', ') : 'none');
 
 /**
- * Sync the registered ontologies into `ds` (when `sync` is set and there is a dataset), then run
- * the shape check. Never throws: a failed sync is logged and returned as `failure`, and the
+ * Register the ontologies of the installed linked packages in `packageDirs` (package roots), sync
+ * the registered ontologies into `ds` (when `sync` is set and there is a dataset), then run the
+ * shape check. Never throws: a failed registration is logged and the phase goes on; a failed sync is logged and returned as `failure`, and the
  * check still runs; a failed check likewise. Logs one line for the sync, one summary line for
  * the check and one line per finding.
  */
@@ -94,6 +116,7 @@ export async function runOntologyPhase(
     sync,
     orphanScope,
     dependencies,
+    packageDirs = [],
     log = console.log,
     warn = console.warn,
   }: {
@@ -101,6 +124,8 @@ export async function runOntologyPhase(
     sync: boolean;
     orphanScope: BootOrphanScope;
     dependencies?: Record<string, string[]>;
+    /** Every linked package directory the server discovered (transitively). */
+    packageDirs?: string[];
     log?: (message: string) => void;
     warn?: (message: string, err?: unknown) => void;
   },
@@ -109,6 +134,14 @@ export async function runOntologyPhase(
     ontologies: {written: [], skipped: []},
     shapeCheck: {errors: 0, warnings: 0},
   };
+
+  if (core.registerInstalledOntologies && packageDirs.length) {
+    try {
+      await core.registerInstalledOntologies(packageDirs);
+    } catch (err) {
+      warn("[LinkedServer] registering the installed packages' ontologies failed:", err);
+    }
+  }
 
   let hierarchyLoaded = false;
   if (sync && ds) {

@@ -19,9 +19,11 @@ function fakeCore({
   syncFails = false,
   findings = [] as Finding[],
   withHierarchy = true,
+  withRegister = true,
+  registerFails = false,
 } = {}) {
   const calls: string[] = [];
-  const seen: { ds?: unknown; syncOptions?: unknown; checkOptions?: unknown } = {};
+  const seen: { ds?: unknown; syncOptions?: unknown; checkOptions?: unknown; packageDirs?: string[] } = {};
   const core: OntologyCore = {
     async syncOntologies(ds, options) {
       calls.push('sync');
@@ -39,6 +41,14 @@ function fakeCore({
       ? async () => {
           calls.push('hierarchy');
           return [];
+        }
+      : undefined,
+    registerInstalledOntologies: withRegister
+      ? async (packageDirs) => {
+          calls.push('register');
+          seen.packageDirs = packageDirs;
+          if (registerFails) throw new Error('bad register module');
+          return ['@x/a'];
         }
       : undefined,
   };
@@ -80,6 +90,45 @@ describe('runOntologyPhase', () => {
       ontologies: { written: ['@x/a'], skipped: ['@x/b'] },
       shapeCheck: { errors: 0, warnings: 0 },
     });
+  });
+
+  it("registers the installed packages' ontologies from every linked package directory first", async () => {
+    const { core, calls, seen } = fakeCore();
+    const packageDirs = ['/app/node_modules/@x/a', '/app/node_modules/@x/b'];
+    await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', packageDirs, ...quiet });
+    expect(calls).toEqual(['register', 'sync', 'check']);
+    expect(seen.packageDirs).toEqual(packageDirs);
+  });
+
+  it('registers also when the sync is off, so the check sees every package', async () => {
+    const { core, calls } = fakeCore();
+    await runOntologyPhase({}, { core, sync: false, orphanScope: 'none', packageDirs: ['/d'], ...quiet });
+    expect(calls).toEqual(['register', 'hierarchy', 'check']);
+  });
+
+  it('a failed registration is warned about and the sync and check still run', async () => {
+    const { core, calls } = fakeCore({ registerFails: true });
+    const warnings: string[] = [];
+    const result = await runOntologyPhase({}, {
+      core,
+      sync: true,
+      orphanScope: 'none',
+      packageDirs: ['/d'],
+      log: () => {},
+      warn: (m) => warnings.push(m),
+    });
+    expect(calls).toEqual(['register', 'sync', 'check']);
+    expect(warnings[0]).toContain("registering the installed packages' ontologies failed");
+    expect(result.failure).toBeUndefined();
+  });
+
+  it('registers nothing without package directories, or with a core that cannot', async () => {
+    const withDirs = fakeCore({ withRegister: false });
+    await runOntologyPhase({}, { core: withDirs.core, sync: true, orphanScope: 'none', packageDirs: ['/d'], ...quiet });
+    expect(withDirs.calls).toEqual(['sync', 'check']);
+    const noDirs = fakeCore();
+    await runOntologyPhase({}, { core: noDirs.core, sync: true, orphanScope: 'none', ...quiet });
+    expect(noDirs.calls).toEqual(['sync', 'check']);
   });
 
   it('loads the in-memory hierarchy when the sync is off, and syncs nothing', async () => {
@@ -219,5 +268,30 @@ describe('loadOntologyCore', () => {
     expect(typeof core.loadOntologyHierarchy).toBe(
       typeof hierarchy.loadOntologyHierarchy === 'function' ? 'function' : 'undefined'
     );
+  });
+
+  it("imports core's registration of installed packages, which imports each package's register modules", async () => {
+    const core = await loadOntologyCore();
+    expect(typeof core.registerInstalledOntologies).toBe('function');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'installed-'));
+    const withRegister = path.join(root, 'with');
+    const without = path.join(root, 'without');
+    fs.mkdirSync(path.join(withRegister, 'lib/esm/ontologies'), { recursive: true });
+    fs.mkdirSync(without);
+    fs.writeFileSync(path.join(withRegister, 'package.json'), JSON.stringify({ name: '@x/installed', type: 'module' }));
+    fs.writeFileSync(path.join(without, 'package.json'), JSON.stringify({ name: '@x/plain', type: 'module' }));
+    // Stands in for `linkedOntology(...)`: records that the module ran.
+    fs.writeFileSync(
+      path.join(withRegister, 'lib/esm/ontologies/x.register.js'),
+      "globalThis.__bootOntologySyncRegistered = (globalThis.__bootOntologySyncRegistered ?? 0) + 1;\n"
+    );
+    const g = globalThis as { __bootOntologySyncRegistered?: number };
+    try {
+      expect(await core.registerInstalledOntologies!([without, withRegister])).toEqual(['@x/installed']);
+      expect(g.__bootOntologySyncRegistered).toBe(1);
+    } finally {
+      delete g.__bootOntologySyncRegistered;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

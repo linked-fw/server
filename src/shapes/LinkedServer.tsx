@@ -550,7 +550,8 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * The ontology sync (when `sync` is set) into the default dataset, then the shape check.
+   * Every discovered linked package registers its ontologies, then the ontology sync (when
+   * `sync` is set) into the default dataset, then the shape check.
    * Orphaned sync nodes are pruned under the shape sync's orphan policy
    * (`LINKED_SYNC_SHAPES_PRUNE_ORPHANS`).
    */
@@ -560,6 +561,7 @@ export class LinkedServer extends Shape {
       sync,
       orphanScope: bootOrphanScope(),
       dependencies: readDependencyLists(this.linkedPackageDirs ?? new Map(), this.package),
+      packageDirs: [...(this.linkedPackageDirs ?? new Map()).values()],
     });
   }
 
