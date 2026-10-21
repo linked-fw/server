@@ -11,7 +11,7 @@
  * From a sibling module the same import is ordinary and survives.
  */
 import * as terms from './server.js';
-import {loadData, ns} from './server.js';
+import {dataFiles, loadData, ns} from './server.js';
 import {linkedOntology} from '../package.js';
 import {Prefix} from '@_linked/core/utils/Prefix';
 
@@ -21,5 +21,5 @@ import {Prefix} from '@_linked/core/utils/Prefix';
 Prefix.add('lincd-server', ns('').id);
 
 // The prefix is also the key this ontology is registered under in the package tree,
-// and the name of its data file: `server` → `../data/server.json`.
-linkedOntology(terms, ns, 'server', loadData, '../data/server.json');
+// and the name of its data file: `server` → `../data/server.ttl`.
+linkedOntology(terms, ns, 'server', loadData, dataFiles);
