@@ -12,6 +12,7 @@ import {
 } from '../utils/adminChannel.js';
 import { invalidateSourceUnder } from '../utils/reloadSource.js';
 import { envMs, withTimeout } from '../utils/withTimeout.js';
+import { syncOntologiesThenShapes } from '../utils/ontologySync.js';
 
 const SECRET = 's3cret-s3cret';
 const servers: any[] = [];
@@ -56,6 +57,48 @@ describe('admin channel: sync-shapes', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ written: 2, orphanScope: 'none' });
     expect(calls).toEqual([{ packages: ['my-assets'] }]);
+  });
+
+  it('answers the ontology sync and the shape check counts with the shape sync', async () => {
+    const base = await serve(SECRET, (r) =>
+      syncOntologiesThenShapes(
+        async () => ({
+          ontologies: { written: ['@x/a'], skipped: ['@_linked/server'] },
+          shapeCheck: { errors: 1, warnings: 3 },
+        }),
+        async () => ({ written: 2, orphanScope: 'none' as const, reloaded: r.packages })
+      )
+    );
+    const res = await post(base, { packages: ['my-assets'] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      written: 2,
+      orphanScope: 'none',
+      reloaded: ['my-assets'],
+      ontologies: { written: ['@x/a'], skipped: ['@_linked/server'] },
+      shapeCheck: { errors: 1, warnings: 3 },
+    });
+  });
+
+  it('answers 500 for a failed ontology sync, after the shape sync ran', async () => {
+    let shapesRan = false;
+    const base = await serve(SECRET, () =>
+      syncOntologiesThenShapes(
+        async () => ({
+          ontologies: { written: [], skipped: [] },
+          shapeCheck: { errors: 0, warnings: 0 },
+          failure: new Error('store unreachable'),
+        }),
+        async () => {
+          shapesRan = true;
+          return { written: 0 };
+        }
+      )
+    );
+    const res = await post(base, {});
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'store unreachable' });
+    expect(shapesRan).toBe(true);
   });
 
   it('runs a sync without packages for an empty body', async () => {
