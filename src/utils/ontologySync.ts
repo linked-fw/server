@@ -7,16 +7,18 @@
  *   hash matches, so the store's RDFS view infers the class hierarchy.
  * - The shape check (core `checkShapeHierarchy`) compares the registered shapes with that
  *   hierarchy. A running app is never stopped by it: its findings are logged and counted.
- * - The in-memory class hierarchy (core `loadOntologyHierarchy`, when the installed core has it)
- *   is loaded also when the sync is off; the sync loads it itself when it runs.
+ * - The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded also when the sync
+ *   is off; the sync loads it itself when it runs.
  * - Before either, every linked package directory the server discovered registers its ontologies
- *   (core `registerInstalledOntologies`, when the installed core has it): a package the app only
- *   deep-imports shape files from never evaluates its register modules, so its data would be
- *   missing from both. A source package without built register modules (a workspace package in
- *   dev) registers through `importModule` (Vite's `ssrLoadModule`), when the caller passes one.
+ *   (core `registerInstalledOntologies`): a package the app only deep-imports shape files from
+ *   never evaluates its register modules, so its data would be missing from both. A source
+ *   package without built register modules (a workspace package in dev) registers through
+ *   `importModule` (Vite's `ssrLoadModule`), when the caller passes one.
  *
- * Both core modules are server only and not in core's index, so they are imported dynamically.
- * Kept apart from `LinkedServer` so the order and the failure handling can be tested without
+ * The four core modules (`ontology/syncOntologies`, `shapes/checkShapeHierarchy`,
+ * `ontology/hierarchy`, `ontology/registerInstalled`) are server only and not in core's index, so
+ * {@link loadOntologyCore} imports them by their fixed subpaths when the phase runs; the core
+ * this server depends on has all of them. Kept apart from `LinkedServer` so the order and the failure handling can be tested without
  * booting a server.
  */
 import type {BootOrphanScope} from './syncShapes.js';
@@ -30,11 +32,11 @@ export interface OntologyCore {
   checkShapeHierarchy(options: {dependencies?: Record<string, string[]>}): Promise<
     Array<{kind: string; severity: 'error' | 'warning'; shape?: string; iri?: string; message: string}>
   >;
-  /** Absent in a core without the in-memory class hierarchy. */
+  /** Loads the in-memory class hierarchy. Optional so a test double can leave it out. */
   loadOntologyHierarchy?: () => Promise<unknown>;
   /**
-   * Absent in a core that cannot register installed packages' ontologies. A core older than
-   * `options.importModule` ignores it, and skips source packages.
+   * Registers the ontologies of the installed packages in the given directories. Optional so a
+   * test double can leave it out.
    */
   registerInstalledOntologies?: (
     packageDirs: string[],
@@ -76,33 +78,21 @@ export function bootSyncsOntologies(
 }
 
 /**
- * Import core's ontology sync, shape check and (when present) hierarchy loader and installed
- * packages' registration.
+ * Import core's ontology sync, shape check, hierarchy loader and installed packages'
+ * registration.
  */
 export async function loadOntologyCore(): Promise<OntologyCore> {
   const sync = await import('@_linked/core/ontology/syncOntologies');
   const check = await import('@_linked/core/shapes/checkShapeHierarchy');
   const hierarchy = await import('@_linked/core/ontology/hierarchy');
-  const loadOntologyHierarchy = (hierarchy as {loadOntologyHierarchy?: () => Promise<unknown>})
-    .loadOntologyHierarchy;
-  let registerInstalledOntologies: OntologyCore['registerInstalledOntologies'];
-  try {
-    const registerInstalled = (await import('@_linked/core/ontology/registerInstalled')) as {
-      registerInstalledOntologies?: OntologyCore['registerInstalledOntologies'];
-    };
-    if (typeof registerInstalled.registerInstalledOntologies === 'function') {
-      registerInstalledOntologies = registerInstalled.registerInstalledOntologies;
-    }
-  } catch {
-    // A core without the module: packages register only through the app's own imports.
-  }
+  const registerInstalled = await import('@_linked/core/ontology/registerInstalled');
   return {
     syncOntologies: (ds, options) =>
       sync.syncOntologies(ds as Parameters<typeof sync.syncOntologies>[0], options),
     checkShapeHierarchy: (options) => check.checkShapeHierarchy(options),
-    loadOntologyHierarchy:
-      typeof loadOntologyHierarchy === 'function' ? loadOntologyHierarchy : undefined,
-    registerInstalledOntologies,
+    loadOntologyHierarchy: () => hierarchy.loadOntologyHierarchy(),
+    registerInstalledOntologies: (packageDirs, options) =>
+      registerInstalled.registerInstalledOntologies(packageDirs, options),
   };
 }
 
