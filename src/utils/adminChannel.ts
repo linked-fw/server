@@ -8,13 +8,16 @@
  * - `GET /admin/health` → 200 `{status: 'ok'}` once the server listens (the boot
  *   shape sync has finished by then).
  * - `POST /admin/restart` → 202, then the process exits; the host starts it again.
- * - `POST /admin/sync-shapes` → re-syncs the app's shapes into its app data, as
- *   the boot does, and answers 200 with {@link ShapeSyncResult}. Body (optional):
+ * - `POST /admin/sync-shapes` → re-syncs the app's ontologies (the class hierarchy
+ *   of every registered package, skipped when unchanged), runs the shape check and
+ *   re-syncs its shapes into its app data, as the boot does, and answers 200 with
+ *   {@link ShapeSyncResult}. Body (optional):
  *   `{packages: string[]}`, packages whose source changed on disk: in dev they are
  *   reloaded first, so the sync sees shapes added or changed since the boot. Each
  *   name must be a valid npm package name and the app itself or one of its direct
  *   dependencies, never an `@_linked/*` framework package; anything else answers
- *   400 `{error}`. A failed or timed-out sync answers 500 `{error}`.
+ *   400 `{error}`. The list never filters the syncs. A failed or timed-out sync
+ *   answers 500 `{error}` (a failed ontology sync too, after the shape sync ran).
  */
 import { timingSafeEqual } from 'crypto';
 import type express from 'express';
@@ -34,6 +37,13 @@ export interface ShapeSyncResult {
   reloaded?: string[];
   /** The node shape IRIs registered in the process after the reload. Set by `POST /admin/sync-shapes`. */
   shapes?: string[];
+  /**
+   * The ontology sync: packages whose class hierarchy was written, and packages left as
+   * they were (unchanged, or their data could not be read). Set by `POST /admin/sync-shapes`.
+   */
+  ontologies?: { written: string[]; skipped: string[] };
+  /** The shape check's findings, counted by severity (each is logged). Set by `POST /admin/sync-shapes`. */
+  shapeCheck?: { errors: number; warnings: number };
 }
 
 /** npm's package-name rule: optional `@scope/`, lower case, URL-safe, no leading `.` or `_` (a scope may start with `_`, as `@_linked` does). */

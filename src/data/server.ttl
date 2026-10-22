@@ -1,0 +1,75 @@
+@prefix server: <https://linked.cm/ont/server/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix schema: <http://schema.org/> .
+
+server:
+    a owl:Ontology ;
+    dcterms:description "Terms of the Linked Node.js server: the server, the web app it serves and its data API."@en ;
+    dcterms:title "Linked server"@en ;
+    owl:versionInfo "3.7.0" .
+
+server:BackendAPIStore
+    a owl:Class ;
+    rdfs:comment "A frontend store that sends every query to the Linked server's data API instead of holding quads locally."@en ;
+    rdfs:label "backend API store"@en ;
+    rdfs:subClassOf server:BackendStore .
+
+server:BackendFileStore
+    a owl:Class ;
+    rdfs:comment "A frontend quad store that loads and updates its quads through API calls to the Linked server's backend."@en ;
+    rdfs:isDefinedBy server: ;
+    rdfs:label "backend file store"@en ;
+    rdfs:subClassOf server:BackendStore .
+
+server:BackendStore
+    a owl:Class ;
+    rdfs:comment "The base class of frontend quad stores that are loaded and updated through the Linked server's backend API."@en ;
+    rdfs:isDefinedBy server: ;
+    rdfs:label "backend store"@en .
+
+server:LincdAPI
+    a owl:Class ;
+    rdfs:comment "The server's data API endpoint, which answers select, update, create, delete and raw SPARQL calls from the client (LincdAPI.process)."@en ;
+    rdfs:label "Linked data API"@en .
+
+server:LincdServer
+    a owl:Class ;
+    rdfs:comment "The Node.js HTTP server that serves a Linked app, its assets and its /call and data API routes (LinkedServer)."@en ;
+    rdfs:isDefinedBy server: ;
+    rdfs:label "Linked server"@en .
+
+server:LincdWebApp
+    a owl:Class ;
+    rdfs:comment "A Linked web app as the server knows it: the site at SITE_ROOT, with the data API it exposes."@en ;
+    rdfs:label "Linked web app"@en .
+
+server:N3FileStore
+    a owl:Class ;
+    rdfs:comment "A quad store that keeps its quads in an N3/Turtle file on a Node.js server."@en ;
+    rdfs:label "N3 file store"@en .
+
+server:NodeFileStore
+    a owl:Class ;
+    rdfs:comment "A quad store that keeps its quads in a JSON-LD file on a Node.js server."@en ;
+    rdfs:isDefinedBy server: ;
+    rdfs:label "Node file store"@en .
+
+server:hasAPI
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a web app to the client of its data API."@en ;
+    rdfs:label "has API"@en .
+
+server:maintainsPackage
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a web app to a package it maintains."@en ;
+    rdfs:label "maintains package"@en .
+
+server:ownPackage
+    a owl:ObjectProperty ;
+    rdfs:comment "Links a web app to the npm package that is its own code."@en ;
+    rdfs:label "own package"@en .

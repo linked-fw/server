@@ -151,6 +151,35 @@ export function discoverLinkedDependencies(
   return out;
 }
 
+/**
+ * Package name → the names of its direct `dependencies` and `peerDependencies`, for the app
+ * (`appPackageJson`) and every package in `packageDirs` (name → package root, as discovery
+ * found it). The shape check scopes its direction-I errors with it. A package whose
+ * `package.json` cannot be read is left out.
+ */
+export function readDependencyLists(
+  packageDirs: Iterable<[string, string]>,
+  appPackageJson?: any
+): Record<string, string[]> {
+  const lists: Record<string, string[]> = {};
+  const add = (name: unknown, json: any) => {
+    if (typeof name !== 'string' || !name) return;
+    lists[name] = [
+      ...new Set([
+        ...Object.keys(json?.dependencies ?? {}),
+        ...Object.keys(json?.peerDependencies ?? {}),
+      ]),
+    ].sort();
+  };
+  if (appPackageJson) add(appPackageJson.name, appPackageJson);
+  for (const [name, dir] of packageDirs) {
+    try {
+      add(name, JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')));
+    } catch {}
+  }
+  return lists;
+}
+
 function realpathOr(p: string): string {
   try {
     return fs.realpathSync(p);

@@ -1,9 +1,9 @@
 import { describe, expect, it } from '@jest/globals';
-import { readFileSync } from 'fs';
+import { definedTermsFromTurtle } from '@_linked/core/ontology/hierarchy';
 import { Prefix } from '@_linked/core/utils/Prefix';
 import { packageExports } from '../package.js';
 import '../ontologies/server.register.js';
-import { lincdServer, ns, server } from '../ontologies/server.js';
+import { lincdServer, loadData, ns, server } from '../ontologies/server.js';
 import * as oldModule from '../ontologies/lincd-server.js';
 
 // A first-party ontology's prefix label equals its ontologySlug, which for this
@@ -27,16 +27,18 @@ describe('server ontology', () => {
 
   it('is registered in the package tree under its prefix', () => {
     expect((packageExports as any).server?._prefix).toBe('server');
-    expect((packageExports as any).server?._data).toBe('../data/server.json');
+    expect((packageExports as any).server?._data).toEqual(['../data/server.ttl']);
   });
 
-  it('uses `server` as the JSON-LD @context key of its data file', () => {
-    const data = JSON.parse(
-      readFileSync(new URL('../data/server.json', import.meta.url), 'utf8')
-    );
-    expect(data['@context'].server).toBe(NS);
-    expect(data['@context']['lincd-server']).toBeUndefined();
-    expect(JSON.stringify(data)).not.toContain('lincd-server:');
+  it('ships its data as Turtle under the `server:` prefix', async () => {
+    const texts = await loadData();
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain(`@prefix server: <${NS}> .`);
+    expect(texts[0]).not.toContain('lincd-server');
+    const defined = await definedTermsFromTurtle(texts);
+    // The ontology node and every term of the namespace object.
+    const terms = Object.values(server).map((term) => term.id);
+    expect([...defined].sort()).toEqual([NS, ...terms].sort());
   });
 
   it('keeps the deprecated export and module path as aliases', () => {

@@ -39,7 +39,6 @@ import { paint } from '../utils/paint.js';
 import { nativeImport } from '../utils/nativeImport.js';
 import { createJsonBodyParser } from '../utils/jsonBodyParser.js';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
-import { autoLoadOntologyData } from '@_linked/core/utils/Package';
 import {
   getAllShapeClasses,
   getShapeClass,
@@ -53,6 +52,7 @@ import {
   hasModuleEntry,
   isBundledBySsr,
   NODE_IMPORT_CONDITIONS,
+  readDependencyLists,
   readInstalledPackage,
   resolveBackendEntry,
   resolveDevBackendEntry,
@@ -185,7 +185,17 @@ import {
   ssrCssInlineUrls,
   ssrCssScope,
 } from '../utils/ssrCss.js';
-import { materializeShapes } from '../utils/syncShapes.js';
+import { bootOrphanScope, materializeShapes } from '../utils/syncShapes.js';
+import {
+  bootSyncsOntologies,
+  loadOntologyCore,
+  runOntologyPhase,
+  ontologyPackageDirs,
+  sourceModuleImporter,
+  shapeSyncOn,
+  syncOntologiesThenShapes,
+  type OntologyPhaseResult,
+} from '../utils/ontologySync.js';
 import {
   AdminRequestError,
   assertReloadablePackages,
@@ -268,8 +278,6 @@ function installProcessSetup() {
 //
 // global['document'] = document;
 global['reactStaticRenderer'] = renderToStaticMarkup;
-
-autoLoadOntologyData(true);
 
 /**
  * How RPC arguments treat a `{__sc}` (live Shape class) marker. No call takes a
@@ -379,6 +387,8 @@ export class LinkedServer extends Shape {
    * could not be loaded at all.
    */
   private linkedPackageDirs: Map<string, string> = new Map();
+  /** The app's own workspace packages (`linkedPackage: true`), by real path. */
+  private workspacePackageDirs: string[] = [];
   private warnedDuplicateInstalls: Set<string> = new Set();
   //from resizedFileName to full resized path (CDN or similar)
   private resizePathsMap: Map<string, string> = new Map();
@@ -476,6 +486,7 @@ export class LinkedServer extends Shape {
 
     await this.initBackendProviders();
 
+    await this.syncOntologiesOnBoot();
     await this.materializeShapesIntoStore();
     return this;
   }
@@ -512,9 +523,7 @@ export class LinkedServer extends Shape {
 
   /** One shape sync into the default dataset; throws when it fails. */
   private async syncRegisteredShapes(): Promise<ShapeSyncResult> {
-    const configFlag = (this.config as any)?.syncShapesOnBoot;
-    const envFlag = process.env.LINKED_SYNC_SHAPES_ON_BOOT;
-    if (configFlag === false || envFlag === 'false') {
+    if (!shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)) {
       return { written: 0, skipped: 'disabled' };
     }
     const appData = LinkedStorage.getDefaultDataset();
@@ -526,12 +535,53 @@ export class LinkedServer extends Shape {
     return { written: count, orphanScope };
   }
 
+  /**
+   * Boot: sync the registered ontologies' class hierarchy into app data and run the shape
+   * check, before the shape sync (see utils/ontologySync). The sync follows the shape sync's
+   * switch (`syncShapesOnBoot`, `LINKED_SYNC_SHAPES_ON_BOOT`), plus the opt-out
+   * `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false`; the in-memory class hierarchy is loaded either way.
+   * Never stops the boot: failures and findings are logged.
+   */
+  private async syncOntologiesOnBoot(): Promise<void> {
+    try {
+      await runAsSystem(
+        () => this.runOntologyPhase(bootSyncsOntologies(process.env, (this.config as any)?.syncShapesOnBoot)),
+        'ontology sync at boot'
+      );
+    } catch (err) {
+      console.warn('[LinkedServer] ontology sync failed (non-fatal):', err);
+    }
+  }
+
+  /**
+   * Every discovered linked package and every workspace package of the app registers its
+   * ontologies (in dev, an unbuilt one through Vite), then the ontology sync (when
+   * `sync` is set) into the default dataset, then the shape check.
+   * Orphaned sync nodes are pruned under the shape sync's orphan policy
+   * (`LINKED_SYNC_SHAPES_PRUNE_ORPHANS`).
+   */
+  private async runOntologyPhase(sync: boolean): Promise<OntologyPhaseResult> {
+    return runOntologyPhase(LinkedStorage.getDefaultDataset(), {
+      core: await loadOntologyCore(),
+      sync,
+      orphanScope: bootOrphanScope(),
+      dependencies: readDependencyLists(this.linkedPackageDirs ?? new Map(), this.package),
+      packageDirs: ontologyPackageDirs(
+        (this.linkedPackageDirs ?? new Map()).values(),
+        this.workspacePackageDirs ?? []
+      ),
+      importModule: sourceModuleImporter((this.config.server as any)?.vite),
+    });
+  }
+
   /** Tail of the {@link resyncShapes} queue: one re-sync at a time. */
   private shapeSyncQueue: Promise<unknown> = Promise.resolve();
 
   /**
-   * Re-sync the registered shapes into app data, as the boot does, and report
-   * what was written. The host calls it (`POST /admin/sync-shapes`) after it
+   * Re-sync the registered ontologies and shapes into app data, as the boot does,
+   * and report what was written: the ontology sync (every registered package,
+   * hash-skipped), the shape check's counts, then the shape sync. A failed ontology
+   * sync does not stop the shape sync; the run then fails with the ontology error. The host calls it (`POST /admin/sync-shapes`) after it
    * changed the app's shape code, so the app — the only process that loads that
    * code — writes its own shapes and their hashes.
    *
@@ -555,7 +605,10 @@ export class LinkedServer extends Shape {
           for (const pkg of packages) {
             if (await this.reloadPackageFromDisk(pkg)) reloaded.push(pkg);
           }
-          const result = await this.syncRegisteredShapes();
+          const result = await syncOntologiesThenShapes(
+            () => this.runOntologyPhase(shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)),
+            () => this.syncRegisteredShapes()
+          );
           return { ...result, reloaded, shapes: [...getAllShapeClasses().keys()].sort() };
         }, 'shape sync requested by the host'),
         timeoutMs,
@@ -750,6 +803,7 @@ export class LinkedServer extends Shape {
     // before controllers
     await this.initBackendProviders();
 
+    await this.syncOntologiesOnBoot();
     await this.materializeShapesIntoStore();
 
     //START OF EXPRESS ROUTES AND MIDDLEWARE
@@ -961,6 +1015,13 @@ export class LinkedServer extends Shape {
     // Local workspace packages in this app's dependency tree. These are also
     // imported whole at boot (indexLincdPackage), not only their /backend.
     const allLocalPackages = getLincdPackages();
+    this.workspacePackageDirs = allLocalPackages.map((pkg) => {
+      try {
+        return fsNative.realpathSync(pkg.path);
+      } catch {
+        return pkg.path;
+      }
+    });
     const localPackageMap = new Map<
       string,
       { packageName: string; path: string }

@@ -1,16 +1,11 @@
 import { createNameSpace } from '@_linked/core/utils/NameSpace';
+import { loadOntologyFiles } from '@_linked/core/ontology/loadOntologyFiles';
 
-/**
- * Load the data of this ontology.
- * In @_linked/core, loadData returns the raw JSON import — no JSONLD.parse() needed.
- */
-export var loadData = async () => {
-  //@ts-ignore
-  const data = await import('../data/server.json', {
-    with: { type: 'json' },
-  });
-  return data.default || data;
-};
+/** This ontology's data files, relative to this module (`linked build` copies them to `lib/esm/data/`). */
+export const dataFiles = ['../data/server.ttl'];
+
+/** Read this ontology's Turtle data (server only). */
+export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
 
 /**
  * The namespace of this ontology.
