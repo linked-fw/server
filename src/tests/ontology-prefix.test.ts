@@ -36,9 +36,9 @@ describe('server ontology', () => {
     expect(texts[0]).toContain(`@prefix server: <${NS}> .`);
     expect(texts[0]).not.toContain('lincd-server');
     const defined = await definedTermsFromTurtle(texts);
-    expect([...defined].sort()).toEqual(
-      ['BackendFileStore', 'BackendStore', 'LincdServer', 'NodeFileStore'].map((t) => NS + t)
-    );
+    // The ontology node and every term of the namespace object.
+    const terms = Object.values(server).map((term) => term.id);
+    expect([...defined].sort()).toEqual([NS, ...terms].sort());
   });
 
   it('keeps the deprecated export and module path as aliases', () => {
