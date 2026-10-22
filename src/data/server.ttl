@@ -11,7 +11,7 @@ server:
     a owl:Ontology ;
     dcterms:description "Terms of the Linked Node.js server: the server, the web app it serves and its data API."@en ;
     dcterms:title "Linked server"@en ;
-    owl:versionInfo "3.6.1" .
+    owl:versionInfo "3.7.0" .
 
 server:BackendAPIStore
     a owl:Class ;
