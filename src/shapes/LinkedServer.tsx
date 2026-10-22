@@ -190,6 +190,8 @@ import {
   bootSyncsOntologies,
   loadOntologyCore,
   runOntologyPhase,
+  ontologyPackageDirs,
+  sourceModuleImporter,
   shapeSyncOn,
   syncOntologiesThenShapes,
   type OntologyPhaseResult,
@@ -385,6 +387,8 @@ export class LinkedServer extends Shape {
    * could not be loaded at all.
    */
   private linkedPackageDirs: Map<string, string> = new Map();
+  /** The app's own workspace packages (`linkedPackage: true`), by real path. */
+  private workspacePackageDirs: string[] = [];
   private warnedDuplicateInstalls: Set<string> = new Set();
   //from resizedFileName to full resized path (CDN or similar)
   private resizePathsMap: Map<string, string> = new Map();
@@ -550,7 +554,8 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Every discovered linked package registers its ontologies, then the ontology sync (when
+   * Every discovered linked package and every workspace package of the app registers its
+   * ontologies (in dev, an unbuilt one through Vite), then the ontology sync (when
    * `sync` is set) into the default dataset, then the shape check.
    * Orphaned sync nodes are pruned under the shape sync's orphan policy
    * (`LINKED_SYNC_SHAPES_PRUNE_ORPHANS`).
@@ -561,7 +566,11 @@ export class LinkedServer extends Shape {
       sync,
       orphanScope: bootOrphanScope(),
       dependencies: readDependencyLists(this.linkedPackageDirs ?? new Map(), this.package),
-      packageDirs: [...(this.linkedPackageDirs ?? new Map()).values()],
+      packageDirs: ontologyPackageDirs(
+        (this.linkedPackageDirs ?? new Map()).values(),
+        this.workspacePackageDirs ?? []
+      ),
+      importModule: sourceModuleImporter((this.config.server as any)?.vite),
     });
   }
 
@@ -1006,6 +1015,13 @@ export class LinkedServer extends Shape {
     // Local workspace packages in this app's dependency tree. These are also
     // imported whole at boot (indexLincdPackage), not only their /backend.
     const allLocalPackages = getLincdPackages();
+    this.workspacePackageDirs = allLocalPackages.map((pkg) => {
+      try {
+        return fsNative.realpathSync(pkg.path);
+      } catch {
+        return pkg.path;
+      }
+    });
     const localPackageMap = new Map<
       string,
       { packageName: string; path: string }

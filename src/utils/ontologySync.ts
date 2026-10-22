@@ -12,7 +12,8 @@
  * - Before either, every linked package directory the server discovered registers its ontologies
  *   (core `registerInstalledOntologies`, when the installed core has it): a package the app only
  *   deep-imports shape files from never evaluates its register modules, so its data would be
- *   missing from both.
+ *   missing from both. A source package without built register modules (a workspace package in
+ *   dev) registers through `importModule` (Vite's `ssrLoadModule`), when the caller passes one.
  *
  * Both core modules are server only and not in core's index, so they are imported dynamically.
  * Kept apart from `LinkedServer` so the order and the failure handling can be tested without
@@ -31,8 +32,14 @@ export interface OntologyCore {
   >;
   /** Absent in a core without the in-memory class hierarchy. */
   loadOntologyHierarchy?: () => Promise<unknown>;
-  /** Absent in a core that cannot register installed packages' ontologies. */
-  registerInstalledOntologies?: (packageDirs: string[]) => Promise<string[]>;
+  /**
+   * Absent in a core that cannot register installed packages' ontologies. A core older than
+   * `options.importModule` ignores it, and skips source packages.
+   */
+  registerInstalledOntologies?: (
+    packageDirs: string[],
+    options?: {importModule?: (file: string) => Promise<unknown>},
+  ) => Promise<string[]>;
 }
 
 /** What the ontology sync and the shape check did, as `POST /admin/sync-shapes` reports it. */
@@ -99,6 +106,31 @@ export async function loadOntologyCore(): Promise<OntologyCore> {
   };
 }
 
+/**
+ * The package directories whose ontologies register before the sync: every linked package
+ * discovered in the app's dependency tree, then the app's own workspace packages (a CN clone's
+ * `packages/<slug>-ont` is one no package imports, so the dependency walk never reaches it).
+ * Order kept, duplicates dropped.
+ */
+export function ontologyPackageDirs(
+  linkedPackageDirs: Iterable<string>,
+  workspacePackageDirs: Iterable<string>,
+): string[] {
+  return [...new Set([...linkedPackageDirs, ...workspacePackageDirs])];
+}
+
+/**
+ * In dev, the loader for source register modules: Vite's `ssrLoadModule`, so a workspace package
+ * that was never built registers on the core the SSR graph uses. Undefined without Vite (a built
+ * app), where source packages are skipped.
+ */
+export function sourceModuleImporter(
+  vite: {ssrLoadModule?: (url: string) => Promise<unknown>} | undefined | null,
+): ((file: string) => Promise<unknown>) | undefined {
+  const ssrLoadModule = vite?.ssrLoadModule;
+  return typeof ssrLoadModule === 'function' ? (file) => ssrLoadModule.call(vite, file) : undefined;
+}
+
 const asError = (err: unknown): Error => (err instanceof Error ? err : new Error(String(err)));
 const list = (names: string[]) => (names.length ? names.join(', ') : 'none');
 
@@ -117,6 +149,7 @@ export async function runOntologyPhase(
     orphanScope,
     dependencies,
     packageDirs = [],
+    importModule,
     log = console.log,
     warn = console.warn,
   }: {
@@ -126,6 +159,11 @@ export async function runOntologyPhase(
     dependencies?: Record<string, string[]>;
     /** Every linked package directory the server discovered (transitively). */
     packageDirs?: string[];
+    /**
+     * Imports a source register module (`src/ontologies/*.register.ts`) of a package directory
+     * without built ones; in dev, Vite's `ssrLoadModule`.
+     */
+    importModule?: (file: string) => Promise<unknown>;
     log?: (message: string) => void;
     warn?: (message: string, err?: unknown) => void;
   },
@@ -137,7 +175,8 @@ export async function runOntologyPhase(
 
   if (core.registerInstalledOntologies && packageDirs.length) {
     try {
-      await core.registerInstalledOntologies(packageDirs);
+      if (importModule) await core.registerInstalledOntologies(packageDirs, {importModule});
+      else await core.registerInstalledOntologies(packageDirs);
     } catch (err) {
       warn("[LinkedServer] registering the installed packages' ontologies failed:", err);
     }

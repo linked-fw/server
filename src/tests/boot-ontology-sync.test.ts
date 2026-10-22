@@ -5,7 +5,9 @@ import * as path from 'path';
 import {
   bootSyncsOntologies,
   loadOntologyCore,
+  ontologyPackageDirs,
   runOntologyPhase,
+  sourceModuleImporter,
   shapeSyncOn,
   syncOntologiesThenShapes,
   type OntologyCore,
@@ -23,7 +25,13 @@ function fakeCore({
   registerFails = false,
 } = {}) {
   const calls: string[] = [];
-  const seen: { ds?: unknown; syncOptions?: unknown; checkOptions?: unknown; packageDirs?: string[] } = {};
+  const seen: {
+    ds?: unknown;
+    syncOptions?: unknown;
+    checkOptions?: unknown;
+    packageDirs?: string[];
+    registerOptions?: { importModule?: (file: string) => Promise<unknown> };
+  } = {};
   const core: OntologyCore = {
     async syncOntologies(ds, options) {
       calls.push('sync');
@@ -44,9 +52,10 @@ function fakeCore({
         }
       : undefined,
     registerInstalledOntologies: withRegister
-      ? async (packageDirs) => {
+      ? async (packageDirs, options) => {
           calls.push('register');
           seen.packageDirs = packageDirs;
+          seen.registerOptions = options;
           if (registerFails) throw new Error('bad register module');
           return ['@x/a'];
         }
@@ -120,6 +129,16 @@ describe('runOntologyPhase', () => {
     expect(calls).toEqual(['register', 'sync', 'check']);
     expect(warnings[0]).toContain("registering the installed packages' ontologies failed");
     expect(result.failure).toBeUndefined();
+  });
+
+  it('passes importModule to the registration, for source packages', async () => {
+    const { core, seen } = fakeCore();
+    const importModule = async (file: string) => file;
+    await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', packageDirs: ['/d'], importModule, ...quiet });
+    expect(seen.registerOptions?.importModule).toBe(importModule);
+    const without = fakeCore();
+    await runOntologyPhase({}, { core: without.core, sync: true, orphanScope: 'none', packageDirs: ['/d'], ...quiet });
+    expect(without.seen.registerOptions).toBeUndefined();
   });
 
   it('registers nothing without package directories, or with a core that cannot', async () => {
@@ -291,6 +310,55 @@ describe('loadOntologyCore', () => {
       expect(g.__bootOntologySyncRegistered).toBe(1);
     } finally {
       delete g.__bootOntologySyncRegistered;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the directories and the loader the server registers with', () => {
+  it("adds the app's workspace packages after the discovered ones, once each", () => {
+    expect(ontologyPackageDirs(['/app/node_modules/@x/a', '/app/packages/b'], ['/app/packages/b', '/app/packages/b-ont'])).toEqual([
+      '/app/node_modules/@x/a',
+      '/app/packages/b',
+      '/app/packages/b-ont',
+    ]);
+  });
+
+  it("is Vite's ssrLoadModule in dev, and nothing without Vite", async () => {
+    const loaded: string[] = [];
+    const vite = {
+      prefix: 'vite:',
+      async ssrLoadModule(this: { prefix: string }, url: string) {
+        loaded.push(this.prefix + url);
+        return {};
+      },
+    };
+    const importModule = sourceModuleImporter(vite);
+    await importModule!('/app/packages/b-ont/src/ontologies/b.register.ts');
+    expect(loaded).toEqual(['vite:/app/packages/b-ont/src/ontologies/b.register.ts']);
+    expect(sourceModuleImporter(undefined)).toBeUndefined();
+    expect(sourceModuleImporter({})).toBeUndefined();
+  });
+
+  it("registers a source package's register modules through the loader with the real core", async () => {
+    const core = await loadOntologyCore();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-'));
+    const source = path.join(root, 'b-ont');
+    fs.mkdirSync(path.join(source, 'src/ontologies'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'b-ont', type: 'module' }));
+    fs.writeFileSync(path.join(source, 'src/ontologies/b.register.ts'), '');
+    const imported: string[] = [];
+    try {
+      expect(await core.registerInstalledOntologies!([source])).toEqual([]);
+      expect(
+        await core.registerInstalledOntologies!([source], {
+          importModule: async (file) => {
+            imported.push(file);
+          },
+        })
+      ).toEqual(['b-ont']);
+      expect(imported).toEqual([path.join(fs.realpathSync(source), 'src/ontologies/b.register.ts')]);
+    } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
