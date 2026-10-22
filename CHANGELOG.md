@@ -1,5 +1,32 @@
 # @\_linked/server
 
+## 3.7.0
+
+### Minor Changes
+
+- [#202](https://github.com/linked-fw/server/pull/202) [`9e9cf47`](https://github.com/linked-fw/server/commit/9e9cf479c42c82a287a640c6f02c300186653176) Thanks [@flyon](https://github.com/flyon)! - Ontology data: labels, descriptions and types for every term.
+
+  - `src/data/server.ttl` gains the ontology node (`dcterms:title`, `dcterms:description`,
+    `owl:versionInfo`) and the seven terms it lacked (`LincdWebApp`, `LincdAPI`, `hasAPI`,
+    `N3FileStore`, `BackendAPIStore`, `ownPackage`, `maintainsPackage`), and is written in the
+    deterministic Turtle form. All 11 terms are typed (`owl:Class`, was `rdfs:Class`, or
+    `owl:ObjectProperty`) with an English label and comment; the labels say "Linked", not "LINCD".
+  - Two axioms: `server:BackendFileStore` and `server:BackendAPIStore` are `rdfs:subClassOf`
+    `server:BackendStore`. No shape targets these classes.
+
+- [#202](https://github.com/linked-fw/server/pull/202) [`4e992f4`](https://github.com/linked-fw/server/commit/4e992f458ab3366bbd673a74d12105217c289190) Thanks [@flyon](https://github.com/flyon)! - The server syncs the class hierarchy of every registered ontology into its app data and runs core's shape check before its shape sync, at boot and on `POST /admin/sync-shapes`, whose answer gains `ontologies: {written, skipped}` and `shapeCheck: {errors, warnings}`. The boot's ontology sync follows the shape sync's switches; `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false` turns off only it. The server's own ontology data is Turtle (`data/server.ttl`), and the server no longer calls `autoLoadOntologyData`.
+
+- [#202](https://github.com/linked-fw/server/pull/202) [`4fcafde`](https://github.com/linked-fw/server/commit/4fcafde29dca73f34d45ce5054f24dba79f0d89b) Thanks [@flyon](https://github.com/flyon)! - At boot and on `POST /admin/sync-shapes`, every linked package the server discovered in the app's
+  dependency tree registers its ontologies (core `registerInstalledOntologies`) before the ontology
+  sync and the shape check, so a package the app only deep-imports shape files from
+  (`@_linked/schema/shapes/Person`) is synced and checked too.
+
+- [#202](https://github.com/linked-fw/server/pull/202) [`49a02be`](https://github.com/linked-fw/server/commit/49a02bea25b9526bf732a01db20cd1a33b9560e0) Thanks [@flyon](https://github.com/flyon)! - The ontology registration before the sync and the shape check also covers the app's own workspace
+  packages (`linkedPackage: true` under its `workspaces`), which the dependency walk misses when no
+  package imports them (a Create Now clone's `packages/<slug>-ont`). In dev, a package without a
+  built `lib/` registers from `src/ontologies/*.register.ts` through Vite's `ssrLoadModule` (core
+  `registerInstalledOntologies`' `importModule`); a built app skips it.
+
 ## 3.6.1
 
 ### Patch Changes
