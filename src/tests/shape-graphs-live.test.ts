@@ -259,7 +259,7 @@ describeLive('[fuseki] shape graphs at boot and on the control channel', () => {
     servers.push(s);
     const res = await fetch(`http://127.0.0.1:${(s.address() as AddressInfo).port}/admin/sync-shapes`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-cn-admin-secret': SECRET },
+      headers: { 'content-type': 'application/json', 'x-app-admin-secret': SECRET },
       body: '{}',
     });
     expect(res.status).toBe(200);

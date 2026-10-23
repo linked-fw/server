@@ -407,15 +407,32 @@ With `apiOnly` the server skips page rendering. It installs no SPA catch-all, so
 
 ## Host control channel (`/admin/*`)
 
-A host that starts the app process (Create Now) controls it over HTTP routes on the app's own port. They exist only when the process was started with `CN_APP_ADMIN_SECRET` in its environment; without it they answer 404. Every request carries the secret in `x-cn-admin-secret` (401 otherwise).
+A host that starts the app process controls it over HTTP routes on the app's own port. They exist only when the process was started with `APP_ADMIN_SECRET` in its environment; without it they answer 404. Every request carries the secret in the `x-app-admin-secret` header (401 otherwise).
+
+Deprecated names are still read: `CN_APP_ADMIN_SECRET` when `APP_ADMIN_SECRET` is unset, and the `x-cn-admin-secret` header when `x-app-admin-secret` is absent. Each logs one deprecation warning per process.
 
 | Route | Answer |
 |---|---|
 | `GET /admin/health` | 200 `{status: 'ok'}` once the server listens (the boot ontology sync, shape check and shape sync have finished by then) |
 | `POST /admin/restart` | 202, then the process exits; the host starts it again |
+| `POST /admin/graph-registry-changed` | body `{dataset}`: the host changed that dataset's named graphs; the process drops its cached graph registry and answers 200 `{invalidated: dataset}`; 400 without a dataset name |
+| `GET /admin/routes` | 200 `{datasets: [{store, id?, default, routes, defaultGraphShapes}]}`: the effective graph routes (see below) |
 | `POST /admin/sync-shapes` | 200 `{written, orphanScope, shapeGraphs, reloaded, shapes, ontologies: {written, skipped, graphs, droppedGraphs}, shapeCheck: {errors, warnings}}` (or `{written: 0, skipped, …}` when shape sync is off); 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
 
 `POST /admin/sync-shapes` runs the ontology sync and the shape check (see [Ontology sync and the shape check](#ontology-sync-and-the-shape-check)), then re-syncs the registered shapes into the app's data exactly as the boot does (see [Shape graphs](#shape-graphs): only graphs whose stored content hash differs are written, with the boot's orphan policy and `syncShapesOnBoot` / `LINKED_SYNC_SHAPES_ON_BOOT` switches). `written` counts the shape graphs written, and `shapeGraphs` reports them. The optional body `{packages: [...]}` names packages whose source the host changed; each must be a valid npm package name and the app itself or one of its direct dependencies, never an `@_linked/*` package; the list only says what to reload, it never filters the syncs. In dev their modules are invalidated in Vite and their backends reloaded before the sync, so a shape file written a moment ago is registered; a built app reloads nothing. `reloaded` lists the packages actually reloaded and `shapes` the node shape IRIs registered afterwards, so the host can check that the shape it wrote is there. Syncs run one at a time, as the system; one that takes longer than `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120000) fails and releases the queue. A source reload by itself (HMR) never syncs shapes. A failed ontology sync does not stop the shape sync; the route then answers 500 with the ontology error.
+
+`GET /admin/routes` reports the graph routes the process runs with, as core's routing holds them once the app's storage file (`linked.backend.storage`) has run. Routes are written only there (`LinkedStorage.setDatasetForShapes(dataset, shapes, {graph})`); the app never pushes them anywhere, and this route lets a host check what actually runs. One entry per dataset the router knows, the default dataset first, then in the order they were pinned:
+
+- `store`: the store's class name (`FusekiStore`, `RemoteDataset`, …), and `id` when the store has one. The server does not see the storage config's aliases, so these and `default` tell the datasets apart.
+- `default`: whether it is the default dataset (the one for every shape without a pin).
+- `routes`: `{<shape IRI>: <graph IRI>}` as registered. A sub-shape without a route of its own is written to its nearest routed super-shape's graph and is not listed.
+- `defaultGraphShapes`: the registered shapes that resolve to this dataset and are written to its default graph (no route of their own, no routed super-shape), sorted.
+
+```json
+{"datasets": [{"store": "FusekiStore", "default": true,
+  "routes": {"https://example.org/shape/Article": "https://example.org/data/graph/articles"},
+  "defaultGraphShapes": ["https://example.org/shape/Person"]}]}
+```
 
 Side effects to expect:
 

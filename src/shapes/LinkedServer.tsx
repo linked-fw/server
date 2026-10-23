@@ -206,6 +206,7 @@ import {
   AdminRequestError,
   assertReloadablePackages,
   registerAdminRoutes,
+  resolveAdminSecret,
   type ShapeSyncResult,
 } from '../utils/adminChannel.js';
 import { envMs, withTimeout } from '../utils/withTimeout.js';
@@ -925,8 +926,8 @@ export class LinkedServer extends Shape {
     });
 
     // The host's control channel (/admin/*), open only when the host started
-    // this process with CN_APP_ADMIN_SECRET; see utils/adminChannel.
-    registerAdminRoutes(this.server, process.env.CN_APP_ADMIN_SECRET, {
+    // this process with APP_ADMIN_SECRET; see utils/adminChannel.
+    registerAdminRoutes(this.server, resolveAdminSecret(), {
       // The host's provisioner starts the app again after it exits.
       exit: () => process.exit(0),
       syncShapes: (request) => this.resyncShapes(request),

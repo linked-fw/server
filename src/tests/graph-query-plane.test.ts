@@ -266,9 +266,9 @@ describe('POST /admin/graph-registry-changed', () => {
     const base = await listen(SECRET);
     const url = `${base}/admin/graph-registry-changed`;
     expect((await post(url, { dataset: 'd' })).status).toBe(401);
-    expect((await post(url, { dataset: 'd' }, { 'x-cn-admin-secret': 'wrong' })).status).toBe(401);
-    expect((await post(url, {}, { 'x-cn-admin-secret': SECRET })).status).toBe(400);
-    expect((await post(url, { dataset: '  ' }, { 'x-cn-admin-secret': SECRET })).status).toBe(400);
+    expect((await post(url, { dataset: 'd' }, { 'x-app-admin-secret': 'wrong' })).status).toBe(401);
+    expect((await post(url, {}, { 'x-app-admin-secret': SECRET })).status).toBe(400);
+    expect((await post(url, { dataset: '  ' }, { 'x-app-admin-secret': SECRET })).status).toBe(400);
     expect(() => parseGraphRegistryChangedBody({ dataset: 3 })).toThrow(AdminRequestError);
     expect(parseGraphRegistryChangedBody({ dataset: ' app-data ' })).toEqual({ dataset: 'app-data' });
   });
@@ -282,7 +282,7 @@ describe('POST /admin/graph-registry-changed', () => {
     });
     servers.push(s);
     const base = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
-    expect((await post(`${base}/admin/graph-registry-changed`, { dataset: 'd' }, { 'x-cn-admin-secret': SECRET })).status).toBe(404);
+    expect((await post(`${base}/admin/graph-registry-changed`, { dataset: 'd' }, { 'x-app-admin-secret': SECRET })).status).toBe(404);
   });
 
   it('with the secret, the next .from(graphs.allOntologies) read re-reads the registry', async () => {
@@ -300,7 +300,7 @@ describe('POST /admin/graph-registry-changed', () => {
     expect(refused.status).toBe(401);
     await read();
     expect(store.registryReads).toHaveLength(1);
-    const res = await post(`${base}/admin/graph-registry-changed`, { dataset: 'app-data-main' }, { 'x-cn-admin-secret': SECRET });
+    const res = await post(`${base}/admin/graph-registry-changed`, { dataset: 'app-data-main' }, { 'x-app-admin-secret': SECRET });
     expect(res).toEqual({ status: 200, json: { invalidated: 'app-data-main' } });
     await read();
     expect(store.registryReads).toHaveLength(2);
