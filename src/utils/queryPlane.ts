@@ -10,6 +10,11 @@
  * module turns the incoming query into the builder the store runs and the IR
  * the rules read.
  *
+ * Graph queries (`graph_create`, `graph_replace`, `graph_patch`, `graph_drop`) arrive as plain
+ * data on `/call/@_linked/server/graphQuery`: {@link toGraphQuery} checks the JSON, the store's
+ * `graph` rule decides ({@link authorizeGraphQuery}), and a refusal of the store goes back with
+ * its code ({@link graphQueryCallError}).
+ *
  * The host can supply the shape catalog a request's query is decoded in
  * (`setQueryCatalogResolver`), so one server can resolve the same shape IRI
  * differently per request (for example per project branch).
@@ -18,6 +23,12 @@
  * the ground up (see QueryAccess).
  */
 import { fromJSON } from '@_linked/core';
+import {
+  isGraphQueryError,
+  parseGraphQuery,
+  type GraphQuery,
+  type GraphQueryErrorCode,
+} from '@_linked/core/queries/graphQuery';
 import { lower } from '@_linked/core/queries/lower';
 import type { ShapeCatalog } from '@_linked/core/utils/ShapeCatalog';
 import {
@@ -196,4 +207,57 @@ export async function authorizeRawQuery(query: unknown, endpoint: string): Promi
     mode: getRpcExposureMode(),
     endpoint,
   });
+}
+
+/**
+ * The graph query `json` describes, checked with core's `parseGraphQuery`; `undefined` when it is
+ * not a valid graph query (the access check then refuses it with 400).
+ */
+export function toGraphQuery(json: unknown): GraphQuery | undefined {
+  try {
+    return parseGraphQuery(json);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Check a graph query against the `graph` rule of the store `LinkedStorage.graphQuery` routes its
+ * record class to (`QueryAccess`, operation `graph`): no rule, or `'none'`, refuses it (403, 401
+ * without a session); a malformed one answers 400. `ir` is {@link toGraphQuery}'s result. No
+ * catalog is resolved for a graph query (its record shapes are core's built-ins), so the check
+ * resolves the store in the global registry, where `LinkedStorage.graphQuery` then runs it.
+ */
+export async function authorizeGraphQuery(
+  query: unknown,
+  ir: GraphQuery | undefined,
+  endpoint: string
+): Promise<void> {
+  await checkQueryAccess({
+    operation: 'graph',
+    query,
+    ir,
+    mode: getRpcExposureMode(),
+    endpoint,
+  });
+}
+
+/** The HTTP status each graph query refusal is answered with. */
+const GRAPH_REFUSAL_STATUS: Record<GraphQueryErrorCode, number> = {
+  'unsupported-query-kind': 501,
+  'graph-name-read-only': 400,
+  'graph-not-registered': 409,
+  'graph-exists': 409,
+};
+
+/**
+ * A store's graph query refusal (`GraphQueryError`) as the answer the caller gets: a
+ * `ServerCallError` with the refusal's status and message and its `code`, which the call route
+ * sends as `{error, code}` (`RemoteDataset` turns it back into a `GraphQueryError`). Any other
+ * error is returned as is.
+ */
+export function graphQueryCallError(err: unknown): unknown {
+  if (!isGraphQueryError(err)) return err;
+  const status = GRAPH_REFUSAL_STATUS[err.code] ?? 400;
+  return Object.assign(new ServerCallError(status, err.message, { cause: err }), { code: err.code });
 }

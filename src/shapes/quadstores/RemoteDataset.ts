@@ -16,7 +16,23 @@ import type {
   SelectResult,
   UpdateResult,
   CreateResult,
+  GraphQuery,
+  GraphResult,
 } from '@_linked/core/queries/IntermediateRepresentation';
+import {
+  GraphQueryError,
+  isGraphQueryError,
+  unsupportedGraphQuery,
+  type GraphQueryErrorCode,
+} from '@_linked/core/queries/graphQuery';
+import {
+  invalidateGraphRegistry,
+  noteGraphQuery,
+  readGraphRegistry,
+  type GraphRegistryRow,
+} from '@_linked/core/utils/graphRegistryCache';
+import { graphs } from '@_linked/core/ontologies/graphs';
+import { OntologyGraph, ShapesGraph } from '@_linked/core/shapes/NamedGraph';
 
 /**
  * Constructor argument for `new RemoteDataset(config)`: the `config` object of a
@@ -123,7 +139,46 @@ type Method =
   | 'askQuery'
   | 'updateQuery'
   | 'createQuery'
-  | 'deleteQuery';
+  | 'deleteQuery'
+  | 'graphQuery';
+
+/** The refusal codes a data server sends back for a graph query (`{error, code}`). */
+const GRAPH_REFUSAL_CODES: ReadonlySet<string> = new Set<GraphQueryErrorCode>([
+  'unsupported-query-kind',
+  'graph-not-registered',
+  'graph-name-read-only',
+  'graph-exists',
+]);
+
+/**
+ * A failed graph query as the caller expects it: a {@link GraphQueryError} when the data server
+ * refused it with one of the graph refusal codes, or when it has no graph method at all (404 or
+ * 501 without any code: an older server or gateway), which reads as `unsupported-query-kind`
+ * so the ontology sync falls back to the default graph. Anything else is passed on as is.
+ */
+function graphQueryFailure(err: unknown, query: GraphQuery): unknown {
+  if (isGraphQueryError(err)) return err;
+  const code = (err as { code?: unknown } | null)?.code;
+  const message = err instanceof Error ? err.message : String(err);
+  let refusal: GraphQueryError | undefined;
+  if (typeof code === 'string' && GRAPH_REFUSAL_CODES.has(code)) {
+    refusal = new GraphQueryError(code as GraphQueryErrorCode, message, query.graph);
+  } else if (code === undefined) {
+    const status = (err as { status?: unknown } | null)?.status;
+    if (status === 404 || status === 501) refusal = unsupportedGraphQuery(query, message);
+  }
+  if (!refusal) return err;
+  (refusal as { cause?: unknown }).cause = err;
+  return refusal;
+}
+
+/** The portable names a remote store expands from its own registry cache, with their record class. */
+const REGISTRY_EXPANDED: ReadonlyMap<string, string> = new Map([
+  [graphs.allOntologies, OntologyGraph.targetClass.id],
+  [graphs.allShapes, ShapesGraph.targetClass.id],
+]);
+
+let nextRegistryKey = 0;
 
 /** On `ping`, these statuses mean nothing at that url serves the query wire. */
 const PING_UNREACHABLE_STATUSES = new Set([404, 501, 502, 503, 504]);
@@ -162,6 +217,8 @@ export class RemoteDataset implements IDataset {
   readonly forwardEndUser: boolean = true;
   private initialized?: Promise<RemoteDatasetPingInfo | undefined>;
   private pingInfo?: RemoteDatasetPingInfo;
+  private readonly instanceRegistryKey = `remote-dataset:${nextRegistryKey++}`;
+  private warnedRegistryRead = false;
 
   constructor(config?: RemoteDatasetConfig | string) {
     if (!config) return;
@@ -225,12 +282,12 @@ export class RemoteDataset implements IDataset {
   // Queries serialize to DSL-JSON for the wire: the live (closed) query can't cross a call
   // as-is, so we ship `toJSON()` and the server's generic provider rehydrates it with
   // `fromJSON()`.
-  selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number> {
-    return this.call('selectQuery', query.toJSON());
+  async selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number> {
+    return this.call('selectQuery', await this.withReadGraphs(query.toJSON()));
   }
 
-  askQuery(query: AskQuery): Promise<boolean> {
-    return this.call('askQuery', query.toJSON());
+  async askQuery(query: AskQuery): Promise<boolean> {
+    return this.call('askQuery', await this.withReadGraphs(query.toJSON()));
   }
 
   updateQuery(query: UpdateQuery): Promise<UpdateResult> {
@@ -243,6 +300,107 @@ export class RemoteDataset implements IDataset {
 
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
     return this.call('deleteQuery', query.toJSON());
+  }
+
+  /**
+   * A whole-graph operation (`graph_create`, `graph_replace`, `graph_patch`, `graph_drop`): the
+   * query is plain data, so it is sent as is, the same way and with the same headers as every
+   * other query. On success this store's registry cache notes it in the same step (a create adds
+   * the graph, a drop removes it), so its next `.from(graphs.allOntologies)` read sees the change.
+   * A refusal rejects with a `GraphQueryError` (see `graphQueryFailure`): a server or gateway
+   * without the method answers `unsupported-query-kind`.
+   */
+  async graphQuery(query: GraphQuery): Promise<GraphResult> {
+    let result: GraphResult;
+    try {
+      result = await this.call<GraphResult>('graphQuery', query);
+    } catch (err) {
+      throw graphQueryFailure(err, query);
+    }
+    if (this.url !== undefined) noteGraphQuery(this.graphRegistryKey(), query);
+    return result;
+  }
+
+  /**
+   * The key this store's graph-registry cache is kept under: the data server's url and the
+   * dataset it named in its `ping` answer (CN's gateway answers `{dataset}`), so stores of the
+   * same dataset share one entry; else one key per instance. (`POST /admin/graph-registry-changed`
+   * drops every entry of the process, whatever its key.)
+   */
+  protected graphRegistryKey(): string {
+    const dataset = this.pingInfo?.dataset;
+    return typeof dataset === 'string' && dataset && this.url
+      ? `${this.url}#${dataset}`
+      : this.instanceRegistryKey;
+  }
+
+  /**
+   * Drop the cached graph registry of `dataset` (default: this store's, see `graphRegistryKey`):
+   * the next read that expands `graphs.allOntologies` re-reads it.
+   */
+  invalidateGraphRegistry(dataset?: string): void {
+    invalidateGraphRegistry(dataset ?? this.graphRegistryKey());
+  }
+
+  /**
+   * Read the data server's graph registry: the records of the ontology and shapes graphs, by
+   * class, through the same query wire (the record shapes read the registry graph themselves).
+   */
+  protected async loadGraphRegistry(): Promise<GraphRegistryRow[]> {
+    const rows: GraphRegistryRow[] = [];
+    const kinds = [OntologyGraph, ShapesGraph] as const;
+    const results = await Promise.all(kinds.map((kind) => kind.select().exec(this)));
+    results.forEach((records, i) => {
+      const recordClass = kinds[i].targetClass.id;
+      for (const record of (records as Array<{ id?: unknown }> | null) ?? []) {
+        if (typeof record?.id === 'string' && record.id) rows.push({ graph: record.id, recordClass });
+      }
+    });
+    return rows;
+  }
+
+  /**
+   * In the url form, expand `graphs.allOntologies` and `graphs.allShapes` in a read's `graphs`
+   * from this store's registry cache (per dataset, updated by its own graph queries, dropped by a
+   * pushed invalidation, re-read after 30 seconds), so the data server reads exactly the graphs
+   * this process knows of. Other names (graph IRIs, `graphs.default`, `graphs.union`) go as they
+   * are, for the data server's store to resolve. A name that expands to no graph is sent as is,
+   * so the data server answers from its own registry; so is every name when the registry cannot
+   * be read (the data server refused or failed the record selects), with one warning per store.
+   * The no-url form sends `graphs` unchanged: the backend's store expands them.
+   */
+  private async withReadGraphs(json: unknown): Promise<unknown> {
+    if (this.url === undefined || !json || typeof json !== 'object') return json;
+    const names = (json as { graphs?: unknown }).graphs;
+    if (!Array.isArray(names) || !names.some((name) => REGISTRY_EXPANDED.has(name))) return json;
+    let registry: Awaited<ReturnType<typeof readGraphRegistry>>;
+    try {
+      registry = await readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry());
+    } catch (err) {
+      if (!this.warnedRegistryRead) {
+        this.warnedRegistryRead = true;
+        console.warn(
+          `RemoteDataset: could not read the graph registry at ${this.url}; reads send graph names unexpanded:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      return json;
+    }
+    const out: string[] = [];
+    const add = (iri: string) => {
+      if (!out.includes(iri)) out.push(iri);
+    };
+    for (const name of names as string[]) {
+      const recordClass = REGISTRY_EXPANDED.get(name);
+      if (!recordClass) {
+        add(name);
+        continue;
+      }
+      const listed = [...registry].filter(([, classes]) => classes.has(recordClass)).map(([graph]) => graph);
+      if (listed.length) listed.sort().forEach(add);
+      else add(name);
+    }
+    return { ...(json as Record<string, unknown>), graphs: out };
   }
 
   private call<T>(method: Method, json: unknown): Promise<T> {

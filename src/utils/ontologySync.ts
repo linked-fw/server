@@ -2,9 +2,13 @@
  * Ontology sync and the shape check, as the server runs them before its shape sync: at boot and
  * when the host asks for a re-sync (`POST /admin/sync-shapes`).
  *
- * - The ontology sync (core `syncOntologies`) writes each registered package's
- *   `rdfs:subClassOf` triples into the app's default dataset, skipping a package whose stored
- *   hash matches, so the store's RDFS view infers the class hierarchy.
+ * - The ontology sync (core `syncOntologies`) writes each registered package's ontology data into
+ *   its own named graph of the app's default dataset (`{package IRI}/graph/ontology`, with a
+ *   record in the graph registry that marks it as a hierarchy source), skipping a package whose
+ *   stored hash matches, so the store's RDFS view infers the class hierarchy. A store without
+ *   graph queries (it answers `unsupported-query-kind`, or has no `graphQuery`) gets core's
+ *   earlier sync of the `rdfs:subClassOf` triples into the default graph instead. The graphs the
+ *   sync wrote or dropped are observed on core's query dispatch and reported by name.
  * - The shape check (core `checkShapeHierarchy`) compares the registered shapes with that
  *   hierarchy. A running app is never stopped by it: its findings are logged and counted.
  * - The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded also when the sync
@@ -35,6 +39,14 @@ export interface OntologyCore {
   /** Loads the in-memory class hierarchy. Optional so a test double can leave it out. */
   loadOntologyHierarchy?: () => Promise<unknown>;
   /**
+   * Calls `onGraph` for every graph query on `ds` that succeeds until the returned function is
+   * called (core's `subscribeQueryDispatch`). Optional so a test double can leave it out.
+   */
+  observeGraphQueries?: (
+    ds: unknown,
+    onGraph: (query: {kind: string; graph: string}, settled: Promise<unknown>) => void,
+  ) => () => void;
+  /**
    * Registers the ontologies of the installed packages in the given directories. Optional so a
    * test double can leave it out.
    */
@@ -46,8 +58,12 @@ export interface OntologyCore {
 
 /** What the ontology sync and the shape check did, as `POST /admin/sync-shapes` reports it. */
 export interface OntologyPhaseResult {
-  /** Packages whose hierarchy was written, and packages left as they were (unchanged or unreadable). */
-  ontologies: {written: string[]; skipped: string[]};
+  /**
+   * Packages whose ontology graph (or, on a store without graph queries, hierarchy) was written,
+   * packages left as they were (unchanged or unreadable), and the graphs the sync wrote and
+   * dropped (empty on a store without graph queries).
+   */
+  ontologies: {written: string[]; skipped: string[]; graphs?: string[]; droppedGraphs?: string[]};
   /** The shape check's findings, counted by severity. */
   shapeCheck: {errors: number; warnings: number};
   /** The first error the sync or the check threw; the phase went on without it. */
@@ -86,6 +102,7 @@ export async function loadOntologyCore(): Promise<OntologyCore> {
   const check = await import('@_linked/core/shapes/checkShapeHierarchy');
   const hierarchy = await import('@_linked/core/ontology/hierarchy');
   const registerInstalled = await import('@_linked/core/ontology/registerInstalled');
+  const dispatch = await import('@_linked/core/queries/queryDispatch');
   return {
     syncOntologies: (ds, options) =>
       sync.syncOntologies(ds as Parameters<typeof sync.syncOntologies>[0], options),
@@ -93,6 +110,10 @@ export async function loadOntologyCore(): Promise<OntologyCore> {
     loadOntologyHierarchy: () => hierarchy.loadOntologyHierarchy(),
     registerInstalledOntologies: (packageDirs, options) =>
       registerInstalled.registerInstalledOntologies(packageDirs, options),
+    observeGraphQueries: (ds, onGraph) =>
+      dispatch.subscribeQueryDispatch((event) => {
+        if (event.kind === 'graph' && event.target === ds) onGraph(event.query, event.result);
+      }),
   };
 }
 
@@ -159,7 +180,7 @@ export async function runOntologyPhase(
   },
 ): Promise<OntologyPhaseResult> {
   const result: OntologyPhaseResult = {
-    ontologies: {written: [], skipped: []},
+    ontologies: {written: [], skipped: [], graphs: [], droppedGraphs: []},
     shapeCheck: {errors: 0, warnings: 0},
   };
 
@@ -174,17 +195,37 @@ export async function runOntologyPhase(
 
   let hierarchyLoaded = false;
   if (sync && ds) {
+    const written = new Set<string>();
+    const dropped = new Set<string>();
+    const pending: Promise<unknown>[] = [];
+    const stop = core.observeGraphQueries?.(ds, (query, settled) => {
+      pending.push(
+        settled.then(
+          () => (query.kind === 'graph_drop' ? dropped : written).add(query.graph),
+          () => undefined,
+        ),
+      );
+    });
     try {
-      const {written, skipped, pruned} = await core.syncOntologies(ds, {orphanScope});
-      result.ontologies = {written, skipped};
+      const sync = await core.syncOntologies(ds, {orphanScope});
+      await Promise.all(pending);
+      const graphs = [...written].sort();
+      const droppedGraphs = [...dropped].sort();
+      result.ontologies = {written: sync.written, skipped: sync.skipped, graphs, droppedGraphs};
       hierarchyLoaded = true;
+      const defaultGraph = !!stop && sync.written.length > 0 && graphs.length === 0;
       log(
-        `[LinkedServer] ontology sync: written ${list(written)}; skipped ${list(skipped)}` +
-          (orphanScope === 'all' ? `; pruned ${list(pruned)}` : ''),
+        `[LinkedServer] ontology sync${defaultGraph ? ' (default graph: the store has no graph queries)' : ''}: ` +
+          `written ${list(sync.written)}; skipped ${list(sync.skipped)}` +
+          (orphanScope === 'all' ? `; pruned ${list(sync.pruned)}` : '') +
+          (graphs.length ? `; graphs written ${list(graphs)}` : '') +
+          (droppedGraphs.length ? `; graphs dropped ${list(droppedGraphs)}` : ''),
       );
     } catch (err) {
       result.failure = asError(err);
       warn('[LinkedServer] ontology sync failed:', err);
+    } finally {
+      stop?.();
     }
   }
   if (!hierarchyLoaded && core.loadOntologyHierarchy) {

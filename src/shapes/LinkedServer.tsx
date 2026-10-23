@@ -536,7 +536,7 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Boot: sync the registered ontologies' class hierarchy into app data and run the shape
+   * Boot: sync the registered ontologies into their graphs in app data and run the shape
    * check, before the shape sync (see utils/ontologySync). The sync follows the shape sync's
    * switch (`syncShapesOnBoot`, `LINKED_SYNC_SHAPES_ON_BOOT`), plus the opt-out
    * `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false`; the in-memory class hierarchy is loaded either way.
@@ -557,7 +557,7 @@ export class LinkedServer extends Shape {
    * Every discovered linked package and every workspace package of the app registers its
    * ontologies (in dev, an unbuilt one through Vite), then the ontology sync (when
    * `sync` is set) into the default dataset, then the shape check.
-   * Orphaned sync nodes are pruned under the shape sync's orphan policy
+   * Orphaned ontology graphs (and earlier sync nodes) are pruned under the shape sync's orphan policy
    * (`LINKED_SYNC_SHAPES_PRUNE_ORPHANS`).
    */
   private async runOntologyPhase(sync: boolean): Promise<OntologyPhaseResult> {
@@ -2238,8 +2238,11 @@ export class LinkedServer extends Shape {
       } catch (err) {
         // A ServerCallError (e.g. 501 for a call no provider handles) carries
         // its own status and a message that is safe to send to the client.
+        // A `code` on it (a graph query refusal, see utils/queryPlane) is sent along, so
+        // a remote caller can tell the refusals apart.
         if (ServerCallError.is(err)) {
-          return this.sendError(res, err.status, err.message);
+          const code = (err as { code?: unknown }).code;
+          return this.sendError(res, err.status, err.message, undefined, typeof code === 'string' ? code : undefined);
         }
         this.sendError(
           res,
@@ -2251,10 +2254,10 @@ export class LinkedServer extends Shape {
     };
   }
 
-  sendError(res, statusCode = 500, message, logMessage?: string) {
+  sendError(res, statusCode = 500, message, logMessage?: string, code?: string) {
     res?.status(statusCode);
     if (message) {
-      res?.send({ error: message });
+      res?.send(code ? { error: message, code } : { error: message });
       console.warn(paint('red', logMessage || message));
     }
   }

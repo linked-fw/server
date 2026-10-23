@@ -5,9 +5,13 @@ import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { LocalFileStore } from './shapes/filestores/LocalFileStore.js';
 import {
   authorizeGenericQuery,
+  authorizeGraphQuery,
+  graphQueryCallError,
   resolveQueryCatalog,
+  toGraphQuery,
   toQueryBuilder,
 } from './utils/queryPlane.js';
+import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -91,5 +95,25 @@ export default class LincdServerBackendProvider extends BackendProvider {
     const query = toQueryBuilder(json, await resolveQueryCatalog(json));
     await authorizeGenericQuery('delete', json, query, 'deleteQuery');
     return LinkedStorage.deleteQuery(query);
+  }
+
+  /**
+   * A whole-graph operation (`graph_create`, `graph_replace`, `graph_patch`, `graph_drop`), as
+   * `RemoteDataset.graphQuery` sends it. The query is plain data: core's `parseGraphQuery` checks
+   * it, the `graph` rule of the store its record class routes to decides (no rule refuses), and
+   * `LinkedStorage.graphQuery` runs it outside any shape catalog; no catalog is resolved for it,
+   * so the check resolves the same store. A store's refusal answers with its code (see
+   * `graphQueryCallError`).
+   */
+  @callable('public')
+  async graphQuery(json: any) {
+    const query = toGraphQuery(json);
+    await authorizeGraphQuery(json, query, 'graphQuery');
+    if (!query) throw new ServerCallError(400, 'Invalid graph query');
+    try {
+      return await LinkedStorage.graphQuery(query);
+    } catch (err) {
+      throw graphQueryCallError(err);
+    }
   }
 }
