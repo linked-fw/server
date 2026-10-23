@@ -536,7 +536,7 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Boot: sync the registered ontologies' class hierarchy into app data and run the shape
+   * Boot: sync the registered ontologies into their graphs in app data and run the shape
    * check, before the shape sync (see utils/ontologySync). The sync follows the shape sync's
    * switch (`syncShapesOnBoot`, `LINKED_SYNC_SHAPES_ON_BOOT`), plus the opt-out
    * `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false`; the in-memory class hierarchy is loaded either way.
@@ -557,7 +557,7 @@ export class LinkedServer extends Shape {
    * Every discovered linked package and every workspace package of the app registers its
    * ontologies (in dev, an unbuilt one through Vite), then the ontology sync (when
    * `sync` is set) into the default dataset, then the shape check.
-   * Orphaned sync nodes are pruned under the shape sync's orphan policy
+   * Orphaned ontology graphs (and earlier sync nodes) are pruned under the shape sync's orphan policy
    * (`LINKED_SYNC_SHAPES_PRUNE_ORPHANS`).
    */
   private async runOntologyPhase(sync: boolean): Promise<OntologyPhaseResult> {

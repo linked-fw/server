@@ -220,6 +220,20 @@ describe('the generic plane: graphQuery', () => {
   });
 });
 
+describe('a store built against an older core (no graphQuery)', () => {
+  it('answers 501 unsupported-query-kind, and RemoteDataset reads it as that refusal', async () => {
+    const store: any = fakeStore();
+    delete store.graphQuery;
+    LinkedStorage.setDefaultDataset(withAccess(store, { read: () => true, write: 'none', graph: () => true }) as any);
+    const base = await listen();
+    const res = await graphCall(base, queries.graph_replace, ME);
+    expect(res.status).toBe(501);
+    expect(res.json.code).toBe('unsupported-query-kind');
+    const err = await new RemoteDataset({ url: base }).graphQuery(queries.graph_replace as any).catch((e) => e);
+    expect(isGraphQueryError(err, 'unsupported-query-kind')).toBe(true);
+  });
+});
+
 describe('RemoteDataset against the plane', () => {
   it('sends graph_replace, gets the result, and gets refusals back as GraphQueryErrors', async () => {
     const store = fakeStore();

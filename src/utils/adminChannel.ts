@@ -8,8 +8,8 @@
  * - `GET /admin/health` → 200 `{status: 'ok'}` once the server listens (the boot
  *   shape sync has finished by then).
  * - `POST /admin/restart` → 202, then the process exits; the host starts it again.
- * - `POST /admin/sync-shapes` → re-syncs the app's ontologies (the class hierarchy
- *   of every registered package, skipped when unchanged), runs the shape check and
+ * - `POST /admin/sync-shapes` → re-syncs the app's ontologies (each registered package's
+ *   ontology graph, skipped when unchanged), runs the shape check and
  *   re-syncs its shapes into its app data, as the boot does, and answers 200 with
  *   {@link ShapeSyncResult}. Body (optional):
  *   `{packages: string[]}`, packages whose source changed on disk: in dev they are
@@ -44,10 +44,11 @@ export interface ShapeSyncResult {
   /** The node shape IRIs registered in the process after the reload. Set by `POST /admin/sync-shapes`. */
   shapes?: string[];
   /**
-   * The ontology sync: packages whose class hierarchy was written, and packages left as
-   * they were (unchanged, or their data could not be read). Set by `POST /admin/sync-shapes`.
+   * The ontology sync: packages whose ontology graph (or, on a store without graph queries,
+   * class hierarchy) was written, packages left as they were (unchanged, or their data could not
+   * be read), and the graphs written and dropped. Set by `POST /admin/sync-shapes`.
    */
-  ontologies?: { written: string[]; skipped: string[] };
+  ontologies?: { written: string[]; skipped: string[]; graphs?: string[]; droppedGraphs?: string[] };
   /** The shape check's findings, counted by severity (each is logged). Set by `POST /admin/sync-shapes`. */
   shapeCheck?: { errors: number; warnings: number };
 }

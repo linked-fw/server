@@ -16,6 +16,8 @@ import { readDependencyLists } from '../utils/linkedDependencies.js';
 
 type Finding = Awaited<ReturnType<OntologyCore['checkShapeHierarchy']>>[number];
 
+const GA = 'https://linked.cm/pkg/x-a/graph/ontology';
+
 // A stand-in for core's ontology API that records the order of calls.
 function fakeCore({
   syncFails = false,
@@ -23,22 +25,37 @@ function fakeCore({
   withHierarchy = true,
   withRegister = true,
   registerFails = false,
+  graphQueries = [{ kind: 'graph_replace', graph: GA }] as Array<{ kind: string; graph: string; fails?: boolean }>,
 } = {}) {
   const calls: string[] = [];
   const seen: {
     ds?: unknown;
+    observed?: unknown;
+    unobserved?: boolean;
     syncOptions?: unknown;
     checkOptions?: unknown;
     packageDirs?: string[];
     registerOptions?: { importModule?: (file: string) => Promise<unknown> };
   } = {};
+  let observer: ((q: { kind: string; graph: string }, settled: Promise<unknown>) => void) | undefined;
   const core: OntologyCore = {
     async syncOntologies(ds, options) {
       calls.push('sync');
       seen.ds = ds;
       seen.syncOptions = options;
       if (syncFails) throw new Error('store unreachable');
+      for (const q of graphQueries) {
+        observer?.(q, q.fails ? Promise.reject(new Error('refused')) : Promise.resolve({}));
+      }
       return { written: ['@x/a'], skipped: ['@x/b'], pruned: [] };
+    },
+    observeGraphQueries(ds, onGraph) {
+      seen.observed = ds;
+      observer = onGraph;
+      return () => {
+        seen.unobserved = true;
+        observer = undefined;
+      };
     },
     async checkShapeHierarchy(options) {
       calls.push('check');
@@ -91,12 +108,14 @@ describe('runOntologyPhase', () => {
     const dependencies = { app: ['@x/a'] };
     const result = await runOntologyPhase(ds, { core, sync: true, orphanScope: 'none', dependencies, ...quiet });
     expect(calls).toEqual(['sync', 'check']);
+    expect(seen.unobserved).toBe(true);
     // No `packages` filter: a filter would sync only those packages.
     expect(seen.syncOptions).toEqual({ orphanScope: 'none' });
     expect(seen.ds).toBe(ds);
+    expect(seen.observed).toBe(ds);
     expect(seen.checkOptions).toEqual({ dependencies });
     expect(result).toEqual({
-      ontologies: { written: ['@x/a'], skipped: ['@x/b'] },
+      ontologies: { written: ['@x/a'], skipped: ['@x/b'], graphs: [GA], droppedGraphs: [] },
       shapeCheck: { errors: 0, warnings: 0 },
     });
   });
@@ -161,7 +180,7 @@ describe('runOntologyPhase', () => {
       warn: () => {},
     });
     expect(calls).toEqual(['hierarchy', 'check']);
-    expect(result.ontologies).toEqual({ written: [], skipped: [] });
+    expect(result.ontologies).toEqual({ written: [], skipped: [], graphs: [], droppedGraphs: [] });
     expect(lines.some((l) => l.includes('ontology sync'))).toBe(false);
   });
 
@@ -210,7 +229,7 @@ describe('runOntologyPhase', () => {
     });
     expect(result.shapeCheck).toEqual({ errors: 1, warnings: 2 });
     expect(lines).toEqual([
-      '[LinkedServer] ontology sync: written @x/a; skipped @x/b',
+      `[LinkedServer] ontology sync: written @x/a; skipped @x/b; graphs written ${GA}`,
       '[LinkedServer] shape check: 1 error(s), 2 warning(s)',
     ]);
     expect(warnings).toHaveLength(3);
@@ -361,5 +380,60 @@ describe('the directories and the loader the server registers with', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('runOntologyPhase: the graphs the sync wrote', () => {
+  it('reports written and dropped graphs, sorted, and leaves out a refused graph query', async () => {
+    const GB = 'https://linked.cm/pkg/x-b/graph/ontology';
+    const GOLD = 'https://linked.cm/pkg/x-old/graph/ontology';
+    const { core, seen } = fakeCore({
+      graphQueries: [
+        { kind: 'graph_replace', graph: GB },
+        { kind: 'graph_create', graph: GA },
+        { kind: 'graph_drop', graph: GOLD },
+        { kind: 'graph_replace', graph: 'https://linked.cm/pkg/x-c/graph/ontology', fails: true },
+      ],
+    });
+    const lines: string[] = [];
+    const result = await runOntologyPhase({}, { core, sync: true, orphanScope: 'all', log: (m) => lines.push(m), warn: () => {} });
+    expect(result.ontologies.graphs).toEqual([GA, GB]);
+    expect(result.ontologies.droppedGraphs).toEqual([GOLD]);
+    expect(lines[0]).toBe(
+      `[LinkedServer] ontology sync: written @x/a; skipped @x/b; pruned none; graphs written ${GA}, ${GB}; graphs dropped ${GOLD}`,
+    );
+    expect(seen.unobserved).toBe(true);
+  });
+
+  it('says so when packages were written without a graph query (a store without graph queries)', async () => {
+    const { core } = fakeCore({ graphQueries: [] });
+    const lines: string[] = [];
+    const result = await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
+    expect(result.ontologies).toEqual({ written: ['@x/a'], skipped: ['@x/b'], graphs: [], droppedGraphs: [] });
+    expect(lines[0]).toBe(
+      '[LinkedServer] ontology sync (default graph: the store has no graph queries): written @x/a; skipped @x/b',
+    );
+  });
+
+  it('stops observing when the sync fails', async () => {
+    const { core, seen } = fakeCore({ syncFails: true });
+    const result = await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', ...quiet });
+    expect(result.failure?.message).toBe('store unreachable');
+    expect(seen.unobserved).toBe(true);
+  });
+
+  it("core's observer reports only graph queries sent to the synced dataset", async () => {
+    const core = await loadOntologyCore();
+    const { dispatchGraphQuery } = await import('@_linked/core/queries/queryDispatch');
+    const ds = { graphQuery: async (q: any) => ({ graph: q.graph, changed: true }) } as any;
+    const other = { graphQuery: async (q: any) => ({ graph: q.graph, changed: true }) } as any;
+    const seenGraphs: string[] = [];
+    const stop = core.observeGraphQueries!(ds, (q) => seenGraphs.push(q.graph));
+    const q = (graph: string) => ({ kind: 'graph_drop' as const, graph, recordClass: 'https://linked.cm/ont/core/OntologyGraph' });
+    await dispatchGraphQuery(q('http://e/g1'), ds);
+    await dispatchGraphQuery(q('http://e/g2'), other);
+    stop();
+    await dispatchGraphQuery(q('http://e/g3'), ds);
+    expect(seenGraphs).toEqual(['http://e/g1']);
   });
 });
