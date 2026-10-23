@@ -164,7 +164,18 @@ route reports shape graphs.**
 
 ## Landing
 
-See the end of this record after the rebase.
+`git rebase named-graphs`: up to date (server `named-graphs` = released main `920f81b`). Gate
+re-run on `named-graphs--v2`:
+
+```
+FAIL src/tests/two-copies.test.ts        (backlog 002 item 4)
+Test Suites: 1 failed, 32 passed, 33 total
+Tests:       455 passed, 455 total
+Time:        20.647 s
+npm test  61.89s user 15.85s system 350% cpu 22.199 total
+✔ Build successful
+npx linked build  10.55s user 1.05s system 178% cpu 6.503 total
+```
 
 ## Follow-ups
 
