@@ -11,9 +11,10 @@ Graph queries through the server (named graphs and the graph registry, `@_linked
   gateway without the method (404, 501) reads as `unsupported-query-kind`, so the ontology sync
   falls back to the default graph there.
 - In the url form, `RemoteDataset` expands `graphs.allOntologies` and `graphs.allShapes` in a
-  read's `.from()` set from its own graph-registry cache (per dataset, keyed by the dataset the
-  server names in its `ping`, updated by its own graph queries, re-read after 30 seconds);
-  `invalidateGraphRegistry(dataset?)` drops it.
+  read's `.from()` set from its own graph-registry cache (per dataset, keyed by the url and the
+  dataset the server names in its `ping`, updated by its own graph queries, re-read after 30
+  seconds); `invalidateGraphRegistry(dataset?)` drops it. When the registry cannot be read, the
+  names are sent unexpanded.
 - The generic plane answers `/call/@_linked/server/graphQuery`: the body is checked with core's
   `parseGraphQuery`, the `graph` rule of the store its record class routes to decides
   (`withAccess({graph})`; no rule refuses with 403), and `LinkedStorage.graphQuery` runs it. A
@@ -30,8 +31,14 @@ Breaking changes:
 
 - Requires the `@_linked/core` with graph queries (`IDataset.graphQuery`, `NamedGraph`, the graph
   registry cache), which in turn requires `ghcr.io/linked-fw/fuseki:6.2.0-2` or a store that
-  builds its hierarchy from the registry.
+  builds its hierarchy from the registry; and the `@_linked/server-utils` whose `QueryAccess` has
+  the `graph` operation (with an older one every graph query is refused). Both ranges are raised
+  at release.
 - Graph queries on the generic plane are refused unless the store declares a `graph` rule with
-  `withAccess` (`@_linked/server-utils` with the `graph` operation).
-- `RemoteDataset` implements the now-required `IDataset.graphQuery`; its `selectQuery` and
-  `askQuery` are `async` (they may read the registry first).
+  `withAccess`.
+- `.from(graphs.allOntologies)` and `.from(graphs.allShapes)` reads through a url-form
+  `RemoteDataset` now also select the `OntologyGraph` and `ShapesGraph` records on the data
+  server; its read rule decides whether they are answered (when refused, the names go
+  unexpanded).
+- A `ServerCallError` that carries a string `code` now sends it in the error body
+  (`{error, code}`).

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 // Graph queries through `RemoteDataset`: `graphQuery` goes out on the same wire as every other
 // query, refusals come back as `GraphQueryError`s, and in the url form the store expands
@@ -37,6 +37,7 @@ afterEach(() => {
   (globalThis as any).fetch = originalFetch;
   (Server as any).call = originalCall;
   invalidateGraphRegistry();
+  jest.restoreAllMocks();
 });
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -118,12 +119,16 @@ describe('RemoteDataset.graphQuery', () => {
     }
   });
 
-  it('reads a server or gateway without the method (404, 501) as unsupported-query-kind', async () => {
+  it('reads a server or gateway without the method (404, 501, no code) as unsupported-query-kind', async () => {
     for (const status of [404, 501]) {
       (globalThis as any).fetch = async () => jsonResponse(status, { error: 'not found' });
       const err = await new RemoteDataset({ url: URL_BASE }).graphQuery(replace).catch((e) => e);
       expect(isGraphQueryError(err, 'unsupported-query-kind')).toBe(true);
     }
+    (globalThis as any).fetch = async () => jsonResponse(404, { error: 'no such branch', code: 'unknown-branch' });
+    const other = await new RemoteDataset({ url: URL_BASE }).graphQuery(replace).catch((e) => e);
+    expect(isGraphQueryError(other)).toBe(false);
+    expect(other.code).toBe('unknown-branch');
   });
 
   it('keeps a refused token (403) and a failure (500) as they are', async () => {
@@ -224,7 +229,7 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
     expect(plane.registryReads.filter((k) => k === 'ontology')).toHaveLength(1);
   });
 
-  it('is keyed by the dataset the server named: a pushed invalidation of that name forces a re-read', async () => {
+  it('is keyed by the url and the dataset the server named: invalidating that key forces a re-read', async () => {
     const plane = stubPlane({ ontology: [G_A], shapes: [] }, 'app-data-p1-main');
     const ds = await store('app-data-p1-main');
     const read = () => ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
@@ -234,6 +239,9 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
     await read();
     expect(plane.registryReads.filter((k) => k === 'ontology')).toHaveLength(1);
     invalidateGraphRegistry('app-data-p1-main');
+    await read();
+    expect(plane.registryReads.filter((k) => k === 'ontology')).toHaveLength(1);
+    invalidateGraphRegistry(`${URL_BASE}#app-data-p1-main`);
     await read();
     expect(plane.registryReads.filter((k) => k === 'ontology')).toHaveLength(2);
     ds.invalidateGraphRegistry();
@@ -258,6 +266,26 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
       Date.now = realNow;
     }
     expect(plane.registryReads.filter((k) => k === 'ontology')).toHaveLength(2);
+  });
+
+  it('sends the names unexpanded, and warns once, when the registry cannot be read', async () => {
+    const readGraphs: unknown[] = [];
+    (globalThis as any).fetch = async (input: any, init?: RequestInit) => {
+      const call = { url: String(input), init: init ?? {} };
+      const method = methodOf(call);
+      if (method === 'ping') return jsonResponse(200, { ok: true, dataset: 'd' });
+      const query = sent(call).args?.[0];
+      if (query?.shape === ONTOLOGY_SHAPE || query?.shape === SHAPES_SHAPE) return jsonResponse(403, { error: 'refused' });
+      readGraphs.push(query?.graphs);
+      return jsonResponse(200, []);
+    };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const ds = await store('d');
+    const read = () => ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
+    await read();
+    await read();
+    expect(readGraphs).toEqual([[graphs.allOntologies], [graphs.allOntologies]]);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('the no-url form sends graphs unchanged: the backend expands them', async () => {

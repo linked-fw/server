@@ -153,7 +153,7 @@ const GRAPH_REFUSAL_CODES: ReadonlySet<string> = new Set<GraphQueryErrorCode>([
 /**
  * A failed graph query as the caller expects it: a {@link GraphQueryError} when the data server
  * refused it with one of the graph refusal codes, or when it has no graph method at all (404 or
- * 501 without such a code: an older server or gateway), which reads as `unsupported-query-kind`
+ * 501 without any code: an older server or gateway), which reads as `unsupported-query-kind`
  * so the ontology sync falls back to the default graph. Anything else is passed on as is.
  */
 function graphQueryFailure(err: unknown, query: GraphQuery): unknown {
@@ -163,7 +163,7 @@ function graphQueryFailure(err: unknown, query: GraphQuery): unknown {
   let refusal: GraphQueryError | undefined;
   if (typeof code === 'string' && GRAPH_REFUSAL_CODES.has(code)) {
     refusal = new GraphQueryError(code as GraphQueryErrorCode, message, query.graph);
-  } else {
+  } else if (code === undefined) {
     const status = (err as { status?: unknown } | null)?.status;
     if (status === 404 || status === 501) refusal = unsupportedGraphQuery(query, message);
   }
@@ -218,6 +218,7 @@ export class RemoteDataset implements IDataset {
   private initialized?: Promise<RemoteDatasetPingInfo | undefined>;
   private pingInfo?: RemoteDatasetPingInfo;
   private readonly instanceRegistryKey = `remote-dataset:${nextRegistryKey++}`;
+  private warnedRegistryRead = false;
 
   constructor(config?: RemoteDatasetConfig | string) {
     if (!config) return;
@@ -321,14 +322,16 @@ export class RemoteDataset implements IDataset {
   }
 
   /**
-   * The key this store's graph-registry cache is kept under: the dataset the data server named
-   * in its `ping` answer (CN's gateway answers `{dataset}`), so stores of the same dataset share
-   * one entry; else one key per instance. (`POST /admin/graph-registry-changed` drops every
-   * entry of the process, whatever its key.)
+   * The key this store's graph-registry cache is kept under: the data server's url and the
+   * dataset it named in its `ping` answer (CN's gateway answers `{dataset}`), so stores of the
+   * same dataset share one entry; else one key per instance. (`POST /admin/graph-registry-changed`
+   * drops every entry of the process, whatever its key.)
    */
   protected graphRegistryKey(): string {
     const dataset = this.pingInfo?.dataset;
-    return typeof dataset === 'string' && dataset ? dataset : this.instanceRegistryKey;
+    return typeof dataset === 'string' && dataset && this.url
+      ? `${this.url}#${dataset}`
+      : this.instanceRegistryKey;
   }
 
   /**
@@ -362,14 +365,27 @@ export class RemoteDataset implements IDataset {
    * pushed invalidation, re-read after 30 seconds), so the data server reads exactly the graphs
    * this process knows of. Other names (graph IRIs, `graphs.default`, `graphs.union`) go as they
    * are, for the data server's store to resolve. A name that expands to no graph is sent as is,
-   * so the data server answers from its own registry. The no-url form sends `graphs` unchanged:
-   * the backend's store expands them.
+   * so the data server answers from its own registry; so is every name when the registry cannot
+   * be read (the data server refused or failed the record selects), with one warning per store.
+   * The no-url form sends `graphs` unchanged: the backend's store expands them.
    */
   private async withReadGraphs(json: unknown): Promise<unknown> {
     if (this.url === undefined || !json || typeof json !== 'object') return json;
     const names = (json as { graphs?: unknown }).graphs;
     if (!Array.isArray(names) || !names.some((name) => REGISTRY_EXPANDED.has(name))) return json;
-    const registry = await readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry());
+    let registry: Awaited<ReturnType<typeof readGraphRegistry>>;
+    try {
+      registry = await readGraphRegistry(this.graphRegistryKey(), () => this.loadGraphRegistry());
+    } catch (err) {
+      if (!this.warnedRegistryRead) {
+        this.warnedRegistryRead = true;
+        console.warn(
+          `RemoteDataset: could not read the graph registry at ${this.url}; reads send graph names unexpanded:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      return json;
+    }
     const out: string[] = [];
     const add = (iri: string) => {
       if (!out.includes(iri)) out.push(iri);

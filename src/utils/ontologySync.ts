@@ -213,7 +213,7 @@ export async function runOntologyPhase(
       const droppedGraphs = [...dropped].sort();
       result.ontologies = {written: sync.written, skipped: sync.skipped, graphs, droppedGraphs};
       hierarchyLoaded = true;
-      const defaultGraph = sync.written.length > 0 && graphs.length === 0;
+      const defaultGraph = !!stop && sync.written.length > 0 && graphs.length === 0;
       log(
         `[LinkedServer] ontology sync${defaultGraph ? ' (default graph: the store has no graph queries)' : ''}: ` +
           `written ${list(sync.written)}; skipped ${list(sync.skipped)}` +
