@@ -27,6 +27,8 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Shape catalog per request](#shape-catalog-per-request)
 - [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
 - [Host control channel (`/admin/*`)](#host-control-channel-admin)
+  - [Ontology sync and the shape check](#ontology-sync-and-the-shape-check)
+  - [Shape graphs](#shape-graphs)
 - [Provider lifecycle and HMR](#provider-lifecycle-and-hmr)
   - [When a provider throws, and refusing to start](#when-a-provider-throws-and-refusing-to-start)
   - [When to implement `dispose()`](#when-to-implement-dispose)
@@ -411,9 +413,9 @@ A host that starts the app process (Create Now) controls it over HTTP routes on 
 |---|---|
 | `GET /admin/health` | 200 `{status: 'ok'}` once the server listens (the boot ontology sync, shape check and shape sync have finished by then) |
 | `POST /admin/restart` | 202, then the process exits; the host starts it again |
-| `POST /admin/sync-shapes` | 200 `{written, orphanScope, reloaded, shapes, ontologies: {written, skipped}, shapeCheck: {errors, warnings}}` (or `{written: 0, skipped, …}` when shape sync is off); 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
+| `POST /admin/sync-shapes` | 200 `{written, orphanScope, shapeGraphs, reloaded, shapes, ontologies: {written, skipped, graphs, droppedGraphs}, shapeCheck: {errors, warnings}}` (or `{written: 0, skipped, …}` when shape sync is off); 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
 
-`POST /admin/sync-shapes` runs the ontology sync and the shape check (see [Ontology sync and the shape check](#ontology-sync-and-the-shape-check)), then re-syncs the registered shapes into the app's data exactly as the boot does (core `syncShapes`: only shapes whose stored `core:shapeHash` differs are written, with the boot's orphan policy and `syncShapesOnBoot` / `LINKED_SYNC_SHAPES_ON_BOOT` switches). The optional body `{packages: [...]}` names packages whose source the host changed; each must be a valid npm package name and the app itself or one of its direct dependencies, never an `@_linked/*` package; the list only says what to reload, it never filters the syncs. In dev their modules are invalidated in Vite and their backends reloaded before the sync, so a shape file written a moment ago is registered; a built app reloads nothing. `reloaded` lists the packages actually reloaded and `shapes` the node shape IRIs registered afterwards, so the host can check that the shape it wrote is there. Syncs run one at a time, as the system; one that takes longer than `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120000) fails and releases the queue. A source reload by itself (HMR) never syncs shapes. A failed ontology sync does not stop the shape sync; the route then answers 500 with the ontology error.
+`POST /admin/sync-shapes` runs the ontology sync and the shape check (see [Ontology sync and the shape check](#ontology-sync-and-the-shape-check)), then re-syncs the registered shapes into the app's data exactly as the boot does (see [Shape graphs](#shape-graphs): only graphs whose stored content hash differs are written, with the boot's orphan policy and `syncShapesOnBoot` / `LINKED_SYNC_SHAPES_ON_BOOT` switches). `written` counts the shape graphs written, and `shapeGraphs` reports them. The optional body `{packages: [...]}` names packages whose source the host changed; each must be a valid npm package name and the app itself or one of its direct dependencies, never an `@_linked/*` package; the list only says what to reload, it never filters the syncs. In dev their modules are invalidated in Vite and their backends reloaded before the sync, so a shape file written a moment ago is registered; a built app reloads nothing. `reloaded` lists the packages actually reloaded and `shapes` the node shape IRIs registered afterwards, so the host can check that the shape it wrote is there. Syncs run one at a time, as the system; one that takes longer than `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120000) fails and releases the queue. A source reload by itself (HMR) never syncs shapes. A failed ontology sync does not stop the shape sync; the route then answers 500 with the ontology error.
 
 Side effects to expect:
 
@@ -430,6 +432,24 @@ Before its shape sync, at boot and on `POST /admin/sync-shapes`, the server:
 3. **Checks the shapes** against that hierarchy (core `checkShapeHierarchy`, with every package's `dependencies` and `peerDependencies`). A running app is never stopped by it: each finding is logged, and `shapeCheck` counts them by severity.
 
 The ontology sync follows the shape sync's switches (`syncShapesOnBoot`, `LINKED_SYNC_SHAPES_ON_BOOT`), at boot and on `POST /admin/sync-shapes` alike: with shape sync off, the route syncs neither ontologies nor shapes (it still registers the packages' ontologies and runs the shape check). `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false` turns off only the boot's ontology sync. The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded at boot either way. A failed ontology sync at boot is logged and the boot goes on.
+
+### Shape graphs
+
+After the ontology sync and the shape check, at boot and on `POST /admin/sync-shapes`, the server syncs the registered shapes into the app's default dataset with core's `syncShapeGraphs`:
+
+- **One graph per package.** Each package's shapes go in `{package IRI}/graph/shapes`, with a `ShapesGraph` record in the graph registry (never a hierarchy source). A graph whose stored content hash matches is not written, so an unchanged sync writes nothing; a changed one is replaced whole.
+- **Where the Turtle comes from.** An installed package's built `lib/esm/data/shapes.ttl`, which `linked build` writes. An installed package without that file gets no shape graph: nothing is generated for it (a package with no shapes has none). The app's own packages (the app and its workspace packages) are generated in process: in dev through Vite's `ssrLoadModule` (core's `packageShapesTurtle` on the core the source shapes registered on, the same bytes `linked build` writes); in a built app from their `lib/esm/data/shapes.ttl` when they have one.
+- **The app's own shape graph.** The single-owner shapes core generates from `contains` properties go in `{DATA_ROOT}/graph/shapes`, regenerated each sync (hash-skipped like the rest). Without `DATA_ROOT` there is none.
+- **Earlier syncs.** Shapes an earlier server wrote into the default graph are removed there once their package's graph holds them. A store without graph queries gets that default-graph sync instead.
+- **Orphans.** With `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` the shape graphs of packages no longer registered are dropped (never the app's own graph); core prunes only when every registered package has Turtle, so a package without `shapes.ttl` skips the pruning with a warning.
+
+The boot logs one line, for example:
+
+```
+[LinkedServer] shape graph sync: written @acme/shop; skipped @_linked/schema; app graph written; graphs written https://linked.cm/pkg/acme-shop/graph/shapes, https://acme.example/data/graph/shapes; no shapes.ttl (no shape graph): @acme/legacy
+```
+
+`POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned}` (plus `defaultGraph`, the default-graph sync's writes, on a store without graph queries).
 
 ## Provider lifecycle and HMR
 
