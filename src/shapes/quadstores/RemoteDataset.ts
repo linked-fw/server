@@ -322,8 +322,9 @@ export class RemoteDataset implements IDataset {
 
   /**
    * The key this store's graph-registry cache is kept under: the dataset the data server named
-   * in its `ping` answer (CN's gateway answers `{dataset}`, the same name it pushes with
-   * `POST /admin/graph-registry-changed`), else one key per instance.
+   * in its `ping` answer (CN's gateway answers `{dataset}`), so stores of the same dataset share
+   * one entry; else one key per instance. (`POST /admin/graph-registry-changed` drops every
+   * entry of the process, whatever its key.)
    */
   protected graphRegistryKey(): string {
     const dataset = this.pingInfo?.dataset;

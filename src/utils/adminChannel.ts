@@ -18,9 +18,15 @@
  *   dependencies, never an `@_linked/*` framework package; anything else answers
  *   400 `{error}`. The list never filters the syncs. A failed or timed-out sync
  *   answers 500 `{error}` (a failed ontology sync too, after the shape sync ran).
+ * - `POST /admin/graph-registry-changed` `{dataset}` → the host changed the named graphs of that
+ *   dataset (a graph query through its gateway): the process drops its cached graph registry, so
+ *   its next `.from(graphs.allOntologies)` read re-reads it, and answers 200
+ *   `{invalidated: dataset}`. A body without a dataset name answers 400. Without the push the
+ *   cache's 30-second expiry applies.
  */
 import { timingSafeEqual } from 'crypto';
 import type express from 'express';
+import { invalidateGraphRegistry } from '@_linked/core/utils/graphRegistryCache';
 
 /** What one shape sync did. */
 export interface ShapeSyncResult {
@@ -77,6 +83,33 @@ export interface AdminChannelHandlers {
   exit: () => void;
   /** Reload `packages` (when given) and sync the registered shapes into app data. */
   syncShapes: (request: { packages: string[] }) => Promise<ShapeSyncResult>;
+  /**
+   * Drop the cached graph registry for `dataset` (see `POST /admin/graph-registry-changed`).
+   * Default: {@link dropGraphRegistryCache}.
+   */
+  graphRegistryChanged?: (dataset: string) => void;
+}
+
+/**
+ * Drop the process's cached graph registry after the host changed the graphs of `dataset`.
+ *
+ * Every entry is dropped, not only that dataset's: an entry's key is each store's own
+ * (`graphRegistryKey()`: a `FusekiStore` keys by its dataset URL, a `RemoteDataset` by the
+ * dataset its server names), no store tells which key it uses, and the stores are built by the
+ * app's storage config, whose aliases the server does not see. The registry is small, so the cost
+ * is one registry read per dataset on its next expanding read.
+ */
+export function dropGraphRegistryCache(_dataset: string): void {
+  invalidateGraphRegistry();
+}
+
+/** The `dataset` of a graph-registry-changed body: a non-empty name. */
+export function parseGraphRegistryChangedBody(body: unknown): { dataset: string } {
+  const dataset = body && typeof body === 'object' ? (body as { dataset?: unknown }).dataset : undefined;
+  if (typeof dataset !== 'string' || !dataset.trim() || dataset.length > 1024) {
+    throw new AdminRequestError('dataset must be the name of the dataset whose graphs changed');
+  }
+  return { dataset: dataset.trim() };
 }
 
 /** Compare the provided secret with the configured one in constant time. */
@@ -134,6 +167,19 @@ export function registerAdminRoutes(
     if (!requireAdmin(req, res)) return;
     res.sendStatus(202);
     setTimeout(handlers.exit, 50);
+  });
+
+  app.post('/admin/graph-registry-changed', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    let dataset: string;
+    try {
+      ({ dataset } = parseGraphRegistryChangedBody(req.body));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+    (handlers.graphRegistryChanged ?? dropGraphRegistryCache)(dataset);
+    res.status(200).json({ invalidated: dataset });
   });
 
   app.post('/admin/sync-shapes', async (req, res) => {
