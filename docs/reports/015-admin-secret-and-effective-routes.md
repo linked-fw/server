@@ -147,3 +147,12 @@ npx linked build  10.60s user 1.09s system 176% cpu 6.623 total
 - C6 (CN plan 071): CN sets `APP_ADMIN_SECRET` for apps and sends `x-app-admin-secret`; then the
   deprecation warnings stop.
 - R2: raise `@_linked/core` to the release with `getShapeGraphs` / `graphRoutingFor`.
+
+## Review fixes
+
+- `adminSecretMatches` hashes both sides with sha256 before `timingSafeEqual`, so the comparison
+  no longer reveals the secret's length.
+- New test: a wrong `x-app-admin-secret` gets 401 even when the deprecated `x-cn-admin-secret`
+  header carries the right secret.
+- The changeset names `@_linked/core` `^2.39.0`. The gate is in report 014 §Review fixes:
+  `Tests: 467 passed`, with only `two-copies` failing, as before.

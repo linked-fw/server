@@ -15,5 +15,8 @@ Renamed, with a fallback (each old name logs one deprecation warning per process
 - The `x-cn-admin-secret` header → `x-app-admin-secret`; the old header is read when the new one
   is absent.
 
-No breaking changes: an app or host that sets only the old names keeps working. Requires an
-`@_linked/core` with `getShapeGraphs` and `graphRoutingFor` in `utils/graphRouting`.
+The secret is compared through sha256 digests of both sides, so the comparison does not reveal
+its length.
+
+No breaking changes: an app or host that sets only the old names keeps working. Requires
+`@_linked/core` `^2.39.0` (`getShapeGraphs` and `graphRoutingFor` in `utils/graphRouting`).

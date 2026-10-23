@@ -22,6 +22,7 @@ const { GraphQueryError, isGraphQueryError } = await import('@_linked/core/queri
 const { graphs } = await import('@_linked/core/ontologies/graphs');
 const { invalidateGraphRegistry } = await import('@_linked/core/utils/graphRegistryCache');
 const { OntologyGraph, DraftGraph } = await import('@_linked/core/shapes/NamedGraph');
+const { graphQueryCallError } = await import('../utils/queryPlane.js');
 
 const G = 'https://linked.cm/pkg/a/graph/ontology';
 const ONTOLOGY_CLASS = OntologyGraph.targetClass.id;
@@ -220,6 +221,22 @@ describe('the generic plane: graphQuery', () => {
     const failed = await graphCall(base, queries.graph_create, ME);
     expect(failed.status).toBe(500);
     expect(failed.json.code).toBeUndefined();
+  });
+});
+
+describe('graphQueryCallError', () => {
+  it('answers 400 for a code it does not know, prototype keys included', () => {
+    for (const code of ['graph-some-future-refusal', 'constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      const err = graphQueryCallError(new GraphQueryError(code as any, `refused ${code}`, G)) as any;
+      expect(err.status).toBe(400);
+      expect(err.code).toBe(code);
+      expect(err.message).toBe(`refused ${code}`);
+    }
+  });
+
+  it('passes any other error on as is', () => {
+    const plain = new Error('store down');
+    expect(graphQueryCallError(plain)).toBe(plain);
   });
 });
 

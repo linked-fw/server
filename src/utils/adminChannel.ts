@@ -32,7 +32,7 @@
  * Deprecated names, still read: `CN_APP_ADMIN_SECRET` when `APP_ADMIN_SECRET` is unset, and the
  * `x-cn-admin-secret` header when `x-app-admin-secret` is absent; each logs one warning.
  */
-import { timingSafeEqual } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
 import type express from 'express';
 import { invalidateGraphRegistry } from '@_linked/core/utils/graphRegistryCache';
 import type { ShapeGraphsReport } from './syncShapes.js';
@@ -194,15 +194,17 @@ export function parseGraphRegistryChangedBody(body: unknown): { dataset: string 
   return { dataset: dataset.trim() };
 }
 
-/** Compare the provided secret with the configured one in constant time. */
+/**
+ * Compare the provided secret with the configured one in constant time. Both sides are hashed
+ * first, so the comparison does not reveal the secret's length either.
+ */
 export function adminSecretMatches(
   secret: string | undefined,
   provided: string | undefined
 ): boolean {
   if (!secret || !provided) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(secret);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const digest = (value: string) => createHash('sha256').update(value).digest();
+  return timingSafeEqual(digest(provided), digest(secret));
 }
 
 /** The `packages` of a sync-shapes body: a list of package names, or none. */

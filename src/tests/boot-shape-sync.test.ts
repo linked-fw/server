@@ -188,6 +188,38 @@ describe('syncShapeGraphsInto', () => {
     expect(warnings.join('\n')).toContain('generating the shapes of app through the dev loader failed');
   });
 
+  it('lists an own package whose generation produced nothing as without Turtle, with a warning', async () => {
+    // The dev loader fails and the sync's core holds no shapes for the package: core neither
+    // writes nor skips it.
+    const { core } = fakeCore(['app', 'dep'], { written: ['dep'] });
+    const warnings: string[] = [];
+    const lines: string[] = [];
+    const report = await syncShapeGraphsInto({}, {
+      ...base,
+      core,
+      dev: true,
+      generate: async () => {
+        throw new Error('loader down');
+      },
+      log: (m) => lines.push(m),
+      warn: (m) => warnings.push(m),
+    });
+    expect(report.written).toEqual(['dep']);
+    expect(report.skipped).toEqual([]);
+    expect(report.withoutTurtle).toEqual(['app']);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[1]).toBe('[LinkedServer] no shapes could be generated for app, so it has no shape graph this sync');
+    expect(lines[0]).toContain('no shapes.ttl (no shape graph): app');
+  });
+
+  it('does not flag packages after the default-graph sync, which reports none', async () => {
+    const { core } = fakeCore(['app', 'dep'], { defaultGraph: 4 });
+    const warnings: string[] = [];
+    const report = await syncShapeGraphsInto({}, { ...base, core, dev: false, log: () => {}, warn: (m) => warnings.push(m) });
+    expect(report.withoutTurtle).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
   it('logs one line with the graphs written, the skipped packages and those without shapes.ttl', async () => {
     const { core } = fakeCore(['app', 'bare', 'dep'], {
       written: ['dep'],
@@ -234,7 +266,7 @@ describe('syncShapeGraphsInto', () => {
   });
 
   it("passes orphanScope 'all', and warns that pruning is skipped while a package has no shapes.ttl", async () => {
-    const { core, calls } = fakeCore(['bare', 'dep'], { pruned: [] });
+    const { core, calls } = fakeCore(['bare', 'dep'], { written: ['dep'], pruned: [] });
     const warnings: string[] = [];
     await syncShapeGraphsInto({}, { ...base, orphanScope: 'all', core, dev: false, log: () => {}, warn: (m) => warnings.push(m) });
     expect(calls[0].options.orphanScope).toBe('all');

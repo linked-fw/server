@@ -518,10 +518,9 @@ export class LinkedServer extends Shape {
    * `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` — see `bootOrphanScope` in utils/syncShapes.
    *
    * Opt-out via `linked.config` `syncShapesOnBoot` (default true); env
-   * LINKED_SYNC_SHAPES_ON_BOOT overrides for deployment. CN sets
-   * `syncShapesOnBoot: false` in its own linked.config — its default dataset is
-   * a context-router that can't materialize context-free, and it syncs its own
-   * pinned shapes separately (linked.backend.storage.js).
+   * LINKED_SYNC_SHAPES_ON_BOOT overrides for deployment. A host whose default
+   * dataset is a context router (one that can't write context-free) sets
+   * `syncShapesOnBoot: false` and syncs its shapes itself.
    */
   private async materializeShapesIntoStore(): Promise<void> {
     try {

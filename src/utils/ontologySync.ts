@@ -119,8 +119,8 @@ export async function loadOntologyCore(): Promise<OntologyCore> {
 
 /**
  * The package directories whose ontologies register before the sync: every linked package
- * discovered in the app's dependency tree, then the app's own workspace packages (a CN clone's
- * `packages/<slug>-ont` is one no package imports, so the dependency walk never reaches it).
+ * discovered in the app's dependency tree, then the app's own workspace packages (an ontology
+ * package in `packages/` that no package imports is one, so the dependency walk never reaches it).
  * Order kept, duplicates dropped.
  */
 export function ontologyPackageDirs(

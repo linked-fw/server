@@ -172,7 +172,10 @@ export interface ShapeGraphsReport {
   graphs: string[];
   /** The app's own shape graph and what the sync did with it; absent without `DATA_ROOT`. */
   appGraph?: {graph: string; status: 'written' | 'skipped' | 'dropped'};
-  /** Registered packages with no `shapes.ttl`, so with no shape graph. */
+  /**
+   * Registered packages with no Turtle, so with no shape graph: an installed package without
+   * `shapes.ttl`, or an own package whose shapes could not be generated.
+   */
   withoutTurtle: string[];
   /** Shapes an earlier sync had written into the default graph, removed now. */
   cleaned: number;
@@ -228,7 +231,7 @@ export async function syncShapeGraphsInto(
   for (const name of core.packagesWithShapes()) {
     sources.set(name, shapeTurtleSource(name, {own: isOwn(name), dev, packageDir: packageDirOf(name), read}));
   }
-  const withoutTurtle = [...sources].filter(([, s]) => s.source === 'none').map(([name]) => name).sort();
+  const noFile = [...sources].filter(([, s]) => s.source === 'none').map(([name]) => name);
 
   const turtleFor = async (name: string): Promise<string | undefined> => {
     const source = sources.get(name);
@@ -237,7 +240,7 @@ export async function syncShapeGraphsInto(
     try {
       return await generate(name);
     } catch (err) {
-      warn(`[LinkedServer] generating the shapes of ${name} through the dev loader failed; the server's core generates them:`, err);
+      warn(`[LinkedServer] generating the shapes of ${name} through the dev loader failed; trying the server's core instead:`, err);
       return undefined;
     }
   };
@@ -245,10 +248,26 @@ export async function syncShapeGraphsInto(
   const result = await core.syncShapeGraphs(ds, {
     orphanScope,
     // A package without Turtle is left out: core would generate it otherwise.
-    ...(withoutTurtle.length ? {packages: [...sources.keys()].filter((n) => !withoutTurtle.includes(n))} : {}),
+    ...(noFile.length ? {packages: [...sources.keys()].filter((n) => !noFile.includes(n))} : {}),
     turtleFor,
     ...(appGraph ? {appShapes: {graph: appGraph, ...(appPackage ? {package: appPackage} : {})}} : {}),
   });
+
+  // A package core neither wrote nor skipped got no Turtle at all: generation produced nothing
+  // (in dev, the server's core may not hold the source shapes the dev loader registered). The
+  // default-graph sync (a store without graph queries) reports no packages, so it is not checked.
+  const covered = new Set([...result.written, ...result.skipped]);
+  const notGenerated =
+    result.defaultGraph !== undefined
+      ? []
+      : [...sources.keys()].filter((n) => !noFile.includes(n) && !covered.has(n));
+  if (notGenerated.length) {
+    warn(
+      `[LinkedServer] no shapes could be generated for ${list(notGenerated.sort())}, so ` +
+        `${notGenerated.length === 1 ? 'it has' : 'they have'} no shape graph this sync`,
+    );
+  }
+  const withoutTurtle = [...noFile, ...notGenerated].sort();
 
   const report: ShapeGraphsReport = {
     written: result.written,
@@ -282,8 +301,46 @@ export async function syncShapeGraphsInto(
   if (orphanScope === 'all' && withoutTurtle.length) {
     warn(
       '[LinkedServer] orphaned shape graphs were not pruned: core prunes only when the sync covers ' +
-        `every registered package, and ${list(withoutTurtle)} has no shapes.ttl`,
+        `every registered package, and ${list(withoutTurtle)} has no Turtle`,
     );
   }
   return report;
+}
+
+/**
+ * @deprecated The default-graph shape sync's callback type; the server now syncs shape graphs with
+ * {@link syncShapeGraphsInto}. Kept so code built against an earlier server still compiles.
+ */
+export type SyncShapesFn = (
+  ds: unknown,
+  options: {orphanScope: BootOrphanScope},
+) => Promise<Array<() => Promise<void>>>;
+
+/**
+ * @deprecated Use {@link syncShapeGraphsInto}, which writes each package's shapes into its own
+ * shape graph. This runs the old default-graph sync: it plans every registered shape with
+ * `syncShapes` (the orphan policy from {@link bootOrphanScope}) and runs the writes in batches
+ * of 8. Kept so code built against an earlier server keeps working.
+ */
+export async function materializeShapes(
+  ds: unknown,
+  syncShapes: SyncShapesFn,
+  {
+    env = process.env,
+    log = console.log,
+  }: {
+    env?: Record<string, string | undefined>;
+    log?: (message: string) => void;
+  } = {},
+): Promise<{count: number; orphanScope: BootOrphanScope}> {
+  const orphanScope = bootOrphanScope(env);
+  const thunks = await syncShapes(ds, {orphanScope});
+  for (let i = 0; i < thunks.length; i += 8) {
+    await Promise.all(thunks.slice(i, i + 8).map((run) => run()));
+  }
+  log(
+    `[LinkedServer] synced shapes into the default graph with orphanScope '${orphanScope}': ` +
+      `${thunks.length} operation(s)`,
+  );
+  return {count: thunks.length, orphanScope};
 }

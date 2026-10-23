@@ -146,6 +146,25 @@ describe('admin channel: sync-shapes', () => {
     expect(ran).toBe(0);
   });
 
+  it('refuses a wrong x-app-admin-secret with 401 even when the deprecated header is right', async () => {
+    let ran = 0;
+    const base = await serve(SECRET, async () => {
+      ran++;
+      return { written: 0 };
+    });
+    const res = await fetch(`${base}/admin/sync-shapes`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-app-admin-secret': 'wrong-secret!',
+        'x-cn-admin-secret': SECRET,
+      },
+      body: '{}',
+    });
+    expect(res.status).toBe(401);
+    expect(ran).toBe(0);
+  });
+
   it('is absent (404) without a configured secret', async () => {
     const base = await serve(undefined, async () => ({ written: 0 }));
     expect((await post(base, {})).status).toBe(404);

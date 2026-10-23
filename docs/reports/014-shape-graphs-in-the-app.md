@@ -185,3 +185,28 @@ npx linked build  10.55s user 1.05s system 178% cpu 6.503 total
   re-published so its tarball ships `data/shapes.ttl` (until then those packages get no shape
   graph in an app).
 - C4: CN's catalogs read `graphs.allShapes` plus the app graph `{DATA_ROOT}/graph/shapes`.
+
+## Review fixes
+
+Final review before R2 (worktree `named-graphs--fixsc`, own Fuseki `ghcr.io/linked-fw/fuseki:6.2.0-2`
+on :3195, `FUSEKI_TEST_PORT=3195`):
+
+- `@_linked/core` raised to `^2.39.0` in `package.json` (core is 2.38.1 with three minor
+  changesets pending, so R2 publishes 2.39.0). `package-lock.json` is unchanged because 2.39.0 is
+  not on npm yet. **R2 must refresh the lockfile** with a lockfile-only install once core 2.39.0 is
+  published, and must set the range to the version core actually publishes if that differs.
+- `syncShapeGraphsInto`: an own package that core neither writes nor skips (the dev loader failed
+  and the server's core holds none of its shapes) is now listed in `withoutTurtle`, with the
+  warning `no shapes could be generated for <pkg>, so it has no shape graph this sync`. The
+  default-graph sync is exempt, since it reports no packages. Tested in `boot-shape-sync`.
+- `materializeShapes` and `SyncShapesFn` are back as deprecated stubs (the old default-graph sync,
+  unchanged). The changeset lists them as deprecated, not removed.
+- CN is no longer named in comments (`LinkedServer.tsx`, `RemoteDataset.ts`, `ontologySync.ts`).
+- Tests: `graphQueryCallError` answers 400 for an unknown code and for prototype keys
+  (`constructor`, `__proto__`, `toString`, `hasOwnProperty`).
+
+Gate: `npm test` → `Test Suites: 1 failed, 33 passed, 34 total` / `Tests: 467 passed, 467 total`,
+`npm test  54.40s user 11.77s system 408% cpu 16.200 total`. The one failure is `two-copies`
+(backlog 002 item 4, as before). An earlier run, made while the cli e2e ran in parallel, hit the
+5 s timeout in `shape-graphs-live`. Run alone, that suite passes (`first boot … 359 ms, second 49 ms`).
+`npx linked build` → `✔ Build successful`, `10.21s user 1.18s system 160% cpu 7.089 total`.
