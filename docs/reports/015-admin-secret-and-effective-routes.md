@@ -127,7 +127,18 @@ npx linked build  11.05s user 1.30s system 174% cpu 7.095 total
 
 ## Landing
 
-(filled at landing)
+`git rebase named-graphs`: up to date (server `named-graphs` = `51f8c9e`; core main checkout still
+`200037d`). Gate re-run on `named-graphs--v3`:
+
+```
+FAIL src/tests/two-copies.test.ts        (backlog 002 item 4)
+Test Suites: 1 failed, 2 skipped, 31 passed, 32 of 34 total
+Tests:       2 skipped, 460 passed, 462 total
+Time:        29.017 s
+npm test  65.46s user 21.34s system 281% cpu 30.818 total
+✔ Build successful
+npx linked build  10.60s user 1.09s system 176% cpu 6.623 total
+```
 
 ## Follow-ups
 
