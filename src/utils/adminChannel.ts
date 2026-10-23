@@ -10,8 +10,9 @@
  * - `POST /admin/restart` → 202, then the process exits; the host starts it again.
  * - `POST /admin/sync-shapes` → re-syncs the app's ontologies (each registered package's
  *   ontology graph, skipped when unchanged), runs the shape check and
- *   re-syncs its shapes into its app data, as the boot does, and answers 200 with
- *   {@link ShapeSyncResult}. Body (optional):
+ *   re-syncs its shapes into its app data (each package's shape graph and the app's own,
+ *   skipped when unchanged), as the boot does, and answers 200 with
+ *   {@link ShapeSyncResult}, whose `shapeGraphs` reports the shape graphs. Body (optional):
  *   `{packages: string[]}`, packages whose source changed on disk: in dev they are
  *   reloaded first, so the sync sees shapes added or changed since the boot. Each
  *   name must be a valid npm package name and the app itself or one of its direct
@@ -27,15 +28,25 @@
 import { timingSafeEqual } from 'crypto';
 import type express from 'express';
 import { invalidateGraphRegistry } from '@_linked/core/utils/graphRegistryCache';
+import type { ShapeGraphsReport } from './syncShapes.js';
 
 /** What one shape sync did. */
 export interface ShapeSyncResult {
-  /** Shapes written: those whose stored hash differed from the registered shape. */
+  /**
+   * Shape graphs written (package graphs and the app's own graph) because their stored hash
+   * differed; on a store without graph queries, the default-graph sync's writes.
+   */
   written: number;
   /** The orphan policy the sync ran with (see utils/syncShapes). */
   orphanScope?: 'all' | 'none';
   /** Set when no sync ran: shape sync is turned off, or there is no default dataset. */
   skipped?: 'disabled' | 'no-default-dataset';
+  /**
+   * The shape graph sync: packages written and skipped, the graphs written, the app's own shape
+   * graph, the registered packages without `shapes.ttl` (so without a shape graph) and the
+   * default-graph shapes removed. Absent when no sync ran.
+   */
+  shapeGraphs?: ShapeGraphsReport;
   /**
    * The requested packages whose source was reloaded before the sync (dev only: a built
    * app reloads nothing). Set by `POST /admin/sync-shapes`.

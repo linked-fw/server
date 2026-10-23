@@ -206,7 +206,10 @@ describe('the generic plane: graphQuery', () => {
       ['graph-exists', 409],
       ['graph-not-registered', 409],
       ['graph-name-read-only', 400],
+      ['graph-not-routed', 400],
       ['unsupported-query-kind', 501],
+      // A code a newer core added that this server does not know yet.
+      ['graph-some-future-refusal', 400],
     ];
     for (const [code, status] of cases) {
       store.refuseWith(new GraphQueryError(code as any, `refused ${code}`, G));

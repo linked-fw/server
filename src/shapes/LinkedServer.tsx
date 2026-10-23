@@ -185,7 +185,13 @@ import {
   ssrCssInlineUrls,
   ssrCssScope,
 } from '../utils/ssrCss.js';
-import { bootOrphanScope, materializeShapes } from '../utils/syncShapes.js';
+import {
+  appShapesGraph,
+  bootOrphanScope,
+  loadShapeGraphCore,
+  syncShapeGraphsInto,
+  viteShapesTurtleGenerator,
+} from '../utils/syncShapes.js';
 import {
   bootSyncsOntologies,
   loadOntologyCore,
@@ -389,6 +395,8 @@ export class LinkedServer extends Shape {
   private linkedPackageDirs: Map<string, string> = new Map();
   /** The app's own workspace packages (`linkedPackage: true`), by real path. */
   private workspacePackageDirs: string[] = [];
+  /** The names of the app's own workspace packages. */
+  private workspacePackageNames: Set<string> = new Set();
   private warnedDuplicateInstalls: Set<string> = new Set();
   //from resizedFileName to full resized path (CDN or similar)
   private resizePathsMap: Map<string, string> = new Map();
@@ -492,20 +500,21 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Materialize this server's registered shapes into the RDF store as SHACL
-   * (core `syncShapes` → pure `sh:NodeShape` + property shapes), so a running
-   * app's app-data holds the shapes its instances validate/query against.
-   * Whatever shapes the app package registers (published re-exports +
-   * generated) are written on boot, and again when the host asks for it over
-   * the control channel ({@link resyncShapes}). A source reload (HMR) does not
-   * sync shapes by itself.
+   * Sync this server's registered shapes into app data, one named graph per package (see
+   * utils/syncShapes): each package's shapes in `{package IRI}/graph/shapes`, from its built
+   * `shapes.ttl` (an installed package without one gets no shape graph), the app's own packages
+   * generated in process in dev (through Vite's loader), and the app's generated single-owner
+   * shapes in `{DATA_ROOT}/graph/shapes`. Runs at boot, after the ontology sync, and again when
+   * the host asks for it over the control channel ({@link resyncShapes}). A source reload (HMR)
+   * does not sync shapes by itself.
    *
-   * Core writes only the shapes whose stored hash differs, so a sync of
-   * unchanged shapes writes nothing.
+   * A graph whose stored content hash matches is not written, so a sync of unchanged shapes
+   * writes nothing. Shapes an earlier sync wrote into the default graph are removed there once
+   * their package's graph holds them; a store without graph queries gets that default-graph sync
+   * instead.
    *
-   * Additive only: store shapes this process did not register are left alone
-   * unless the operator sets `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` — see
-   * `bootOrphanScope` in utils/syncShapes for why.
+   * Shape graphs of packages no longer registered stay unless the operator sets
+   * `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` — see `bootOrphanScope` in utils/syncShapes.
    *
    * Opt-out via `linked.config` `syncShapesOnBoot` (default true); env
    * LINKED_SYNC_SHAPES_ON_BOOT overrides for deployment. CN sets
@@ -515,9 +524,9 @@ export class LinkedServer extends Shape {
    */
   private async materializeShapesIntoStore(): Promise<void> {
     try {
-      await this.syncRegisteredShapes();
+      await runAsSystem(() => this.syncRegisteredShapes(), 'shape sync at boot');
     } catch (err) {
-      console.warn('[LinkedServer] shape materialization failed (non-fatal):', err);
+      console.warn('[LinkedServer] shape sync failed (non-fatal):', err);
     }
   }
 
@@ -528,11 +537,34 @@ export class LinkedServer extends Shape {
     }
     const appData = LinkedStorage.getDefaultDataset();
     if (!appData) return { written: 0, skipped: 'no-default-dataset' };
-    const {syncShapes} = await import('@_linked/core');
-    // Explicit target: materialize EVERY registered shape into the app's own
-    // data store regardless of per-shape routing/pins.
-    const {count, orphanScope} = await materializeShapes(appData, syncShapes as any);
-    return { written: count, orphanScope };
+    const orphanScope = bootOrphanScope();
+    const appName: string | undefined = this.package?.name;
+    const vite = (this.config.server as any)?.vite;
+    const generate = viteShapesTurtleGenerator(vite);
+    // Explicit target: every registered shape goes into the app's own data store, regardless of
+    // per-shape routing or pins.
+    const shapeGraphs = await syncShapeGraphsInto(appData, {
+      core: await loadShapeGraphCore(),
+      orphanScope,
+      isOwn: (name) => name === appName || this.workspacePackageNames.has(name),
+      dev: !!generate,
+      generate,
+      packageDirOf: (name) => this.shapePackageDir(name),
+      appGraph: appShapesGraph(),
+      appPackage: appName,
+    });
+    const written =
+      shapeGraphs.defaultGraph ?? shapeGraphs.written.length + (shapeGraphs.appGraph?.status === 'written' ? 1 : 0);
+    return { written, orphanScope, shapeGraphs };
+  }
+
+  /** The root directory of a package with shapes: the app, a discovered linked package, or one the app resolves. */
+  private shapePackageDir(name: string): string | undefined {
+    if (name === this.package?.name) return process.cwd();
+    const known = this.linkedPackageDirs?.get(name);
+    if (known) return known;
+    const installed = readInstalledPackage(name, process.cwd());
+    return installed?.root;
   }
 
   /**
@@ -1015,6 +1047,7 @@ export class LinkedServer extends Shape {
     // Local workspace packages in this app's dependency tree. These are also
     // imported whole at boot (indexLincdPackage), not only their /backend.
     const allLocalPackages = getLincdPackages();
+    this.workspacePackageNames = new Set(allLocalPackages.map((pkg) => pkg.packageName));
     this.workspacePackageDirs = allLocalPackages.map((pkg) => {
       try {
         return fsNative.realpathSync(pkg.path);
