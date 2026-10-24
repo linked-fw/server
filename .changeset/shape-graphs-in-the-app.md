@@ -24,7 +24,7 @@ Breaking changes:
 - `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` drops the shape graphs of packages no longer registered
   (never the app's own graph), instead of default-graph node shapes; it is skipped, with a warning,
   while a registered package has no `shapes.ttl`.
-- Requires `@_linked/core` `^2.39.0` (`shapes/syncShapeGraphs`, `shapes/shapesToTurtle`).
+- Requires `@_linked/core` `^2.39.1` (`shapes/syncShapeGraphs`, `shapes/shapesToTurtle`).
 
 Deprecated: `materializeShapes` and `SyncShapesFn` in `utils/syncShapes` stay as they were, for
 code built against an earlier server; `syncShapeGraphsInto` replaces them.

@@ -19,4 +19,4 @@ The secret is compared through sha256 digests of both sides, so the comparison d
 its length.
 
 No breaking changes: an app or host that sets only the old names keeps working. Requires
-`@_linked/core` `^2.39.0` (`getShapeGraphs` and `graphRoutingFor` in `utils/graphRouting`).
+`@_linked/core` `^2.39.1` (`getShapeGraphs` and `graphRoutingFor` in `utils/graphRouting`).
