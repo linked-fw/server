@@ -22,6 +22,7 @@ const { GraphQueryError, isGraphQueryError } = await import('@_linked/core/queri
 const { graphs } = await import('@_linked/core/ontologies/graphs');
 const { invalidateGraphRegistry } = await import('@_linked/core/utils/graphRegistryCache');
 const { OntologyGraph, DraftGraph } = await import('@_linked/core/shapes/NamedGraph');
+const { graphQueryCallError } = await import('../utils/queryPlane.js');
 
 const G = 'https://linked.cm/pkg/a/graph/ontology';
 const ONTOLOGY_CLASS = OntologyGraph.targetClass.id;
@@ -206,7 +207,10 @@ describe('the generic plane: graphQuery', () => {
       ['graph-exists', 409],
       ['graph-not-registered', 409],
       ['graph-name-read-only', 400],
+      ['graph-not-routed', 400],
       ['unsupported-query-kind', 501],
+      // A code a newer core added that this server does not know yet.
+      ['graph-some-future-refusal', 400],
     ];
     for (const [code, status] of cases) {
       store.refuseWith(new GraphQueryError(code as any, `refused ${code}`, G));
@@ -217,6 +221,22 @@ describe('the generic plane: graphQuery', () => {
     const failed = await graphCall(base, queries.graph_create, ME);
     expect(failed.status).toBe(500);
     expect(failed.json.code).toBeUndefined();
+  });
+});
+
+describe('graphQueryCallError', () => {
+  it('answers 400 for a code it does not know, prototype keys included', () => {
+    for (const code of ['graph-some-future-refusal', 'constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      const err = graphQueryCallError(new GraphQueryError(code as any, `refused ${code}`, G)) as any;
+      expect(err.status).toBe(400);
+      expect(err.code).toBe(code);
+      expect(err.message).toBe(`refused ${code}`);
+    }
+  });
+
+  it('passes any other error on as is', () => {
+    const plain = new Error('store down');
+    expect(graphQueryCallError(plain)).toBe(plain);
   });
 });
 
@@ -263,9 +283,9 @@ describe('POST /admin/graph-registry-changed', () => {
     const base = await listen(SECRET);
     const url = `${base}/admin/graph-registry-changed`;
     expect((await post(url, { dataset: 'd' })).status).toBe(401);
-    expect((await post(url, { dataset: 'd' }, { 'x-cn-admin-secret': 'wrong' })).status).toBe(401);
-    expect((await post(url, {}, { 'x-cn-admin-secret': SECRET })).status).toBe(400);
-    expect((await post(url, { dataset: '  ' }, { 'x-cn-admin-secret': SECRET })).status).toBe(400);
+    expect((await post(url, { dataset: 'd' }, { 'x-app-admin-secret': 'wrong' })).status).toBe(401);
+    expect((await post(url, {}, { 'x-app-admin-secret': SECRET })).status).toBe(400);
+    expect((await post(url, { dataset: '  ' }, { 'x-app-admin-secret': SECRET })).status).toBe(400);
     expect(() => parseGraphRegistryChangedBody({ dataset: 3 })).toThrow(AdminRequestError);
     expect(parseGraphRegistryChangedBody({ dataset: ' app-data ' })).toEqual({ dataset: 'app-data' });
   });
@@ -279,7 +299,7 @@ describe('POST /admin/graph-registry-changed', () => {
     });
     servers.push(s);
     const base = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
-    expect((await post(`${base}/admin/graph-registry-changed`, { dataset: 'd' }, { 'x-cn-admin-secret': SECRET })).status).toBe(404);
+    expect((await post(`${base}/admin/graph-registry-changed`, { dataset: 'd' }, { 'x-app-admin-secret': SECRET })).status).toBe(404);
   });
 
   it('with the secret, the next .from(graphs.allOntologies) read re-reads the registry', async () => {
@@ -297,7 +317,7 @@ describe('POST /admin/graph-registry-changed', () => {
     expect(refused.status).toBe(401);
     await read();
     expect(store.registryReads).toHaveLength(1);
-    const res = await post(`${base}/admin/graph-registry-changed`, { dataset: 'app-data-main' }, { 'x-cn-admin-secret': SECRET });
+    const res = await post(`${base}/admin/graph-registry-changed`, { dataset: 'app-data-main' }, { 'x-app-admin-secret': SECRET });
     expect(res).toEqual({ status: 200, json: { invalidated: 'app-data-main' } });
     await read();
     expect(store.registryReads).toHaveLength(2);

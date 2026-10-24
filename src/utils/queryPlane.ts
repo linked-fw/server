@@ -242,12 +242,16 @@ export async function authorizeGraphQuery(
   });
 }
 
-/** The HTTP status each graph query refusal is answered with. */
+/**
+ * The HTTP status each graph query refusal is answered with. A code this map does not know (a
+ * newer core than the one this server was built against) is answered with 400, never 500.
+ */
 const GRAPH_REFUSAL_STATUS: Record<GraphQueryErrorCode, number> = {
   'unsupported-query-kind': 501,
   'graph-name-read-only': 400,
   'graph-not-registered': 409,
   'graph-exists': 409,
+  'graph-not-routed': 400,
 };
 
 /**
@@ -258,6 +262,9 @@ const GRAPH_REFUSAL_STATUS: Record<GraphQueryErrorCode, number> = {
  */
 export function graphQueryCallError(err: unknown): unknown {
   if (!isGraphQueryError(err)) return err;
-  const status = GRAPH_REFUSAL_STATUS[err.code] ?? 400;
+  const code: string = err.code;
+  const status = Object.prototype.hasOwnProperty.call(GRAPH_REFUSAL_STATUS, code)
+    ? GRAPH_REFUSAL_STATUS[code as GraphQueryErrorCode]
+    : 400;
   return Object.assign(new ServerCallError(status, err.message, { cause: err }), { code: err.code });
 }

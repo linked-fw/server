@@ -41,7 +41,7 @@ const post = (base: string, body: unknown, secret: string | null = SECRET) =>
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      ...(secret === null ? {} : { 'x-cn-admin-secret': secret }),
+      ...(secret === null ? {} : { 'x-app-admin-secret': secret }),
     },
     body: JSON.stringify(body),
   });
@@ -109,7 +109,7 @@ describe('admin channel: sync-shapes', () => {
     });
     const res = await fetch(`${base}/admin/sync-shapes`, {
       method: 'POST',
-      headers: { 'x-cn-admin-secret': SECRET },
+      headers: { 'x-app-admin-secret': SECRET },
     });
     expect(res.status).toBe(200);
     expect(calls).toEqual([{ packages: [] }]);
@@ -146,6 +146,25 @@ describe('admin channel: sync-shapes', () => {
     expect(ran).toBe(0);
   });
 
+  it('refuses a wrong x-app-admin-secret with 401 even when the deprecated header is right', async () => {
+    let ran = 0;
+    const base = await serve(SECRET, async () => {
+      ran++;
+      return { written: 0 };
+    });
+    const res = await fetch(`${base}/admin/sync-shapes`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-app-admin-secret': 'wrong-secret!',
+        'x-cn-admin-secret': SECRET,
+      },
+      body: '{}',
+    });
+    expect(res.status).toBe(401);
+    expect(ran).toBe(0);
+  });
+
   it('is absent (404) without a configured secret', async () => {
     const base = await serve(undefined, async () => ({ written: 0 }));
     expect((await post(base, {})).status).toBe(404);
@@ -155,12 +174,12 @@ describe('admin channel: sync-shapes', () => {
   it('keeps health and restart', async () => {
     let exited = 0;
     const base = await serve(SECRET, async () => ({ written: 0 }), () => exited++);
-    const health = await fetch(`${base}/admin/health`, { headers: { 'x-cn-admin-secret': SECRET } });
+    const health = await fetch(`${base}/admin/health`, { headers: { 'x-app-admin-secret': SECRET } });
     expect(health.status).toBe(200);
     expect(await health.json()).toEqual({ status: 'ok' });
     const restart = await fetch(`${base}/admin/restart`, {
       method: 'POST',
-      headers: { 'x-cn-admin-secret': SECRET },
+      headers: { 'x-app-admin-secret': SECRET },
     });
     expect(restart.status).toBe(202);
     await new Promise((r) => setTimeout(r, 100));
