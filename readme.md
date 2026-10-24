@@ -79,9 +79,11 @@ LINKED_SHAPE_GRAPH=package
 | an absolute IRI | one shared graph at that IRI, holding every package | one shared graph at that IRI, holding every package and the app's generated shapes |
 
 At boot, before the stores are initialised, the server checks both variables: a value that is
-neither keyword nor an absolute IRI, or one IRI for both, stops the boot with an error naming the
-variable. It then sets them on every store that takes graph targets (a `SparqlDataset`, such as
-`FusekiStore`) for whatever the store's own options leave unset, so `ontologyGraph` / `shapeGraph`
+neither keyword nor an absolute IRI, one IRI for both, a portable graph name (`graphs.*`), a
+store-native name (`urn:x-arq:…`) or a package's own graph name (`…/pkg/{slug}/graph/ontology` or
+`/graph/shapes`) stops the boot with a fatal error naming the variable. It then sets them on every
+store registered in `LinkedStorage` at that point that takes graph targets (a `SparqlDataset`, such
+as `FusekiStore`) for whatever the store's own options leave unset, so `ontologyGraph` / `shapeGraph`
 set in code or in a datasets config entry win. A store that takes none (`RemoteDataset`) runs
 `package`; the server warns when the variables ask for another mode. The readers follow the same
 setting (`graphs.allOntologies`, `graphs.allShapes`). `GET /admin/routes` reports each store's
@@ -502,7 +504,7 @@ The boot logs one line, for example:
 [LinkedServer] shape graph sync: written @acme/shop; skipped @_linked/schema; app graph written; graphs written https://linked.cm/pkg/acme-shop/graph/shapes, https://acme.example/data/graph/shapes; no shapes.ttl (no shape graph): @acme/legacy
 ```
 
-`POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned, target}` (plus `defaultGraph`, the default-graph sync's writes, under `LINKED_SHAPE_GRAPH=default` or on a store without graph queries). `target` is the store's `shapeGraph` the run wrote in.
+`POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned, target}` (plus `defaultGraph`, the default-graph sync's writes, under `LINKED_SHAPE_GRAPH=default` or on a store without graph queries). `target` is the store's `shapeGraph`; with `fallback` set the store had no graph queries and the shapes went into the default graph instead. In a shared graph the rebuild covers the packages with Turtle: a package without it is left out (and logged), where the package mode keeps its old graph.
 
 ## Provider lifecycle and HMR
 

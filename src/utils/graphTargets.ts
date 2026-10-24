@@ -5,8 +5,8 @@
  * graph per package), `'default'` (the default graph) or the absolute IRI of one shared graph.
  *
  * The server reads them, checks them (an invalid value stops the boot, naming the variable), and
- * sets them on every store the app's storage config built that takes graph targets, for what the
- * store's own options leave unset. A store that takes none (`RemoteDataset`) runs `'package'`.
+ * sets them on every store registered in `LinkedStorage` at boot that takes graph targets, for
+ * what the store's own options leave unset. A store that takes none (`RemoteDataset`) runs `'package'`.
  */
 import {
   GRAPH_TARGET_ENV,
@@ -37,7 +37,14 @@ export function applyGraphTargetsFromEnv(
   for (const store of stores) {
     const target = store as TargetStore | null | undefined;
     if (typeof target?.setGraphTargets === 'function') {
-      target.setGraphTargets(fromEnv, {onlyUnset: true});
+      try {
+        target.setGraphTargets(fromEnv, {onlyUnset: true});
+      } catch (error) {
+        throw new Error(
+          `${GRAPH_TARGET_ENV.ontologyGraph} / ${GRAPH_TARGET_ENV.shapeGraph} do not fit ` +
+            `${target.constructor?.name ?? 'a store'}'s own graph targets: ${(error as Error)?.message ?? error}`,
+        );
+      }
     } else if (nonDefault) {
       warn(
         `[LinkedServer] ${target?.constructor?.name ?? 'a store'} takes no graph targets, so it runs ` +

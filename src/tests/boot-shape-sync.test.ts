@@ -289,6 +289,23 @@ describe('syncShapeGraphsInto', () => {
     expect(report.target).toBe(SHARED);
     expect(lines).toEqual([`[LinkedServer] shape graph sync (one shared graph <${SHARED}>): written dep; skipped none; app shapes written`]);
 
+    // Without DATA_ROOT the app's shapes are still in the graph; a package without Turtle is not.
+    const noRoot = fakeCore(['bare', 'dep'], { written: ['dep'], pruned: ['bare'], target: SHARED });
+    const noRootLines: string[] = [];
+    const warnings: string[] = [];
+    const noRootReport = await syncShapeGraphsInto({}, {
+      ...base,
+      core: noRoot.core,
+      dev: false,
+      log: (m) => noRootLines.push(m),
+      warn: (m) => warnings.push(m),
+    });
+    expect(noRootReport.graphs).toEqual([SHARED]);
+    expect(noRootLines).toEqual([
+      `[LinkedServer] shape graph sync (one shared graph <${SHARED}>): written dep; skipped none; dropped from the graph bare; no shapes.ttl (not in the graph): bare`,
+    ]);
+    expect(warnings).toEqual([expect.stringContaining('holds no shapes of bare')]);
+
     const unchanged = fakeCore(['dep'], { skipped: ['dep'], appGraph: 'skipped', target: SHARED });
     const again = await syncShapeGraphsInto({}, { ...base, core: unchanged.core, dev: false, ...quiet });
     expect(again.graphs).toEqual([]);

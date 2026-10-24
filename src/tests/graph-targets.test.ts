@@ -62,10 +62,43 @@ describe('applyGraphTargetsFromEnv', () => {
 describe('GET /admin/routes reports the graph targets', () => {
   it("lists each store's targets and the variables as set", () => {
     const store = new (Store as any)({ ontologyGraph: "default" });
+    const before = LinkedStorage.getDefaultDataset();
     LinkedStorage.setDefaultDataset(store);
     const routes = effectiveGraphRoutes({ LINKED_SHAPE_GRAPH: SHARED, LINKED_ONTOLOGY_GRAPH: '' });
     expect(routes.datasets[0]).toMatchObject({ store: 'Store', default: true, ontologyGraph: 'default', shapeGraph: 'package' });
     expect(routes.graphTargetEnv).toEqual({ LINKED_SHAPE_GRAPH: SHARED });
     expect(graphTargetEnv({})).toEqual({});
+    if (before) LinkedStorage.setDefaultDataset(before);
+  });
+});
+
+describe('the boot', () => {
+  it('fails fatally on an invalid variable, before any store is initialised, naming it', async () => {
+    const { LinkedServer } = await import('../shapes/LinkedServer.js');
+    const { isFatalError } = await import('../utils/fatalError.js');
+    const saved = process.env.LINKED_ONTOLOGY_GRAPH;
+    process.env.LINKED_ONTOLOGY_GRAPH = 'shared';
+    let inits = 0;
+    const store = new (Store as any)();
+    store.init = async () => {
+      inits++;
+    };
+    const before = LinkedStorage.getDefaultDataset();
+    LinkedStorage.setDefaultDataset(store);
+    try {
+      inits = 0; // setDefaultDataset may init the store itself
+      const error = await new LinkedServer({} as any).initStores().catch((e: unknown) => e);
+      expect(isFatalError(error)).toBe(true);
+      expect(String((error as Error).message)).toContain('Invalid ontologyGraph "shared" (from env LINKED_ONTOLOGY_GRAPH)');
+      expect(inits).toBe(0);
+      process.env.LINKED_ONTOLOGY_GRAPH = 'default';
+      await new LinkedServer({} as any).initStores();
+      expect(inits).toBe(1);
+      expect(store.graphTargets().ontologyGraph).toBe('default');
+    } finally {
+      if (saved === undefined) delete process.env.LINKED_ONTOLOGY_GRAPH;
+      else process.env.LINKED_ONTOLOGY_GRAPH = saved;
+      if (before) LinkedStorage.setDefaultDataset(before);
+    }
   });
 });
