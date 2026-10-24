@@ -1,5 +1,59 @@
 # @\_linked/server
 
+## 3.9.0
+
+### Minor Changes
+
+- [#206](https://github.com/linked-fw/server/pull/206) [`dc25a49`](https://github.com/linked-fw/server/commit/dc25a490a9a115e366d99f8db644d236043d609e) Thanks [@flyon](https://github.com/flyon)! - The host control channel reads its secret from `APP_ADMIN_SECRET` and its requests carry it in the
+  `x-app-admin-secret` header. New route `GET /admin/routes` answers the graph routes the process
+  runs with: `{datasets: [{store, id?, default, routes, defaultGraphShapes}]}`, one entry per dataset
+  the router knows, `routes` as `{<shape IRI>: <graph IRI>}` as core's routing holds them once the
+  app's storage file has run, and the shapes each dataset writes to its default graph. Like every
+  `/admin/*` route it answers 404 when the process has no admin secret.
+
+  Renamed, with a fallback (each old name logs one deprecation warning per process):
+
+  - `CN_APP_ADMIN_SECRET` → `APP_ADMIN_SECRET`; the old variable is read when the new one is unset.
+  - The `x-cn-admin-secret` header → `x-app-admin-secret`; the old header is read when the new one
+    is absent.
+
+  The secret is compared through sha256 digests of both sides, so the comparison does not reveal
+  its length.
+
+  No breaking changes: an app or host that sets only the old names keeps working. Requires
+  `@_linked/core` `^2.39.1` (`getShapeGraphs` and `graphRoutingFor` in `utils/graphRouting`).
+
+- [#206](https://github.com/linked-fw/server/pull/206) [`fe012b1`](https://github.com/linked-fw/server/commit/fe012b1291d45763d779e8a8b0e9c18900efbca4) Thanks [@flyon](https://github.com/flyon)! - Shape graphs in the app. The boot and `POST /admin/sync-shapes` sync the registered shapes with
+  core's `syncShapeGraphs`: each package's shapes in its own named graph
+  (`{package IRI}/graph/shapes`, a `ShapesGraph` record in the graph registry), skipped when the
+  stored content hash matches. An installed package's graph comes from its built
+  `lib/esm/data/shapes.ttl`; the app's own packages (the app and its workspace packages) are
+  generated in process, in dev through Vite's loader; the app's single-owner shapes go in
+  `{DATA_ROOT}/graph/shapes`. The boot logs the graphs it writes, and the route reports them as
+  `shapeGraphs`. A graph refusal `graph-not-routed`, and any graph refusal code the server does not
+  know, is answered 400.
+
+  Breaking changes:
+
+  - The default-graph shape sync is replaced: shapes are written into shape graphs, and the shapes an
+    earlier server wrote into the default graph are removed there once their package's graph holds
+    them. A store without graph queries still gets the default-graph sync.
+  - An installed package without `lib/esm/data/shapes.ttl` gets no shape graph, and its shapes are
+    not generated: packages need a release built with a cli that writes `shapes.ttl`.
+  - `ShapeSyncResult.written` (the route's `written`) counts the shape graphs written, not shapes;
+    `shapeGraphs` holds the detail.
+  - `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` drops the shape graphs of packages no longer registered
+    (never the app's own graph), instead of default-graph node shapes; it is skipped, with a warning,
+    while a registered package has no `shapes.ttl`.
+  - Requires `@_linked/core` `^2.39.1` (`shapes/syncShapeGraphs`, `shapes/shapesToTurtle`).
+
+  Deprecated: `materializeShapes` and `SyncShapesFn` in `utils/syncShapes` stay as they were, for
+  code built against an earlier server; `syncShapeGraphsInto` replaces them.
+
+  An own package whose shapes could not be generated (the dev loader failed and the server's core
+  holds none of them) is listed in `withoutTurtle`, with a warning, instead of being left out of the
+  report.
+
 ## 3.8.0
 
 ### Minor Changes
