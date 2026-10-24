@@ -146,7 +146,7 @@ describe('admin channel: sync-shapes', () => {
     expect(ran).toBe(0);
   });
 
-  it('refuses a wrong x-app-admin-secret with 401 even when the deprecated header is right', async () => {
+  it('reads only x-app-admin-secret: a wrong one, or the secret under another header, is 401', async () => {
     let ran = 0;
     const base = await serve(SECRET, async () => {
       ran++;

@@ -409,8 +409,6 @@ With `apiOnly` the server skips page rendering. It installs no SPA catch-all, so
 
 A host that starts the app process controls it over HTTP routes on the app's own port. They exist only when the process was started with `APP_ADMIN_SECRET` in its environment; without it they answer 404. Every request carries the secret in the `x-app-admin-secret` header (401 otherwise).
 
-Deprecated names are still read: `CN_APP_ADMIN_SECRET` when `APP_ADMIN_SECRET` is unset, and the `x-cn-admin-secret` header when `x-app-admin-secret` is absent. Each logs one deprecation warning per process.
-
 | Route | Answer |
 |---|---|
 | `GET /admin/health` | 200 `{status: 'ok'}` once the server listens (the boot ontology sync, shape check and shape sync have finished by then) |
