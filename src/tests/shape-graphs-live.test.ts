@@ -265,7 +265,7 @@ describeLive('[fuseki] shape graphs at boot and on the control channel', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.written).toBe(0);
-    expect(body.shapeGraphs).toEqual({
+    expect(body.shapeGraphs).toMatchObject({
       written: [],
       skipped: [BUILT, OWN],
       pruned: [],

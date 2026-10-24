@@ -32,7 +32,7 @@ export interface OntologyCore {
   syncOntologies(
     ds: unknown,
     options: {orphanScope: BootOrphanScope},
-  ): Promise<{written: string[]; skipped: string[]; pruned: string[]}>;
+  ): Promise<{written: string[]; skipped: string[]; pruned: string[]; target?: string; fallback?: true}>;
   checkShapeHierarchy(options: {dependencies?: Record<string, string[]>}): Promise<
     Array<{kind: string; severity: 'error' | 'warning'; shape?: string; iri?: string; message: string}>
   >;
@@ -195,13 +195,15 @@ export async function runOntologyPhase(
 
   let hierarchyLoaded = false;
   if (sync && ds) {
-    const written = new Set<string>();
-    const dropped = new Set<string>();
+    // Every graph query that succeeded, in the order the sync sent them.
+    const ops: Array<{kind: string; graph: string; ok?: boolean}> = [];
     const pending: Promise<unknown>[] = [];
     const stop = core.observeGraphQueries?.(ds, (query, settled) => {
+      const op: {kind: string; graph: string; ok?: boolean} = {kind: query.kind, graph: query.graph};
+      ops.push(op);
       pending.push(
         settled.then(
-          () => (query.kind === 'graph_drop' ? dropped : written).add(query.graph),
+          () => (op.ok = true),
           () => undefined,
         ),
       );
@@ -209,13 +211,21 @@ export async function runOntologyPhase(
     try {
       const sync = await core.syncOntologies(ds, {orphanScope});
       await Promise.all(pending);
-      const graphs = [...written].sort();
-      const droppedGraphs = [...dropped].sort();
+      const {graphs, droppedGraphs} = graphsWrittenAndDropped(ops.filter((op) => op.ok));
       result.ontologies = {written: sync.written, skipped: sync.skipped, graphs, droppedGraphs};
       hierarchyLoaded = true;
-      const defaultGraph = !!stop && sync.written.length > 0 && graphs.length === 0;
+      // Core ≥ 2.41 says where it wrote (the store's `ontologyGraph`); an older core is told
+      // apart by a write that sent no graph query.
+      const where =
+        sync.target === 'default'
+          ? " (default graph: ontologyGraph is 'default')"
+          : sync.fallback || (sync.target === undefined && !!stop && sync.written.length > 0 && graphs.length === 0)
+            ? ' (default graph: the store has no graph queries)'
+            : sync.target && sync.target !== 'package'
+              ? ` (one shared graph <${sync.target}>)`
+              : '';
       log(
-        `[LinkedServer] ontology sync${defaultGraph ? ' (default graph: the store has no graph queries)' : ''}: ` +
+        `[LinkedServer] ontology sync${where}: ` +
           `written ${list(sync.written)}; skipped ${list(sync.skipped)}` +
           (orphanScope === 'all' ? `; pruned ${list(sync.pruned)}` : '') +
           (graphs.length ? `; graphs written ${list(graphs)}` : '') +
@@ -247,6 +257,31 @@ export async function runOntologyPhase(
     warn('[LinkedServer] shape check failed:', err);
   }
   return result;
+}
+
+/**
+ * The graphs a sync left written and those it left dropped, from its successful graph queries in
+ * order. A graph the run created and then dropped (the inference probe's temporary graphs) is in
+ * neither list.
+ */
+export function graphsWrittenAndDropped(ops: Array<{kind: string; graph: string}>): {
+  graphs: string[];
+  droppedGraphs: string[];
+} {
+  const byGraph = new Map<string, string[]>();
+  for (const {kind, graph} of ops) {
+    const kinds = byGraph.get(graph) ?? [];
+    kinds.push(kind);
+    byGraph.set(graph, kinds);
+  }
+  const graphs: string[] = [];
+  const droppedGraphs: string[] = [];
+  for (const [graph, kinds] of byGraph) {
+    const last = kinds[kinds.length - 1];
+    if (last !== 'graph_drop') graphs.push(graph);
+    else if (kinds[0] !== 'graph_create') droppedGraphs.push(graph);
+  }
+  return {graphs: graphs.sort(), droppedGraphs: droppedGraphs.sort()};
 }
 
 /**

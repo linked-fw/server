@@ -9,6 +9,7 @@ import { getShapeGraphs, graphRoutingFor } from '@_linked/core/utils/graphRoutin
 import { getAllShapeClasses } from '@_linked/core/utils/ShapeClass';
 import { graphs } from '@_linked/core/ontologies/graphs';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
+import { graphTargetEnv } from './graphTargets.js';
 
 /** One dataset the router knows, and its graph routes. */
 export interface DatasetRoutes {
@@ -28,16 +29,27 @@ export interface DatasetRoutes {
    * default graph: no route of their own and no routed super-shape. Sorted.
    */
   defaultGraphShapes: string[];
+  /**
+   * Where the dataset keeps the packages' ontology data and shapes (core's graph targets:
+   * `'package'`, `'default'` or a shared graph IRI), when its store has them.
+   */
+  ontologyGraph?: string;
+  shapeGraph?: string;
 }
 
 /** The body of `GET /admin/routes`. */
 export interface EffectiveRoutes {
   /** Every dataset the router knows, the default one first, then in the order they were pinned. */
   datasets: DatasetRoutes[];
+  /**
+   * `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` as the process has them (unset ones left out),
+   * so a host sees them also for stores that take no graph targets.
+   */
+  graphTargetEnv: Record<string, string>;
 }
 
 /** The routes of every dataset the router knows (see {@link EffectiveRoutes}). */
-export function effectiveGraphRoutes(): EffectiveRoutes {
+export function effectiveGraphRoutes(env: Record<string, string | undefined> = process.env): EffectiveRoutes {
   const datasets = [...LinkedStorage.getDatasets()];
   const defaultDataset = LinkedStorage.getDefaultDataset();
   const defaultGraphShapes = new Map<IDataset, string[]>(datasets.map((ds) => [ds, []]));
@@ -51,13 +63,16 @@ export function effectiveGraphRoutes(): EffectiveRoutes {
   return {
     datasets: datasets.map((dataset) => {
       const id = (dataset as { id?: unknown }).id;
+      const targets = typeof dataset?.graphTargets === 'function' ? dataset.graphTargets() : undefined;
       return {
         store: dataset?.constructor?.name || 'unknown',
         ...(typeof id === 'string' && id ? { id } : {}),
         default: dataset === defaultDataset,
         routes: getShapeGraphs(dataset),
         defaultGraphShapes: (defaultGraphShapes.get(dataset) ?? []).sort(),
+        ...(targets ? { ontologyGraph: targets.ontologyGraph, shapeGraph: targets.shapeGraph } : {}),
       };
     }),
+    graphTargetEnv: graphTargetEnv(env),
   };
 }

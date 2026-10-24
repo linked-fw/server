@@ -49,6 +49,10 @@ export interface ShapeGraphSyncResult {
   cleaned: number;
   appGraph?: 'written' | 'skipped' | 'dropped';
   defaultGraph?: number;
+  /** The store's `shapeGraph` target the run wrote in (core ≥ 2.41): `'package'`, `'default'` or an IRI. */
+  target?: string;
+  /** Set when a store without graph queries took the default-graph sync instead of `target`. */
+  fallback?: true;
 }
 
 /** The subset of core's shape graph API this module calls. */
@@ -179,8 +183,13 @@ export interface ShapeGraphsReport {
   withoutTurtle: string[];
   /** Shapes an earlier sync had written into the default graph, removed now. */
   cleaned: number;
-  /** Set when the store has no graph queries: the default-graph sync's writes. */
+  /**
+   * Set when the shapes went into the default graph (the store's `shapeGraph` is `'default'`, or
+   * it has no graph queries): the default-graph sync's writes.
+   */
   defaultGraph?: number;
+  /** The store's `shapeGraph` target (`'package'`, `'default'` or a shared graph IRI), when core reports it. */
+  target?: string;
 }
 
 const list = (names: string[]) => (names.length ? names.join(', ') : 'none');
@@ -269,24 +278,39 @@ export async function syncShapeGraphsInto(
   }
   const withoutTurtle = [...noFile, ...notGenerated].sort();
 
+  // A shared graph (the store's `shapeGraph` is an IRI) holds every package and the app's shapes.
+  const shared = result.target && result.target !== 'package' && result.target !== 'default' ? result.target : undefined;
   const report: ShapeGraphsReport = {
     written: result.written,
     skipped: result.skipped,
     pruned: result.pruned,
-    graphs: result.written.map((name) => core.shapesGraphFor(name)),
+    graphs: shared
+      ? result.written.length || result.appGraph === 'written'
+        ? [shared]
+        : []
+      : result.written.map((name) => core.shapesGraphFor(name)),
     withoutTurtle,
     cleaned: result.cleaned,
   };
+  if (result.target) report.target = result.target;
   if (appGraph && result.appGraph) {
-    report.appGraph = {graph: appGraph, status: result.appGraph};
-    if (result.appGraph === 'written') report.graphs.push(appGraph);
+    report.appGraph = {graph: shared ?? appGraph, status: result.appGraph};
+    if (result.appGraph === 'written' && !shared) report.graphs.push(appGraph);
   }
   if (result.defaultGraph !== undefined) report.defaultGraph = result.defaultGraph;
 
   if (report.defaultGraph !== undefined) {
+    const why =
+      result.target === 'default' && !result.fallback
+        ? "shapeGraph is 'default'"
+        : 'the store has no graph queries';
+    log(`[LinkedServer] shape sync (default graph: ${why}): ${report.defaultGraph} shape(s) written`);
+  } else if (shared) {
     log(
-      `[LinkedServer] shape sync (default graph: the store has no graph queries): ` +
-        `${report.defaultGraph} shape(s) written`,
+      `[LinkedServer] shape graph sync (one shared graph <${shared}>): written ${list(report.written)}; ` +
+        `skipped ${list(report.skipped)}` +
+        (report.appGraph ? `; app shapes ${report.appGraph.status}` : '; no app shapes (DATA_ROOT not set)') +
+        (withoutTurtle.length ? `; no shapes.ttl (not in the graph): ${list(withoutTurtle)}` : ''),
     );
   } else {
     log(
