@@ -46,7 +46,7 @@ import {
 } from '@_linked/core/utils/ShapeClass';
 import path from 'path';
 import {pathToFileURL} from 'node:url';
-import { isFatalError } from '../utils/fatalError.js';
+import { FatalStartupError, isFatalError } from '../utils/fatalError.js';
 import {
   discoverLinkedDependencies,
   hasModuleEntry,
@@ -202,6 +202,7 @@ import {
   syncOntologiesThenShapes,
   type OntologyPhaseResult,
 } from '../utils/ontologySync.js';
+import { applyGraphTargetsFromEnv } from '../utils/graphTargets.js';
 import {
   AdminRequestError,
   assertReloadablePackages,
@@ -989,6 +990,14 @@ export class LinkedServer extends Shape {
    * @todo Check if default file store is set, if not, set it
    */
   async initStores() {
+    // LINKED_ONTOLOGY_GRAPH / LINKED_SHAPE_GRAPH: checked (an invalid value stops the boot) and
+    // filled into every store that takes graph targets, before anything reads or syncs.
+    // A rejected boot does not end the process by itself, so the error is fatal.
+    try {
+      applyGraphTargetsFromEnv(process.env, LinkedStorage.getDatasets());
+    } catch (err) {
+      throw new FatalStartupError(`[LinkedServer] ${(err as Error)?.message ?? err}`, { cause: err });
+    }
     return Promise.all(
       LinkedStorage.getDatasets().map((store) => {
         return store.init ? store.init() : Promise.resolve();

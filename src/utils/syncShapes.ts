@@ -49,6 +49,10 @@ export interface ShapeGraphSyncResult {
   cleaned: number;
   appGraph?: 'written' | 'skipped' | 'dropped';
   defaultGraph?: number;
+  /** The store's `shapeGraph` target the run wrote in (core ≥ 2.41): `'package'`, `'default'` or an IRI. */
+  target?: string;
+  /** Set when a store without graph queries took the default-graph sync instead of `target`. */
+  fallback?: true;
 }
 
 /** The subset of core's shape graph API this module calls. */
@@ -179,8 +183,15 @@ export interface ShapeGraphsReport {
   withoutTurtle: string[];
   /** Shapes an earlier sync had written into the default graph, removed now. */
   cleaned: number;
-  /** Set when the store has no graph queries: the default-graph sync's writes. */
+  /**
+   * Set when the shapes went into the default graph (the store's `shapeGraph` is `'default'`, or
+   * it has no graph queries): the default-graph sync's writes.
+   */
   defaultGraph?: number;
+  /** The store's `shapeGraph` target (`'package'`, `'default'` or a shared graph IRI), when core reports it. */
+  target?: string;
+  /** Set when the store has no graph queries, so the shapes went into the default graph instead of `target`. */
+  fallback?: true;
 }
 
 const list = (names: string[]) => (names.length ? names.join(', ') : 'none');
@@ -269,25 +280,51 @@ export async function syncShapeGraphsInto(
   }
   const withoutTurtle = [...noFile, ...notGenerated].sort();
 
+  // A shared graph (the store's `shapeGraph` is an IRI) holds every package and the app's shapes.
+  const shared = result.target && result.target !== 'package' && result.target !== 'default' ? result.target : undefined;
   const report: ShapeGraphsReport = {
     written: result.written,
     skipped: result.skipped,
     pruned: result.pruned,
-    graphs: result.written.map((name) => core.shapesGraphFor(name)),
+    // A shared graph is written whole or not at all: listed when the run wrote anything into it.
+    graphs: shared
+      ? result.written.length || result.appGraph === 'written' || result.pruned.length
+        ? [shared]
+        : []
+      : result.written.map((name) => core.shapesGraphFor(name)),
     withoutTurtle,
     cleaned: result.cleaned,
   };
+  if (result.target) report.target = result.target;
+  if (result.fallback) report.fallback = true;
   if (appGraph && result.appGraph) {
-    report.appGraph = {graph: appGraph, status: result.appGraph};
-    if (result.appGraph === 'written') report.graphs.push(appGraph);
+    report.appGraph = {graph: shared ?? appGraph, status: result.appGraph};
+    if (result.appGraph === 'written' && !shared) report.graphs.push(appGraph);
   }
   if (result.defaultGraph !== undefined) report.defaultGraph = result.defaultGraph;
 
   if (report.defaultGraph !== undefined) {
+    const why =
+      result.target === 'default' && !result.fallback
+        ? "shapeGraph is 'default'"
+        : 'the store has no graph queries';
+    log(`[LinkedServer] shape sync (default graph: ${why}): ${report.defaultGraph} shape(s) written`);
+  } else if (shared) {
     log(
-      `[LinkedServer] shape sync (default graph: the store has no graph queries): ` +
-        `${report.defaultGraph} shape(s) written`,
+      `[LinkedServer] shape graph sync (one shared graph <${shared}>): written ${list(report.written)}; ` +
+        `skipped ${list(report.skipped)}` +
+        (report.appGraph ? `; app shapes ${report.appGraph.status}` : '') +
+        (report.pruned.length ? `; dropped from the graph ${list(report.pruned)}` : '') +
+        (withoutTurtle.length ? `; no shapes.ttl (not in the graph): ${list(withoutTurtle)}` : ''),
     );
+    // Unlike package graphs, which stay when a package goes missing, the shared graph is rebuilt
+    // from the packages the run covers.
+    if (withoutTurtle.length) {
+      warn(
+        `[LinkedServer] the shared shape graph <${shared}> holds no shapes of ${list(withoutTurtle)}: ` +
+          'a package without Turtle in a run is left out of the rebuilt graph',
+      );
+    }
   } else {
     log(
       `[LinkedServer] shape graph sync: written ${list(report.written)}; skipped ${list(report.skipped)}` +
@@ -298,7 +335,7 @@ export async function syncShapeGraphsInto(
         (withoutTurtle.length ? `; no shapes.ttl (no shape graph): ${list(withoutTurtle)}` : ''),
     );
   }
-  if (orphanScope === 'all' && withoutTurtle.length) {
+  if (orphanScope === 'all' && withoutTurtle.length && !shared) {
     warn(
       '[LinkedServer] orphaned shape graphs were not pruned: core prunes only when the sync covers ' +
         `every registered package, and ${list(withoutTurtle)} has no Turtle`,

@@ -13,6 +13,7 @@ If you want to further adjust the functionality of LincdServer yourself, either 
 ## Table of contents
 
 - [Environment Variables](#environment-variables)
+  - [Ontology and shape graphs](#ontology-and-shape-graphs)
   - [Where asset URLs come from](#where-asset-urls-come-from)
 - [Calling methods on the backend](#calling-methods-on-the-backend)
   - [Shape providers](#shape-providers)
@@ -58,7 +59,41 @@ NODE_ENV=development
 # Optional. Base URL the HTML entry tags (main.js / main.css) are served from.
 # Usually no longer needed: see "Where asset URLs come from" below.
 STATIC_ACCESS_URL=https://cdn.my-site.com/releases/1.5.0-2a77e89f
+
+# Optional. Where the stores keep the packages' ontology data and shapes:
+# 'package' (the default), 'default', or the absolute IRI of one shared graph.
+# See "Ontology and shape graphs" below.
+LINKED_ONTOLOGY_GRAPH=package
+LINKED_SHAPE_GRAPH=package
 ```
+
+### Ontology and shape graphs
+
+`LINKED_ONTOLOGY_GRAPH` and `LINKED_SHAPE_GRAPH` set core's graph targets (`ontologyGraph`,
+`shapeGraph`) on the stores the app's storage config built:
+
+| Value | The ontology sync writes | The shape sync writes |
+|---|---|---|
+| `package` (default, or unset) | one graph per package, `{package IRI}/graph/ontology` | one graph per package, `{package IRI}/graph/shapes`, and the app's graph `{DATA_ROOT}/graph/shapes` |
+| `default` | the whole ontology into the default graph | every shape into the default graph |
+| an absolute IRI | one shared graph at that IRI, holding every package | one shared graph at that IRI, holding every package and the app's generated shapes |
+
+At boot, before the stores are initialised, the server checks both variables: a value that is
+neither keyword nor an absolute IRI, one IRI for both, a portable graph name (`graphs.*`), a
+store-native name (`urn:x-arq:…`) or a package's own graph name (`…/pkg/{slug}/graph/ontology` or
+`/graph/shapes`) stops the boot with a fatal error naming the variable. It then sets them on every
+store registered in `LinkedStorage` at that point that takes graph targets (a `SparqlDataset`, such
+as `FusekiStore`) for whatever the store's own options leave unset, so `ontologyGraph` / `shapeGraph`
+set in code or in a datasets config entry win. A store that takes none (`RemoteDataset`) runs
+`package`; the server warns when the variables ask for another mode. The readers follow the same
+setting (`graphs.allOntologies`, `graphs.allShapes`). `GET /admin/routes` reports each store's
+targets and the variables as set.
+
+Switching modes needs clearing first: the syncs never copy data from one mode's place to another's,
+and a sync that finds another mode's data logs one warning and leaves it. The modes, the rule that a
+package's Turtle is the source of its terms, and how to clear are in `@_linked/core`'s README
+("Ontology and shape graphs"). Apps that Create Now manages must run `package` for both.
+
 
 ### Where asset URLs come from
 
@@ -414,7 +449,7 @@ A host that starts the app process controls it over HTTP routes on the app's own
 | `GET /admin/health` | 200 `{status: 'ok'}` once the server listens (the boot ontology sync, shape check and shape sync have finished by then) |
 | `POST /admin/restart` | 202, then the process exits; the host starts it again |
 | `POST /admin/graph-registry-changed` | body `{dataset}`: the host changed that dataset's named graphs; the process drops its cached graph registry and answers 200 `{invalidated: dataset}`; 400 without a dataset name |
-| `GET /admin/routes` | 200 `{datasets: [{store, id?, default, routes, defaultGraphShapes}]}`: the effective graph routes (see below) |
+| `GET /admin/routes` | 200 `{datasets: [{store, id?, default, routes, defaultGraphShapes, ontologyGraph?, shapeGraph?}], graphTargetEnv}`: the effective graph routes and graph targets (see below) |
 | `POST /admin/sync-shapes` | 200 `{written, orphanScope, shapeGraphs, reloaded, shapes, ontologies: {written, skipped, graphs, droppedGraphs}, shapeCheck: {errors, warnings}}` (or `{written: 0, skipped, …}` when shape sync is off); 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
 
 `POST /admin/sync-shapes` runs the ontology sync and the shape check (see [Ontology sync and the shape check](#ontology-sync-and-the-shape-check)), then re-syncs the registered shapes into the app's data exactly as the boot does (see [Shape graphs](#shape-graphs): only graphs whose stored content hash differs are written, with the boot's orphan policy and `syncShapesOnBoot` / `LINKED_SYNC_SHAPES_ON_BOOT` switches). `written` counts the shape graphs written, and `shapeGraphs` reports them. The optional body `{packages: [...]}` names packages whose source the host changed; each must be a valid npm package name and the app itself or one of its direct dependencies, never an `@_linked/*` package; the list only says what to reload, it never filters the syncs. In dev their modules are invalidated in Vite and their backends reloaded before the sync, so a shape file written a moment ago is registered; a built app reloads nothing. `reloaded` lists the packages actually reloaded and `shapes` the node shape IRIs registered afterwards, so the host can check that the shape it wrote is there. Syncs run one at a time, as the system; one that takes longer than `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120000) fails and releases the queue. A source reload by itself (HMR) never syncs shapes. A failed ontology sync does not stop the shape sync; the route then answers 500 with the ontology error.
@@ -425,11 +460,16 @@ A host that starts the app process controls it over HTTP routes on the app's own
 - `default`: whether it is the default dataset (the one for every shape without a pin).
 - `routes`: `{<shape IRI>: <graph IRI>}` as registered. A sub-shape without a route of its own is written to its nearest routed super-shape's graph and is not listed.
 - `defaultGraphShapes`: the registered shapes that resolve to this dataset and are written to its default graph (no route of their own, no routed super-shape), sorted.
+- `ontologyGraph`, `shapeGraph`: the store's graph targets (`package`, `default` or a shared graph IRI; see [Ontology and shape graphs](#ontology-and-shape-graphs)), when the store has them.
+
+`graphTargetEnv` holds `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` as the process has them (unset ones left out), so a host sees them also for a store that takes no graph targets.
 
 ```json
 {"datasets": [{"store": "FusekiStore", "default": true,
   "routes": {"https://example.org/shape/Article": "https://example.org/data/graph/articles"},
-  "defaultGraphShapes": ["https://example.org/shape/Person"]}]}
+  "defaultGraphShapes": ["https://example.org/shape/Person"],
+  "ontologyGraph": "package", "shapeGraph": "package"}],
+ "graphTargetEnv": {}}
 ```
 
 Side effects to expect:
@@ -443,14 +483,14 @@ Side effects to expect:
 Before its shape sync, at boot and on `POST /admin/sync-shapes`, the server:
 
 1. **Registers the installed packages' ontologies** (core `registerInstalledOntologies`): it imports `lib/esm/ontologies/*.register.js` of every linked package it discovered in the app's dependency tree, so a package the app only deep-imports shape files from (`@_linked/schema/shapes/Person`) is synced and checked too, and of every workspace package of the app (`linkedPackage: true` under its `workspaces`), which no package may import (a Create Now clone's `packages/<slug>-ont`). In dev, a package without a built `lib/` registers from `src/ontologies/*.register.ts` through Vite's `ssrLoadModule`; a built app skips it. A register module that fails is logged and the rest go on.
-2. **Syncs the ontologies** (core `syncOntologies`): the `rdfs:subClassOf` triples of every registered package's ontology data are written into the app's default dataset, so the store's RDFS view infers the class hierarchy. A package whose stored hash matches is skipped, so an unchanged sync writes nothing. `ontologies.written` and `ontologies.skipped` name the packages (a package whose data cannot be read is skipped with core's warning). Sync nodes of packages no longer registered are pruned only with `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true`, the shape sync's orphan policy.
+2. **Syncs the ontologies** (core `syncOntologies`): every registered package's ontology data is written into the app's default dataset, where `LINKED_ONTOLOGY_GRAPH` says (one graph per package by default; see [Ontology and shape graphs](#ontology-and-shape-graphs)), so the store's RDFS view infers the class hierarchy. The log line names a shared graph or the default graph when the sync wrote there. A package whose stored hash matches is skipped, so an unchanged sync writes nothing. `ontologies.written` and `ontologies.skipped` name the packages (a package whose data cannot be read is skipped with core's warning). Sync nodes of packages no longer registered are pruned only with `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true`, the shape sync's orphan policy.
 3. **Checks the shapes** against that hierarchy (core `checkShapeHierarchy`, with every package's `dependencies` and `peerDependencies`). A running app is never stopped by it: each finding is logged, and `shapeCheck` counts them by severity.
 
 The ontology sync follows the shape sync's switches (`syncShapesOnBoot`, `LINKED_SYNC_SHAPES_ON_BOOT`), at boot and on `POST /admin/sync-shapes` alike: with shape sync off, the route syncs neither ontologies nor shapes (it still registers the packages' ontologies and runs the shape check). `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false` turns off only the boot's ontology sync. The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded at boot either way. A failed ontology sync at boot is logged and the boot goes on.
 
 ### Shape graphs
 
-After the ontology sync and the shape check, at boot and on `POST /admin/sync-shapes`, the server syncs the registered shapes into the app's default dataset with core's `syncShapeGraphs`:
+After the ontology sync and the shape check, at boot and on `POST /admin/sync-shapes`, the server syncs the registered shapes into the app's default dataset with core's `syncShapeGraphs`. This section describes the default, `LINKED_SHAPE_GRAPH=package`; with a shared graph IRI every package's shapes and the app's generated ones go into that one graph (`graphs` lists it, `appGraph.graph` is it), and with `default` the shapes go into the default graph (`defaultGraph` counts the writes). See [Ontology and shape graphs](#ontology-and-shape-graphs).
 
 - **One graph per package.** Each package's shapes go in `{package IRI}/graph/shapes`, with a `ShapesGraph` record in the graph registry (never a hierarchy source). A graph whose stored content hash matches is not written, so an unchanged sync writes nothing; a changed one is replaced whole.
 - **Where the Turtle comes from.** An installed package's built `lib/esm/data/shapes.ttl`, which `linked build` writes. An installed package without that file gets no shape graph: nothing is generated for it (a package with no shapes has none). The app's own packages (the app and its workspace packages) are generated in process: in dev through Vite's `ssrLoadModule` (core's `packageShapesTurtle` on the core the source shapes registered on, the same bytes `linked build` writes); in a built app from their `lib/esm/data/shapes.ttl` when they have one.
@@ -464,7 +504,7 @@ The boot logs one line, for example:
 [LinkedServer] shape graph sync: written @acme/shop; skipped @_linked/schema; app graph written; graphs written https://linked.cm/pkg/acme-shop/graph/shapes, https://acme.example/data/graph/shapes; no shapes.ttl (no shape graph): @acme/legacy
 ```
 
-`POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned}` (plus `defaultGraph`, the default-graph sync's writes, on a store without graph queries).
+`POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned, target}` (plus `defaultGraph`, the default-graph sync's writes, under `LINKED_SHAPE_GRAPH=default` or on a store without graph queries). `target` is the store's `shapeGraph`; with `fallback` set the store had no graph queries and the shapes went into the default graph instead. In a shared graph the rebuild covers the packages with Turtle: a package without it is left out (and logged), where the package mode keeps its old graph.
 
 ## Provider lifecycle and HMR
 

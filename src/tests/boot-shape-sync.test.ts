@@ -265,6 +265,52 @@ describe('syncShapeGraphsInto', () => {
     expect(lines).toEqual(['[LinkedServer] shape sync (default graph: the store has no graph queries): 7 shape(s) written']);
   });
 
+  it("reports the default-graph sync of shapeGraph 'default' as such", async () => {
+    const { core } = fakeCore(['dep'], { defaultGraph: 3, target: 'default' });
+    const lines: string[] = [];
+    const report = await syncShapeGraphsInto({}, { ...base, core, dev: false, log: (m) => lines.push(m) });
+    expect(report).toMatchObject({ defaultGraph: 3, target: 'default' });
+    expect(lines).toEqual([`[LinkedServer] shape sync (default graph: shapeGraph is 'default'): 3 shape(s) written`]);
+  });
+
+  it('reports a shared shape graph as the one graph written, the app shapes in it', async () => {
+    const SHARED = 'https://data.example.org/graph/shapes';
+    const { core } = fakeCore(['dep'], { written: ['dep'], appGraph: 'written', target: SHARED });
+    const lines: string[] = [];
+    const report = await syncShapeGraphsInto({}, {
+      ...base,
+      core,
+      dev: false,
+      appGraph: 'https://app.test/data/graph/shapes',
+      log: (m) => lines.push(m),
+    });
+    expect(report.graphs).toEqual([SHARED]);
+    expect(report.appGraph).toEqual({ graph: SHARED, status: 'written' });
+    expect(report.target).toBe(SHARED);
+    expect(lines).toEqual([`[LinkedServer] shape graph sync (one shared graph <${SHARED}>): written dep; skipped none; app shapes written`]);
+
+    // Without DATA_ROOT the app's shapes are still in the graph; a package without Turtle is not.
+    const noRoot = fakeCore(['bare', 'dep'], { written: ['dep'], pruned: ['bare'], target: SHARED });
+    const noRootLines: string[] = [];
+    const warnings: string[] = [];
+    const noRootReport = await syncShapeGraphsInto({}, {
+      ...base,
+      core: noRoot.core,
+      dev: false,
+      log: (m) => noRootLines.push(m),
+      warn: (m) => warnings.push(m),
+    });
+    expect(noRootReport.graphs).toEqual([SHARED]);
+    expect(noRootLines).toEqual([
+      `[LinkedServer] shape graph sync (one shared graph <${SHARED}>): written dep; skipped none; dropped from the graph bare; no shapes.ttl (not in the graph): bare`,
+    ]);
+    expect(warnings).toEqual([expect.stringContaining('holds no shapes of bare')]);
+
+    const unchanged = fakeCore(['dep'], { skipped: ['dep'], appGraph: 'skipped', target: SHARED });
+    const again = await syncShapeGraphsInto({}, { ...base, core: unchanged.core, dev: false, ...quiet });
+    expect(again.graphs).toEqual([]);
+  });
+
   it("passes orphanScope 'all', and warns that pruning is skipped while a package has no shapes.ttl", async () => {
     const { core, calls } = fakeCore(['bare', 'dep'], { written: ['dep'], pruned: [] });
     const warnings: string[] = [];

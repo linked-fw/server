@@ -5,6 +5,7 @@ import * as path from 'path';
 import {
   bootSyncsOntologies,
   loadOntologyCore,
+  graphsWrittenAndDropped,
   ontologyPackageDirs,
   runOntologyPhase,
   sourceModuleImporter,
@@ -26,6 +27,7 @@ function fakeCore({
   withRegister = true,
   registerFails = false,
   graphQueries = [{ kind: 'graph_replace', graph: GA }] as Array<{ kind: string; graph: string; fails?: boolean }>,
+  where = {} as { target?: string; fallback?: true },
 } = {}) {
   const calls: string[] = [];
   const seen: {
@@ -47,7 +49,7 @@ function fakeCore({
       for (const q of graphQueries) {
         observer?.(q, q.fails ? Promise.reject(new Error('refused')) : Promise.resolve({}));
       }
-      return { written: ['@x/a'], skipped: ['@x/b'], pruned: [] };
+      return { written: ['@x/a'], skipped: ['@x/b'], pruned: [], ...where };
     },
     observeGraphQueries(ds, onGraph) {
       seen.observed = ds;
@@ -234,6 +236,43 @@ describe('runOntologyPhase', () => {
     ]);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('error (extends-without-subclass): sC extends sD');
+  });
+});
+
+describe('graphsWrittenAndDropped', () => {
+  it("leaves out a graph the run created and dropped (the probe's), and keeps the last state of the rest", () => {
+    expect(
+      graphsWrittenAndDropped([
+        { kind: 'graph_create', graph: 'probe' },
+        { kind: 'graph_create', graph: 'a' },
+        { kind: 'graph_replace', graph: 'b' },
+        { kind: 'graph_drop', graph: 'probe' },
+        { kind: 'graph_drop', graph: 'c' },
+        { kind: 'graph_drop', graph: 'd' },
+        { kind: 'graph_create', graph: 'd' },
+      ]),
+    ).toEqual({ graphs: ['a', 'b', 'd'], droppedGraphs: ['c'] });
+  });
+});
+
+describe('runOntologyPhase: where the sync wrote', () => {
+  const run = async (where: { target?: string; fallback?: true }, graphQueries: Array<{ kind: string; graph: string }>) => {
+    const { core } = fakeCore({ where, graphQueries });
+    const lines: string[] = [];
+    await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
+    return lines[0];
+  };
+
+  it("names the default graph of ontologyGraph 'default', a shared graph, and the fallback", async () => {
+    expect(await run({ target: 'default' }, [])).toMatch(/^\[LinkedServer\] ontology sync \(default graph: ontologyGraph is 'default'\): written @x\/a/);
+    const shared = 'https://data.example.org/graph/ontology';
+    expect(await run({ target: shared }, [{ kind: 'graph_replace', graph: shared }])).toContain(
+      `ontology sync (one shared graph <${shared}>): written @x/a`,
+    );
+    expect(await run({ target: 'package', fallback: true }, [])).toContain(
+      'ontology sync (default graph: the store has no graph queries)',
+    );
+    expect(await run({ target: 'package' }, [{ kind: 'graph_replace', graph: GA }])).toMatch(/^\[LinkedServer\] ontology sync: written/);
   });
 });
 
