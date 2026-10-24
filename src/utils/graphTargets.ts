@@ -74,11 +74,25 @@ function datasetName(dataset: IDataset): string {
 }
 
 /**
+ * The watched class `shapeClass` or one of its super-shapes targets (a sub-shape of `owl:Class`,
+ * say `owl:Restriction`, goes where its parent is pinned), else undefined.
+ */
+function watchedClassOf(shapeClass: Function, watched: ReadonlySet<string>): string | undefined {
+  for (let current: unknown = shapeClass; typeof current === 'function' && current !== Function.prototype; current = Object.getPrototypeOf(current)) {
+    const id = (current as { targetClass?: { id?: unknown } }).targetClass?.id;
+    if (typeof id === 'string' && watched.has(id)) return id;
+  }
+  return undefined;
+}
+
+/**
  * One warning when routing pins a shape the boot syncs write (the shape shapes `NodeShape` /
  * `PropertyShape`, or an ontology term shape such as `rdfs:Class` / `owl:ObjectProperty`) to a
  * dataset other than the default one: the syncs write into the default dataset only, so reads of
- * those shapes on the pinned dataset miss what they wrote. Names each such shape and its dataset.
- * Undefined when there is nothing to warn about (or no default dataset).
+ * those shapes on the pinned dataset miss what they wrote. Names each such shape (sub-shapes of a
+ * watched shape included) and its dataset. Undefined when there is nothing to warn about (or no
+ * default dataset). Reads the registered shapes outside any shape catalog (run it at boot, never
+ * inside `withShapeCatalog`).
  */
 export function syncPinWarning(): string | undefined {
   const defaultDataset = LinkedStorage.getDefaultDataset();
@@ -86,8 +100,8 @@ export function syncPinWarning(): string | undefined {
   const watched = new Set([...SHAPE_SHAPE_CLASSES, ...ONTOLOGY_TERM_CLASSES]);
   const pinned = new Map<IDataset, string[]>();
   for (const [iri, shapeClass] of getAllShapeClasses()) {
-    const targetClass = (shapeClass as { targetClass?: { id?: unknown } }).targetClass?.id;
-    if (typeof targetClass !== 'string' || !watched.has(targetClass)) continue;
+    const targetClass = watchedClassOf(shapeClass, watched);
+    if (!targetClass) continue;
     const dataset = LinkedStorage.getDatasetForShapeClass(shapeClass);
     if (!dataset || dataset === defaultDataset) continue;
     const list = pinned.get(dataset) ?? [];
@@ -98,7 +112,7 @@ export function syncPinWarning(): string | undefined {
   const parts = [...pinned].map(([dataset, shapes]) => `${shapes.sort().join(', ')} → ${datasetName(dataset)}`);
   return (
     `[LinkedServer] Routing pins shapes the boot syncs write to a dataset other than the default ` +
-    `one: ${parts.join('; ')}. The ontology and shape syncs write into the default dataset ` +
+    `one: ${parts.join('; ')}. The ontology and shape syncs, when they run, write into the default dataset ` +
     `(${datasetName(defaultDataset)}) only, so reads of these shapes on the pinned dataset do not ` +
     `see what the syncs wrote.`
   );

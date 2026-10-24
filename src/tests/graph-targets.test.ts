@@ -87,6 +87,33 @@ describe('the sync pin warning', () => {
     }
     expect(syncPinWarning()).toBeUndefined();
   });
+
+  it('names an ontology term shape and its sub-shapes, pinned through the parent', async () => {
+    const { Shape } = await import('@_linked/core/shapes/Shape');
+    const { linkedShape } = await import('@_linked/core/package');
+    class TermClass extends (Shape as any) {
+      static targetClass = { id: 'http://www.w3.org/2002/07/owl#Class' };
+    }
+    class TermRestriction extends TermClass {
+      static targetClass = { id: 'http://www.w3.org/2002/07/owl#Restriction' };
+    }
+    (linkedShape as any)(TermClass);
+    (linkedShape as any)(TermRestriction);
+    const appData = new (Store as any)();
+    const ontology = new (Other as any)();
+    const before = LinkedStorage.getDefaultDataset();
+    LinkedStorage.setDefaultDataset(appData);
+    try {
+      LinkedStorage.setDatasetForShapes(ontology, TermClass as any);
+      const warning = syncPinWarning();
+      expect(warning).toContain('TermClass (http://www.w3.org/2002/07/owl#Class)');
+      expect(warning).toContain('TermRestriction (http://www.w3.org/2002/07/owl#Class)');
+      expect(warning).toContain('→ Other');
+    } finally {
+      LinkedStorage.unsetDatasetForShape(TermClass as any);
+      if (before) LinkedStorage.setDefaultDataset(before);
+    }
+  });
 });
 
 describe('the boot', () => {

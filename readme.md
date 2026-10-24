@@ -79,7 +79,7 @@ option or datasets config entry takes them.
 | `default` | the whole ontology into the default graph | every shape into the default graph |
 | an absolute IRI | one shared graph at that IRI, holding every package | one shared graph at that IRI, holding every package and the app's generated shapes |
 
-At boot, before the stores are initialised and before the syncs, the server checks both variables:
+At boot, before the boot initialises the stores and before the syncs, the server checks both variables:
 a value that is neither keyword nor an absolute IRI, one IRI for both, a portable graph name
 (`graphs.*`), a store-native name (`urn:x-arq:…`) or a package's own graph name
 (`…/pkg/{slug}/graph/ontology` or `/graph/shapes`) stops the boot with a fatal error naming the
@@ -95,8 +95,8 @@ expands it under the backend's setting.
 (`NodeShape`, `PropertyShape`) or the ontology term shapes (the class and property shapes core,
 `@_linked/rdfs` and `@_linked/owl` register: `rdfs:Class`, `owl:Class`, `rdf:Property`,
 `owl:ObjectProperty`, `owl:DatatypeProperty`, `owl:AnnotationProperty`) to another dataset, the
-boot logs one warning naming those shapes and their dataset: reads of them there do not see what
-the syncs wrote.
+boot logs one warning naming those shapes (and their sub-shapes) and their dataset: reads of them
+there do not see what the syncs wrote.
 
 Switching modes needs clearing first: the syncs never copy data from one mode's place to another's,
 and a sync that finds another mode's data logs one warning and leaves it. The modes, the rule that a
@@ -512,7 +512,7 @@ The boot logs one line, for example:
 [LinkedServer] shape graph sync: written @acme/shop; skipped @_linked/schema; app graph written; graphs written https://linked.cm/pkg/acme-shop/graph/shapes, https://acme.example/data/graph/shapes; no shapes.ttl (no shape graph): @acme/legacy
 ```
 
-`POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned, target}` (plus `defaultGraph`, the default-graph sync's writes, under `LINKED_SHAPE_GRAPH=default` or on a store without graph queries). `target` is the store's `shapeGraph`; with `fallback` set the store had no graph queries and the shapes went into the default graph instead. In a shared graph the rebuild covers the packages with Turtle: a package without it is left out (and logged), where the package mode keeps its old graph.
+`POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned, target}` (plus `defaultGraph`, the default-graph sync's writes, under `LINKED_SHAPE_GRAPH=default` or on a store without graph queries). `target` is the process's `shapeGraph` setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)); with `fallback` set the store had no graph queries and the shapes went into the default graph instead. In a shared graph the rebuild covers the packages with Turtle: a package without it is left out (and logged), where the package mode keeps its old graph.
 
 ## Provider lifecycle and HMR
 
