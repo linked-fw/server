@@ -2,16 +2,15 @@ import { afterEach, describe, expect, it } from '@jest/globals';
 import express from 'express';
 import type { AddressInfo } from 'net';
 
-// The control channel's secret (`APP_ADMIN_SECRET`, with the deprecated `CN_APP_ADMIN_SECRET`
-// and `x-cn-admin-secret` still read) and `GET /admin/routes`, which answers the graph routes
-// core's routing holds, read from real `LinkedStorage` pins on stub datasets.
+// The control channel's secret (`APP_ADMIN_SECRET`, sent as `x-app-admin-secret`) and
+// `GET /admin/routes`, which answers the graph routes core's routing holds, read from real
+// `LinkedStorage` pins on stub datasets.
 
 process.env.SITE_ROOT ??= 'http://app.test:4000';
 const {
   registerAdminRoutes,
   resolveAdminSecret,
   ADMIN_SECRET_HEADER,
-  LEGACY_ADMIN_SECRET_HEADER,
 } = await import('../utils/adminChannel.js');
 const { effectiveGraphRoutes } = await import('../utils/effectiveRoutes.js');
 const { LinkedStorage } = await import('@_linked/core/utils/LinkedStorage');
@@ -35,13 +34,12 @@ LinkedStorage.setDefaultDataset(appStore);
 LinkedStorage.setDatasetForShapes(otherStore, [OntologyGraph], { graph: GRAPH });
 LinkedStorage.setDatasetForShapes(otherStore, ShapesGraph);
 
-async function serve(secret: string | undefined, warn?: (m: string) => void): Promise<string> {
+async function serve(secret: string | undefined): Promise<string> {
   const app = express();
   app.use(express.json());
   registerAdminRoutes(app, secret, {
     exit: () => {},
     syncShapes: async () => ({ written: 0 }),
-    ...(warn ? { warn } : {}),
   });
   const server = await new Promise<any>((resolve) => {
     const s = app.listen(0, () => resolve(s));
@@ -90,44 +88,22 @@ describe('GET /admin/routes', () => {
     expect((await getRoutes(base, {})).status).toBe(401);
   });
 
-  it('accepts the deprecated header and warns once', async () => {
-    const warnings: string[] = [];
-    const base = await serve(SECRET, (m) => warnings.push(m));
-    expect((await getRoutes(base, { [LEGACY_ADMIN_SECRET_HEADER]: SECRET })).status).toBe(200);
-    expect((await getRoutes(base, { [LEGACY_ADMIN_SECRET_HEADER]: SECRET })).status).toBe(200);
-    expect((await getRoutes(base)).status).toBe(200);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/x-cn-admin-secret.*deprecated.*x-app-admin-secret/);
+  it('reads the secret from x-app-admin-secret only', async () => {
+    const base = await serve(SECRET);
+    expect((await getRoutes(base, { 'x-cn-admin-secret': SECRET })).status).toBe(401);
   });
 });
 
 describe('resolveAdminSecret', () => {
-  it('reads APP_ADMIN_SECRET without a warning, and nothing when neither name is set', () => {
-    const warnings: string[] = [];
-    const warn = (m: string) => warnings.push(m);
-    expect(resolveAdminSecret({ APP_ADMIN_SECRET: 'new' }, warn)).toBe('new');
-    expect(resolveAdminSecret({ APP_ADMIN_SECRET: 'new', CN_APP_ADMIN_SECRET: 'old' }, warn)).toBe('new');
-    expect(resolveAdminSecret({}, warn)).toBeUndefined();
-    expect(resolveAdminSecret({ APP_ADMIN_SECRET: '' }, warn)).toBeUndefined();
-    expect(warnings).toEqual([]);
+  it('reads APP_ADMIN_SECRET, and nothing else', () => {
+    expect(resolveAdminSecret({ APP_ADMIN_SECRET: 'new' })).toBe('new');
+    expect(resolveAdminSecret({})).toBeUndefined();
+    expect(resolveAdminSecret({ APP_ADMIN_SECRET: '' })).toBeUndefined();
+    expect(resolveAdminSecret({ CN_APP_ADMIN_SECRET: 'old' })).toBeUndefined();
   });
 
-  it('falls back to CN_APP_ADMIN_SECRET and logs the deprecation once per process', () => {
-    const warnings: string[] = [];
-    const warn = (m: string) => warnings.push(m);
-    expect(resolveAdminSecret({ CN_APP_ADMIN_SECRET: 'old' }, warn)).toBe('old');
-    expect(resolveAdminSecret({ CN_APP_ADMIN_SECRET: 'old' }, warn)).toBe('old');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/CN_APP_ADMIN_SECRET is deprecated; set APP_ADMIN_SECRET/);
-    const later: string[] = [];
-    expect(resolveAdminSecret({ CN_APP_ADMIN_SECRET: 'old' }, (m) => later.push(m))).toBe('old');
-    expect(later).toEqual([]);
-  });
-
-  it('a channel opened with either name answers the route', async () => {
-    for (const env of [{ APP_ADMIN_SECRET: SECRET }, { CN_APP_ADMIN_SECRET: SECRET }]) {
-      const base = await serve(resolveAdminSecret(env, () => {}));
-      expect((await getRoutes(base)).status).toBe(200);
-    }
+  it('a channel opened with it answers the route', async () => {
+    const base = await serve(resolveAdminSecret({ APP_ADMIN_SECRET: SECRET }));
+    expect((await getRoutes(base)).status).toBe(200);
   });
 });

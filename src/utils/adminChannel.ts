@@ -28,9 +28,6 @@
  *   router knows (shape IRI → graph IRI) and the shapes each one writes to its default graph,
  *   as core's routing holds them once the app's storage file has run. The routes are written
  *   only in the app's storage file; this route lets a host check what actually runs.
- *
- * Deprecated names, still read: `CN_APP_ADMIN_SECRET` when `APP_ADMIN_SECRET` is unset, and the
- * `x-cn-admin-secret` header when `x-app-admin-secret` is absent; each logs one warning.
  */
 import { createHash, timingSafeEqual } from 'crypto';
 import type express from 'express';
@@ -40,60 +37,14 @@ import { effectiveGraphRoutes, type EffectiveRoutes } from './effectiveRoutes.js
 
 /** The environment variable that holds the control channel's secret. */
 export const ADMIN_SECRET_ENV = 'APP_ADMIN_SECRET';
-/** Its former name, read when {@link ADMIN_SECRET_ENV} is unset. @deprecated */
-export const LEGACY_ADMIN_SECRET_ENV = 'CN_APP_ADMIN_SECRET';
 /** The request header that carries the secret. */
 export const ADMIN_SECRET_HEADER = 'x-app-admin-secret';
-/** Its former name, read when {@link ADMIN_SECRET_HEADER} is absent. @deprecated */
-export const LEGACY_ADMIN_SECRET_HEADER = 'x-cn-admin-secret';
 
-/**
- * Which deprecation warnings this process has logged. On the shared global, so a module that
- * evaluates twice still warns once.
- */
-const warned: Set<string> = ((globalThis as Record<symbol, unknown>)[
-  Symbol.for('@_linked/server:adminChannelDeprecationsWarned')
-] ??= new Set<string>()) as Set<string>;
-
-function warnOnce(key: string, message: string, warn: (message: string) => void): void {
-  if (warned.has(key)) return;
-  warned.add(key);
-  warn(message);
-}
-
-/**
- * The control channel's secret: `APP_ADMIN_SECRET`, else the deprecated `CN_APP_ADMIN_SECRET`
- * (logged once per process), else `undefined` (no control channel).
- */
+/** The control channel's secret: `APP_ADMIN_SECRET`, else `undefined` (no control channel). */
 export function resolveAdminSecret(
-  env: Record<string, string | undefined> = process.env,
-  warn: (message: string) => void = console.warn
+  env: Record<string, string | undefined> = process.env
 ): string | undefined {
-  const secret = env[ADMIN_SECRET_ENV];
-  if (secret) return secret;
-  const legacy = env[LEGACY_ADMIN_SECRET_ENV];
-  if (!legacy) return undefined;
-  warnOnce(
-    'env',
-    `[linked] ${LEGACY_ADMIN_SECRET_ENV} is deprecated; set ${ADMIN_SECRET_ENV} instead (read as a fallback for now).`,
-    warn
-  );
-  return legacy;
-}
-
-/** The secret a request carries: the `x-app-admin-secret` header, else the deprecated one. */
-function providedSecret(req: express.Request, warn: (message: string) => void): string | undefined {
-  const current = req.get(ADMIN_SECRET_HEADER);
-  if (current) return current;
-  const legacy = req.get(LEGACY_ADMIN_SECRET_HEADER);
-  if (legacy) {
-    warnOnce(
-      'header',
-      `[linked] the ${LEGACY_ADMIN_SECRET_HEADER} header is deprecated; send ${ADMIN_SECRET_HEADER} instead.`,
-      warn
-    );
-  }
-  return legacy;
+  return env[ADMIN_SECRET_ENV] || undefined;
 }
 
 /** What one shape sync did. */
@@ -168,8 +119,6 @@ export interface AdminChannelHandlers {
   graphRegistryChanged?: (dataset: string) => void;
   /** The effective graph routes (see `GET /admin/routes`). Default: {@link effectiveGraphRoutes}. */
   routes?: () => EffectiveRoutes;
-  /** Where deprecation warnings go. Default: `console.warn`. */
-  warn?: (message: string) => void;
 }
 
 /**
@@ -235,7 +184,7 @@ export function registerAdminRoutes(
       res.sendStatus(404); // no control channel in this mode
       return false;
     }
-    if (!adminSecretMatches(secret, providedSecret(req, handlers.warn ?? console.warn))) {
+    if (!adminSecretMatches(secret, req.get(ADMIN_SECRET_HEADER))) {
       res.sendStatus(401);
       return false;
     }
