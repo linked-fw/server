@@ -1,13 +1,16 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it } from '@jest/globals';
 
 // The graph targets from the environment: LINKED_ONTOLOGY_GRAPH / LINKED_SHAPE_GRAPH, checked and
-// filled into every store that takes them (for what its own options leave unset); a store that
-// takes none runs 'package' with a warning; `GET /admin/routes` reports both.
+// set once as core's global setting (no store takes them); `GET /admin/routes` reports the setting
+// and the variables; the boot warns when routing pins the shapes the syncs write elsewhere.
 
 process.env.SITE_ROOT ??= 'http://app.test:4000';
-const { applyGraphTargetsFromEnv, graphTargetEnv } = await import('../utils/graphTargets.js');
+const { applyGraphTargetsFromEnv, graphTargetEnv, syncPinWarning } = await import('../utils/graphTargets.js');
 const { SparqlDataset } = await import('@_linked/core/sparql/SparqlDataset');
 const { LinkedStorage } = await import('@_linked/core/utils/LinkedStorage');
+const { getGraphTargets, setGraphTargets } = await import('@_linked/core/utils/graphTargets');
+await import('@_linked/core');
+const { NodeShape, PropertyShape } = await import('@_linked/core/shapes/SHACL');
 const { effectiveGraphRoutes } = await import('../utils/effectiveRoutes.js');
 
 const SHARED = 'https://data.example.org/graph/ontology';
@@ -18,57 +21,71 @@ class Store extends (SparqlDataset as any) {
   }
   async executeSparqlUpdate() {}
 }
-class NoTargets {}
+class Other extends Store {}
+
+afterEach(() => setGraphTargets({}));
 
 describe('applyGraphTargetsFromEnv', () => {
-  it('fills what each store leaves unset, and keeps what it set itself', () => {
-    const plain = new Store() as any;
-    const own = new (Store as any)({ shapeGraph: "default" });
-    const given = applyGraphTargetsFromEnv(
-      { LINKED_ONTOLOGY_GRAPH: SHARED, LINKED_SHAPE_GRAPH: 'package' },
-      [plain, own],
-      () => {},
-    );
-    expect(given).toEqual({ ontologyGraph: SHARED, shapeGraph: 'package' });
-    expect(plain.graphTargets()).toEqual({ ontologyGraph: SHARED, shapeGraph: 'package' });
-    expect(own.graphTargets()).toEqual({ ontologyGraph: SHARED, shapeGraph: 'default' });
+  it("sets core's global setting from the variables; an unset one is 'package'", () => {
+    const given = applyGraphTargetsFromEnv({ LINKED_ONTOLOGY_GRAPH: SHARED, LINKED_SHAPE_GRAPH: '' });
+    expect(given).toEqual({ ontologyGraph: SHARED });
+    expect(getGraphTargets()).toEqual({ ontologyGraph: SHARED, shapeGraph: 'package' });
+    applyGraphTargetsFromEnv({});
+    expect(getGraphTargets()).toEqual({ ontologyGraph: 'package', shapeGraph: 'package' });
   });
 
-  it('changes nothing without the variables', () => {
-    const store = new Store() as any;
-    expect(applyGraphTargetsFromEnv({ LINKED_ONTOLOGY_GRAPH: '' }, [store])).toEqual({});
-    expect(store.graphTargets()).toEqual({ ontologyGraph: 'package', shapeGraph: 'package' });
-  });
-
-  it('refuses an invalid value, naming the variable', () => {
-    expect(() => applyGraphTargetsFromEnv({ LINKED_SHAPE_GRAPH: 'shared' }, [])).toThrow(
+  it('refuses an invalid value, naming the variable, and leaves the setting', () => {
+    applyGraphTargetsFromEnv({ LINKED_SHAPE_GRAPH: 'default' });
+    expect(() => applyGraphTargetsFromEnv({ LINKED_SHAPE_GRAPH: 'shared' })).toThrow(
       /^Invalid shapeGraph "shared" \(from env LINKED_SHAPE_GRAPH\)/,
     );
-    expect(() => applyGraphTargetsFromEnv({ LINKED_ONTOLOGY_GRAPH: SHARED, LINKED_SHAPE_GRAPH: SHARED }, [])).toThrow(
+    expect(() => applyGraphTargetsFromEnv({ LINKED_ONTOLOGY_GRAPH: SHARED, LINKED_SHAPE_GRAPH: SHARED })).toThrow(
       /both name/,
     );
-  });
-
-  it("warns once per store that takes no targets when the env sets another mode than 'package'", () => {
-    const warnings: string[] = [];
-    applyGraphTargetsFromEnv({ LINKED_ONTOLOGY_GRAPH: 'default' }, [new NoTargets(), new Store()], (m) => warnings.push(m));
-    expect(warnings).toEqual([expect.stringContaining("NoTargets takes no graph targets, so it runs 'package'")]);
-    const none: string[] = [];
-    applyGraphTargetsFromEnv({ LINKED_ONTOLOGY_GRAPH: 'package' }, [new NoTargets()], (m) => none.push(m));
-    expect(none).toEqual([]);
+    expect(getGraphTargets().shapeGraph).toBe('default');
   });
 });
 
 describe('GET /admin/routes reports the graph targets', () => {
-  it("lists each store's targets and the variables as set", () => {
-    const store = new (Store as any)({ ontologyGraph: "default" });
+  it('reports the global setting once, and the variables as set', () => {
+    const store = new (Store as any)();
     const before = LinkedStorage.getDefaultDataset();
     LinkedStorage.setDefaultDataset(store);
-    const routes = effectiveGraphRoutes({ LINKED_SHAPE_GRAPH: SHARED, LINKED_ONTOLOGY_GRAPH: '' });
-    expect(routes.datasets[0]).toMatchObject({ store: 'Store', default: true, ontologyGraph: 'default', shapeGraph: 'package' });
-    expect(routes.graphTargetEnv).toEqual({ LINKED_SHAPE_GRAPH: SHARED });
-    expect(graphTargetEnv({})).toEqual({});
-    if (before) LinkedStorage.setDefaultDataset(before);
+    try {
+      setGraphTargets({ ontologyGraph: 'default' });
+      const routes = effectiveGraphRoutes({ LINKED_SHAPE_GRAPH: SHARED, LINKED_ONTOLOGY_GRAPH: '' });
+      expect(routes.graphTargets).toEqual({ ontologyGraph: 'default', shapeGraph: 'package' });
+      expect(routes.datasets[0]).toMatchObject({ store: 'Store', default: true });
+      expect(routes.datasets[0]).not.toHaveProperty('ontologyGraph');
+      expect(routes.graphTargetEnv).toEqual({ LINKED_SHAPE_GRAPH: SHARED });
+      expect(graphTargetEnv({})).toEqual({});
+    } finally {
+      if (before) LinkedStorage.setDefaultDataset(before);
+    }
+  });
+});
+
+describe('the sync pin warning', () => {
+  it('names the shape shapes pinned to another dataset, and is silent without such a pin', () => {
+    const appData = new (Store as any)();
+    const shapes = new (Other as any)();
+    shapes.id = 'shapes';
+    const before = LinkedStorage.getDefaultDataset();
+    LinkedStorage.setDefaultDataset(appData);
+    try {
+      expect(syncPinWarning()).toBeUndefined();
+      LinkedStorage.setDatasetForShapes(shapes, NodeShape, PropertyShape);
+      const warning = syncPinWarning();
+      expect(warning).toContain('NodeShape (http://www.w3.org/ns/shacl#NodeShape)');
+      expect(warning).toContain('PropertyShape (http://www.w3.org/ns/shacl#PropertyShape)');
+      expect(warning).toContain('→ Other "shapes"');
+      expect(warning).toContain('write into the default dataset (Store) only');
+    } finally {
+      LinkedStorage.unsetDatasetForShape?.(NodeShape);
+      LinkedStorage.unsetDatasetForShape?.(PropertyShape);
+      if (before) LinkedStorage.setDefaultDataset(before);
+    }
+    expect(syncPinWarning()).toBeUndefined();
   });
 });
 
@@ -94,7 +111,7 @@ describe('the boot', () => {
       process.env.LINKED_ONTOLOGY_GRAPH = 'default';
       await new LinkedServer({} as any).initStores();
       expect(inits).toBe(1);
-      expect(store.graphTargets().ontologyGraph).toBe('default');
+      expect(getGraphTargets().ontologyGraph).toBe('default');
     } finally {
       if (saved === undefined) delete process.env.LINKED_ONTOLOGY_GRAPH;
       else process.env.LINKED_ONTOLOGY_GRAPH = saved;

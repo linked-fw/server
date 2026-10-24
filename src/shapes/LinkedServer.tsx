@@ -202,7 +202,7 @@ import {
   syncOntologiesThenShapes,
   type OntologyPhaseResult,
 } from '../utils/ontologySync.js';
-import { applyGraphTargetsFromEnv } from '../utils/graphTargets.js';
+import { applyGraphTargetsFromEnv, syncPinWarning } from '../utils/graphTargets.js';
 import {
   AdminRequestError,
   assertReloadablePackages,
@@ -496,6 +496,7 @@ export class LinkedServer extends Shape {
 
     await this.initBackendProviders();
 
+    this.warnOfSyncPins();
     await this.syncOntologiesOnBoot();
     await this.materializeShapesIntoStore();
     return this;
@@ -566,6 +567,16 @@ export class LinkedServer extends Shape {
     if (known) return known;
     const installed = readInstalledPackage(name, process.cwd());
     return installed?.root;
+  }
+
+  /**
+   * Boot: one warning when routing pins the shape shapes or the ontology term shapes to a dataset
+   * other than the default one, since the syncs write into the default dataset only (see
+   * {@link syncPinWarning}).
+   */
+  private warnOfSyncPins(): void {
+    const warning = syncPinWarning();
+    if (warning) console.warn(warning);
   }
 
   /**
@@ -836,6 +847,7 @@ export class LinkedServer extends Shape {
     // before controllers
     await this.initBackendProviders();
 
+    this.warnOfSyncPins();
     await this.syncOntologiesOnBoot();
     await this.materializeShapesIntoStore();
 
@@ -990,11 +1002,11 @@ export class LinkedServer extends Shape {
    * @todo Check if default file store is set, if not, set it
    */
   async initStores() {
-    // LINKED_ONTOLOGY_GRAPH / LINKED_SHAPE_GRAPH: checked (an invalid value stops the boot) and
-    // filled into every store that takes graph targets, before anything reads or syncs.
+    // LINKED_ONTOLOGY_GRAPH / LINKED_SHAPE_GRAPH: checked (an invalid value stops the boot) and set
+    // once as core's global graph targets, before any store is initialised and before the syncs.
     // A rejected boot does not end the process by itself, so the error is fatal.
     try {
-      applyGraphTargetsFromEnv(process.env, LinkedStorage.getDatasets());
+      applyGraphTargetsFromEnv(process.env);
     } catch (err) {
       throw new FatalStartupError(`[LinkedServer] ${(err as Error)?.message ?? err}`, { cause: err });
     }

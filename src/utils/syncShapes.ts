@@ -49,7 +49,7 @@ export interface ShapeGraphSyncResult {
   cleaned: number;
   appGraph?: 'written' | 'skipped' | 'dropped';
   defaultGraph?: number;
-  /** The store's `shapeGraph` target the run wrote in (core ≥ 2.41): `'package'`, `'default'` or an IRI. */
+  /** The global `shapeGraph` target the run wrote in (core ≥ 2.41): `'package'`, `'default'` or an IRI. */
   target?: string;
   /** Set when a store without graph queries took the default-graph sync instead of `target`. */
   fallback?: true;
@@ -184,11 +184,11 @@ export interface ShapeGraphsReport {
   /** Shapes an earlier sync had written into the default graph, removed now. */
   cleaned: number;
   /**
-   * Set when the shapes went into the default graph (the store's `shapeGraph` is `'default'`, or
+   * Set when the shapes went into the default graph (the global `shapeGraph` is `'default'`, or
    * it has no graph queries): the default-graph sync's writes.
    */
   defaultGraph?: number;
-  /** The store's `shapeGraph` target (`'package'`, `'default'` or a shared graph IRI), when core reports it. */
+  /** The global `shapeGraph` target (`'package'`, `'default'` or a shared graph IRI), when core reports it. */
   target?: string;
   /** Set when the store has no graph queries, so the shapes went into the default graph instead of `target`. */
   fallback?: true;
@@ -280,7 +280,7 @@ export async function syncShapeGraphsInto(
   }
   const withoutTurtle = [...noFile, ...notGenerated].sort();
 
-  // A shared graph (the store's `shapeGraph` is an IRI) holds every package and the app's shapes.
+  // A shared graph (the global `shapeGraph` is an IRI) holds every package and the app's shapes.
   const shared = result.target && result.target !== 'package' && result.target !== 'default' ? result.target : undefined;
   const report: ShapeGraphsReport = {
     written: result.written,

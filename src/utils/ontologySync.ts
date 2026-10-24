@@ -214,7 +214,7 @@ export async function runOntologyPhase(
       const {graphs, droppedGraphs} = graphsWrittenAndDropped(ops.filter((op) => op.ok));
       result.ontologies = {written: sync.written, skipped: sync.skipped, graphs, droppedGraphs};
       hierarchyLoaded = true;
-      // Core ≥ 2.41 says where it wrote (the store's `ontologyGraph`); an older core is told
+      // Core ≥ 2.41 says where it wrote (the global `ontologyGraph`); an older core is told
       // apart by a write that sent no graph query.
       const where =
         sync.target === 'default'

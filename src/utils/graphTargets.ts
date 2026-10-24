@@ -1,58 +1,37 @@
 /**
- * Where the stores keep the registered packages' ontology data and shapes: core's graph targets
- * (`ontologyGraph`, `shapeGraph`; `@_linked/core/utils/graphTargets`), filled from the environment
- * at boot. `LINKED_ONTOLOGY_GRAPH` and `LINKED_SHAPE_GRAPH` each take `'package'` (the default, one
- * graph per package), `'default'` (the default graph) or the absolute IRI of one shared graph.
+ * Where the boot syncs keep the registered packages' ontology data and shapes: core's graph
+ * targets (`ontologyGraph`, `shapeGraph`; `@_linked/core/utils/graphTargets`), one global setting
+ * of the process. `LINKED_ONTOLOGY_GRAPH` and `LINKED_SHAPE_GRAPH` each take `'package'` (the
+ * default, one graph per package), `'default'` (the default graph) or the absolute IRI of one
+ * shared graph.
  *
- * The server reads them, checks them (an invalid value stops the boot, naming the variable), and
- * sets them on every store registered in `LinkedStorage` at boot that takes graph targets, for
- * what the store's own options leave unset. A store that takes none (`RemoteDataset`) runs `'package'`.
+ * The server reads them once at boot, checks them (an invalid value stops the boot, naming the
+ * variable) and calls core's `setGraphTargets` before the stores are initialised and before the
+ * syncs. No store takes a setting of its own, and the frontend needs none: its
+ * `.from(graphs.allOntologies)` reaches the backend as the portable name, and the backend's
+ * store expands it under this setting.
+ *
+ * The syncs write into the default dataset only. {@link syncPinWarning} names the shapes whose
+ * routing sends their reads elsewhere.
  */
 import {
   GRAPH_TARGET_ENV,
   graphTargetOptionsFromEnv,
+  setGraphTargets,
   type GraphTargets,
 } from '@_linked/core/utils/graphTargets';
-
-/** A store as this module sees it: one that may take graph targets. */
-type TargetStore = {
-  setGraphTargets?: (options: Partial<GraphTargets>, how?: {onlyUnset?: boolean}) => void;
-  constructor?: {name?: string};
-};
+import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
+import { getAllShapeClasses } from '@_linked/core/utils/ShapeClass';
+import type { IDataset } from '@_linked/core/interfaces/IDataset';
 
 /**
  * Read `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` from `env` (checked: an invalid value throws,
- * naming the variable) and fill every store in `stores` that takes graph targets with them, where
- * its own options leave a setting unset. A store that takes none gets one warning when the env sets
- * a mode other than `'package'` (it runs `'package'`). Returns the settings the env gave.
+ * naming the variable) and set them as the process's graph targets (core's `setGraphTargets`;
+ * unset ones are `'package'`). Returns the settings the env gave.
  */
-export function applyGraphTargetsFromEnv(
-  env: Record<string, string | undefined>,
-  stores: Iterable<unknown>,
-  warn: (message: string) => void = console.warn,
-): Partial<GraphTargets> {
+export function applyGraphTargetsFromEnv(env: Record<string, string | undefined>): Partial<GraphTargets> {
   const fromEnv = graphTargetOptionsFromEnv(env);
-  if (Object.keys(fromEnv).length === 0) return fromEnv;
-  const nonDefault = Object.values(fromEnv).some((value) => value !== 'package');
-  for (const store of stores) {
-    const target = store as TargetStore | null | undefined;
-    if (typeof target?.setGraphTargets === 'function') {
-      try {
-        target.setGraphTargets(fromEnv, {onlyUnset: true});
-      } catch (error) {
-        throw new Error(
-          `${GRAPH_TARGET_ENV.ontologyGraph} / ${GRAPH_TARGET_ENV.shapeGraph} do not fit ` +
-            `${target.constructor?.name ?? 'a store'}'s own graph targets: ${(error as Error)?.message ?? error}`,
-        );
-      }
-    } else if (nonDefault) {
-      warn(
-        `[LinkedServer] ${target?.constructor?.name ?? 'a store'} takes no graph targets, so it runs ` +
-          `'package' for the ontology and shape graphs whatever ${GRAPH_TARGET_ENV.ontologyGraph} / ` +
-          `${GRAPH_TARGET_ENV.shapeGraph} set.`,
-      );
-    }
-  }
+  setGraphTargets(fromEnv);
   return fromEnv;
 }
 
@@ -64,4 +43,63 @@ export function graphTargetEnv(env: Record<string, string | undefined>): Record<
     if (value) out[name] = value;
   }
   return out;
+}
+
+const SH = 'http://www.w3.org/ns/shacl#';
+const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
+const RDFS = 'http://www.w3.org/2000/01/rdf-schema#';
+const OWL = 'http://www.w3.org/2002/07/owl#';
+
+/** The classes of the shape shapes: what the shape sync writes. */
+export const SHAPE_SHAPE_CLASSES: readonly string[] = [`${SH}NodeShape`, `${SH}PropertyShape`];
+
+/**
+ * The classes of the ontology term shapes (the class and property shapes core, `@_linked/rdfs`
+ * and `@_linked/owl` register): what the ontology sync writes and the hierarchy reads.
+ */
+export const ONTOLOGY_TERM_CLASSES: readonly string[] = [
+  `${RDFS}Class`,
+  `${OWL}Class`,
+  `${RDF}Property`,
+  `${OWL}ObjectProperty`,
+  `${OWL}DatatypeProperty`,
+  `${OWL}AnnotationProperty`,
+];
+
+/** A dataset as `GET /admin/routes` tells it apart: its store class, and its `id` when it has one. */
+function datasetName(dataset: IDataset): string {
+  const id = (dataset as { id?: unknown }).id;
+  const store = dataset?.constructor?.name || 'unknown';
+  return typeof id === 'string' && id ? `${store} "${id}"` : store;
+}
+
+/**
+ * One warning when routing pins a shape the boot syncs write (the shape shapes `NodeShape` /
+ * `PropertyShape`, or an ontology term shape such as `rdfs:Class` / `owl:ObjectProperty`) to a
+ * dataset other than the default one: the syncs write into the default dataset only, so reads of
+ * those shapes on the pinned dataset miss what they wrote. Names each such shape and its dataset.
+ * Undefined when there is nothing to warn about (or no default dataset).
+ */
+export function syncPinWarning(): string | undefined {
+  const defaultDataset = LinkedStorage.getDefaultDataset();
+  if (!defaultDataset) return undefined;
+  const watched = new Set([...SHAPE_SHAPE_CLASSES, ...ONTOLOGY_TERM_CLASSES]);
+  const pinned = new Map<IDataset, string[]>();
+  for (const [iri, shapeClass] of getAllShapeClasses()) {
+    const targetClass = (shapeClass as { targetClass?: { id?: unknown } }).targetClass?.id;
+    if (typeof targetClass !== 'string' || !watched.has(targetClass)) continue;
+    const dataset = LinkedStorage.getDatasetForShapeClass(shapeClass);
+    if (!dataset || dataset === defaultDataset) continue;
+    const list = pinned.get(dataset) ?? [];
+    list.push(`${shapeClass.name || iri} (${targetClass})`);
+    pinned.set(dataset, list);
+  }
+  if (pinned.size === 0) return undefined;
+  const parts = [...pinned].map(([dataset, shapes]) => `${shapes.sort().join(', ')} → ${datasetName(dataset)}`);
+  return (
+    `[LinkedServer] Routing pins shapes the boot syncs write to a dataset other than the default ` +
+    `one: ${parts.join('; ')}. The ontology and shape syncs write into the default dataset ` +
+    `(${datasetName(defaultDataset)}) only, so reads of these shapes on the pinned dataset do not ` +
+    `see what the syncs wrote.`
+  );
 }
