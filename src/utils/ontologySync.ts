@@ -25,7 +25,7 @@
  * this server depends on has all of them. Kept apart from `LinkedServer` so the order and the failure handling can be tested without
  * booting a server.
  */
-import type {BootOrphanScope} from './syncShapes.js';
+import {writtenAndUnchanged, type BootOrphanScope} from './syncShapes.js';
 
 /** The subset of core's ontology and shape-check API this module calls. */
 export interface OntologyCore {
@@ -226,7 +226,7 @@ export async function runOntologyPhase(
               : '';
       log(
         `[LinkedServer] ontology sync${where}: ` +
-          `written ${list(sync.written)}; skipped ${list(sync.skipped)}` +
+          writtenAndUnchanged(sync.written, sync.skipped) +
           (orphanScope === 'all' ? `; pruned ${list(sync.pruned)}` : '') +
           (graphs.length ? `; graphs written ${list(graphs)}` : '') +
           (droppedGraphs.length ? `; graphs dropped ${list(droppedGraphs)}` : ''),
@@ -250,7 +250,9 @@ export async function runOntologyPhase(
     const findings = await core.checkShapeHierarchy({dependencies});
     const errors = findings.filter((f) => f.severity === 'error').length;
     result.shapeCheck = {errors, warnings: findings.length - errors};
-    log(`[LinkedServer] shape check: ${errors} error(s), ${findings.length - errors} warning(s)`);
+    if (findings.length) {
+      log(`[LinkedServer] shape check: ${errors} error(s), ${findings.length - errors} warning(s)`);
+    }
     for (const f of findings) warn(`[LinkedServer] shape check ${f.severity} (${f.kind}): ${f.message}`);
   } catch (err) {
     result.failure ??= asError(err);

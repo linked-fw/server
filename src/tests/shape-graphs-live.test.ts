@@ -213,7 +213,7 @@ describeLive('[fuseki] shape graphs at boot and on the control channel', () => {
     const builtGraph = ShapesGraph.iriFor(BUILT);
     const ownGraph = ShapesGraph.iriFor(OWN);
     expect(firstLine).toBe(
-      `[LinkedServer] shape graph sync: written ${BUILT}, ${OWN}; skipped none; app graph written; ` +
+      `[LinkedServer] shape graph sync: written ${BUILT}, ${OWN}; app graph written; ` +
         `graphs written ${builtGraph}, ${ownGraph}, ${APP_GRAPH}; 1 default-graph shape(s) removed; ` +
         `no shapes.ttl (no shape graph): @_linked/core, @_linked/server, ${BARE}`,
     );
@@ -243,7 +243,7 @@ describeLive('[fuseki] shape graphs at boot and on the control channel', () => {
     const secondMs = await boot();
     const secondLine = lines.find((l) => l.includes('shape graph sync'));
     expect(secondLine).toBe(
-      `[LinkedServer] shape graph sync: written none; skipped ${BUILT}, ${OWN}; app graph skipped; ` +
+      `[LinkedServer] shape graph sync: 2 unchanged; app graph unchanged; ` +
         `no shapes.ttl (no shape graph): @_linked/core, @_linked/server, ${BARE}`,
     );
     expect(store.updates - before).toBe(0);

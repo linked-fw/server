@@ -572,10 +572,14 @@ export class LinkedServer extends Shape {
   /**
    * Boot: one warning when routing pins the shape shapes or the ontology term shapes to a dataset
    * other than the default one, since the syncs write into the default dataset only (see
-   * {@link syncPinWarning}).
+   * {@link syncPinWarning}). Only for the syncs this boot runs.
    */
   private warnOfSyncPins(): void {
-    const warning = syncPinWarning();
+    const flag = (this.config as any)?.syncShapesOnBoot;
+    const warning = syncPinWarning({
+      shapeSync: shapeSyncOn(process.env, flag),
+      ontologySync: bootSyncsOntologies(process.env, flag),
+    });
     if (warning) console.warn(warning);
   }
 

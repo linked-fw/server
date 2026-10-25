@@ -231,11 +231,25 @@ describe('runOntologyPhase', () => {
     });
     expect(result.shapeCheck).toEqual({ errors: 1, warnings: 2 });
     expect(lines).toEqual([
-      `[LinkedServer] ontology sync: written @x/a; skipped @x/b; graphs written ${GA}`,
+      `[LinkedServer] ontology sync: written @x/a; 1 unchanged; graphs written ${GA}`,
       '[LinkedServer] shape check: 1 error(s), 2 warning(s)',
     ]);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('error (extends-without-subclass): sC extends sD');
+  });
+
+  it('logs nothing for a clean shape check', async () => {
+    const { core } = fakeCore();
+    const lines: string[] = [];
+    const result = await runOntologyPhase({}, {
+      core,
+      sync: true,
+      orphanScope: 'none',
+      log: (m) => lines.push(m),
+      warn: () => {},
+    });
+    expect(result.shapeCheck).toEqual({ errors: 0, warnings: 0 });
+    expect(lines).toEqual([`[LinkedServer] ontology sync: written @x/a; 1 unchanged; graphs written ${GA}`]);
   });
 });
 
@@ -439,7 +453,7 @@ describe('runOntologyPhase: the graphs the sync wrote', () => {
     expect(result.ontologies.graphs).toEqual([GA, GB]);
     expect(result.ontologies.droppedGraphs).toEqual([GOLD]);
     expect(lines[0]).toBe(
-      `[LinkedServer] ontology sync: written @x/a; skipped @x/b; pruned none; graphs written ${GA}, ${GB}; graphs dropped ${GOLD}`,
+      `[LinkedServer] ontology sync: written @x/a; 1 unchanged; pruned none; graphs written ${GA}, ${GB}; graphs dropped ${GOLD}`,
     );
     expect(seen.unobserved).toBe(true);
   });
@@ -450,7 +464,7 @@ describe('runOntologyPhase: the graphs the sync wrote', () => {
     const result = await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
     expect(result.ontologies).toEqual({ written: ['@x/a'], skipped: ['@x/b'], graphs: [], droppedGraphs: [] });
     expect(lines[0]).toBe(
-      '[LinkedServer] ontology sync (default graph: the store has no graph queries): written @x/a; skipped @x/b',
+      '[LinkedServer] ontology sync (default graph: the store has no graph queries): written @x/a; 1 unchanged',
     );
   });
 

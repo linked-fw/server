@@ -65,6 +65,8 @@ describe('GET /admin/routes reports the graph targets', () => {
   });
 });
 
+const BOTH = { shapeSync: true, ontologySync: true };
+
 describe('the sync pin warning', () => {
   it('names the shape shapes pinned to another dataset, and is silent without such a pin', () => {
     const appData = new (Store as any)();
@@ -73,9 +75,9 @@ describe('the sync pin warning', () => {
     const before = LinkedStorage.getDefaultDataset();
     LinkedStorage.setDefaultDataset(appData);
     try {
-      expect(syncPinWarning()).toBeUndefined();
+      expect(syncPinWarning(BOTH)).toBeUndefined();
       LinkedStorage.setDatasetForShapes(shapes, NodeShape, PropertyShape);
-      const warning = syncPinWarning();
+      const warning = syncPinWarning(BOTH);
       expect(warning).toContain('NodeShape (http://www.w3.org/ns/shacl#NodeShape)');
       expect(warning).toContain('PropertyShape (http://www.w3.org/ns/shacl#PropertyShape)');
       expect(warning).toContain('→ Other "shapes"');
@@ -85,7 +87,42 @@ describe('the sync pin warning', () => {
       LinkedStorage.unsetDatasetForShape?.(PropertyShape);
       if (before) LinkedStorage.setDefaultDataset(before);
     }
-    expect(syncPinWarning()).toBeUndefined();
+    expect(syncPinWarning(BOTH)).toBeUndefined();
+  });
+
+  it('is silent for the shapes of a sync the boot does not run', () => {
+    const appData = new (Store as any)();
+    const shapes = new (Other as any)();
+    const before = LinkedStorage.getDefaultDataset();
+    LinkedStorage.setDefaultDataset(appData);
+    try {
+      LinkedStorage.setDatasetForShapes(shapes, NodeShape, PropertyShape);
+      expect(syncPinWarning({ shapeSync: false, ontologySync: false })).toBeUndefined();
+      // the ontology sync alone does not write the shape shapes
+      expect(syncPinWarning({ shapeSync: false, ontologySync: true })).toBeUndefined();
+      const warning = syncPinWarning({ shapeSync: true, ontologySync: false });
+      expect(warning).toContain('NodeShape (http://www.w3.org/ns/shacl#NodeShape)');
+      expect(warning).toContain('The shape sync writes into the default dataset (Store) only');
+    } finally {
+      LinkedStorage.unsetDatasetForShape?.(NodeShape);
+      LinkedStorage.unsetDatasetForShape?.(PropertyShape);
+      if (before) LinkedStorage.setDefaultDataset(before);
+    }
+  });
+
+  it('names a store without an id by the dataset of its endpoint', () => {
+    const appData = new (Store as any)();
+    const shapes = new (Other as any)();
+    shapes.dataset = 'cn-main';
+    const before = LinkedStorage.getDefaultDataset();
+    LinkedStorage.setDefaultDataset(appData);
+    try {
+      LinkedStorage.setDatasetForShapes(shapes, NodeShape);
+      expect(syncPinWarning(BOTH)).toContain('→ Other "cn-main"');
+    } finally {
+      LinkedStorage.unsetDatasetForShape?.(NodeShape);
+      if (before) LinkedStorage.setDefaultDataset(before);
+    }
   });
 
   it('names an ontology term shape and its sub-shapes, pinned through the parent', async () => {
@@ -105,7 +142,7 @@ describe('the sync pin warning', () => {
     LinkedStorage.setDefaultDataset(appData);
     try {
       LinkedStorage.setDatasetForShapes(ontology, TermClass as any);
-      const warning = syncPinWarning();
+      const warning = syncPinWarning(BOTH);
       expect(warning).toContain('TermClass (http://www.w3.org/2002/07/owl#Class)');
       expect(warning).toContain('TermRestriction (http://www.w3.org/2002/07/owl#Class)');
       expect(warning).toContain('→ Other');
