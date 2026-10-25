@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 3.12.1
+
+### Patch Changes
+
+- [#214](https://github.com/linked-fw/server/pull/214) [`654a3c2`](https://github.com/linked-fw/server/commit/654a3c2941ef49e317dd2ba58324f0221e894ca3) Thanks [@flyon](https://github.com/flyon)! - License: MIT (data under its original license)
+
 ## 3.12.0
 
 ### Minor Changes
