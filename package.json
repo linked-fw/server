@@ -16,11 +16,12 @@
   "type": "module",
   "main": "lib/esm/index.js",
   "types": "index.d.ts",
-  "license": "ISC",
+  "license": "MIT",
   "files": [
     "lib",
     "styles",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "scripts": {
     "start": "npm exec linked dev",
