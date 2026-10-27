@@ -469,6 +469,16 @@ describe('RemoteDataset url form: the user token', () => {
     expect(seen).toHaveLength(0);
   });
 
+  it('never follows a redirect: the 3xx is the answer, an error', async () => {
+    installHook();
+    const calls = stubFetch(() => new Response(null, { status: 307, headers: { location: 'https://elsewhere.test/q' } }));
+    const err = await runWithCallContext(signedIn(SID), () => caught(store().askQuery(AskBuilder.forNode(IRI))));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.redirect).toBe('manual');
+    expect(err).toBeInstanceOf(RemoteDatasetError);
+    expect(err.status).toBe(307);
+  });
+
   it('no error message contains the user token or the proof', async () => {
     installHook();
     stubFetch(() => jsonResponse(401, { error: 'invalid user token', code: 'invalid-user-token' }));

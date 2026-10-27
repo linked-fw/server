@@ -492,6 +492,9 @@ export class RemoteDataset implements IDataset {
         method: 'POST',
         headers,
         body: JSON.stringify({ args }),
+        // A redirect is an answer, never followed: the bearer and the user's token and proof
+        // go to the data server at `url` and nowhere else.
+        redirect: 'manual',
       });
     } catch (err) {
       const cause = err instanceof Error ? err.message : String(err);

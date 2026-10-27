@@ -377,6 +377,8 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
   > ```json
   > "config": { "url": "${DATA_SERVER_URL:-}", "token": "${DATA_SERVER_TOKEN:-}", "forwardUserToken": false }
   > ```
+- A redirect is never followed (`redirect: 'manual'`): a 3xx answer is a `RemoteDatasetError`
+  with its status, so the bearer and the user's token go to `url` only.
 - Trailing slashes are trimmed from `url`. A `url` that is present but empty (an unset
   `${DATA_SERVER_URL:-}`) never falls back to the no-url form: `init()` and every method throw
   `RemoteDatasetUnreachableError` with `url: ''`.
