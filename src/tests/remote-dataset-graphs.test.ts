@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 process.env.SITE_ROOT ??= 'http://app.test:4000';
 const { Server } = await import('@_linked/server-utils/utils/Server');
-const { RemoteDataset, RemoteDatasetUnauthorizedError, END_USER_HEADER } = await import(
+const { RemoteDataset, RemoteDatasetUnauthorizedError, USER_TOKEN_HEADER, USER_TOKEN_HEADERS_HOOK } = await import(
   '../shapes/quadstores/RemoteDataset.js'
 );
 const { runWithCallContext } = await import('@_linked/server-utils/utils/CallContext');
@@ -93,20 +93,23 @@ const replace = {
 };
 
 describe('RemoteDataset.graphQuery', () => {
-  it('posts the graph query as is, with the token and the end user, and resolves the result', async () => {
+  it("posts the graph query as is, with the token and the user's token, and resolves the result", async () => {
     const plane = stubPlane({ ontology: [], shapes: [] });
     const ds = new RemoteDataset({ url: URL_BASE, token: TOKEN });
+    const hooks = globalThis as unknown as Record<symbol, unknown>;
+    hooks[USER_TOKEN_HEADERS_HOOK] = async () => ({ [USER_TOKEN_HEADER]: 'user-at', DPoP: 'proof' });
     const result = await runWithCallContext(
-      { kind: 'http', request: { linkedAuth: { userAccount: { accountOf: { id: 'https://u.test/me' } } } } } as any,
+      { kind: 'http', request: { linkedAuth: { sid: 's1' } } } as any,
       () => ds.graphQuery(replace),
-    );
+    ).finally(() => delete hooks[USER_TOKEN_HEADERS_HOOK]);
     expect(result).toEqual({ graph: G_A, changed: true, contentHash: 'h' });
     const [call] = plane.calls;
     expect(call.url).toBe(`${URL_BASE}/call/${packageName}/graphQuery`);
     expect(sent(call)).toEqual({ args: [replace] });
     const headers = call.init.headers as Record<string, string>;
     expect(headers.Authorization).toBe(`Bearer ${TOKEN}`);
-    expect(headers[END_USER_HEADER]).toBe('https://u.test/me');
+    expect(headers[USER_TOKEN_HEADER]).toBe('user-at');
+    expect(headers.DPoP).toBe('proof');
   });
 
   it('turns a refusal with a graph code into a GraphQueryError with that code', async () => {

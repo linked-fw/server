@@ -323,7 +323,7 @@ export interface RemoteDatasetConfig {
   token?: string; // sent as Authorization: Bearer <token> when set and url is set
   name?: string;  // id = ${DATA_ROOT}/backend-api-store/<name>; does not affect routing
   id?: string;
-  forwardEndUser?: boolean | string; // url form: send the signed-in user's WebID (default true)
+  forwardUserToken?: boolean | string; // url form: send the signed-in user's access token (default true)
 }
 ```
 
@@ -353,21 +353,29 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
   `deleteQuery`) with `Content-Type` and `Accept` set to `application/json` and, when `token` is
   non-empty, `Authorization: Bearer <token>`. It resolves the parsed body; `null` is a valid
   result. Nothing is retried, so a write is never applied twice.
-- **The end user.** When the query is made while a signed-in user's HTTP request is being
-  answered (the call context is `http` and its request has
-  `linkedAuth.userAccount.accountOf.id`), the post also carries `x-linked-end-user: <WebID>`
-  (exported as `END_USER_HEADER`). A system context (`runAsSystem`), an anonymous request and
-  code outside any call send no such header. The token still decides which data the store
-  reaches; the data server decides what to do with the end user. `forwardEndUser: false` (or the
-  string `"false"`) turns it off. No other headers are sent.
+- **The user's token.** When the query is made while a signed-in user's HTTP request is being
+  answered (the call context is `http`), the post asks the hook on
+  `globalThis[Symbol.for('@_linked/auth:userTokenHeaders')]` (exported as
+  `USER_TOKEN_HEADERS_HOOK`; `@_linked/auth`'s backend installs it) with the request and
+  `{method: 'POST', url}` (the exact URL posted to). When it answers, the post also carries
+  `x-linked-user-token: <the user's Solid-OIDC access token>` (exported as `USER_TOKEN_HEADER`) and
+  `DPoP: <a proof for this one request>`, beside the bearer. auth answers for a session signed in
+  through an issuer that gave a DPoP-bound JWT access token (webid.email does), while the token has
+  more than 30 seconds left; other sessions, a system context (`runAsSystem`), an anonymous request
+  and code outside any call send neither. A hook that throws or answers something else sends
+  neither (one warning per process) and the query still goes. The token still decides which data
+  the store reaches; the data server verifies the user's token and proof (`@_linked/auth`'s
+  `verifySolidAccessToken`) and acts as that user. `forwardUserToken: false` (or the string
+  `"false"`) turns it off. No other headers are sent.
 
-  > **Warning: on by default.** Every query of a signed-in user's request sends that user's WebID
-  > to the data server at `url`. Point `url` only at a server you would give your users'
-  > identities to (for an app CN hosts, CN's gateway). To send none, set it off in the dataset's
-  > config:
+  > **Warning: on by default.** Every query of a signed-in user's request sends that user's access
+  > token to the data server at `url`. Each proof is for one method and URL and the server cannot
+  > make new ones (the key stays with the app), but it learns who the user is. Point `url` only at
+  > a server you trust with your users' identities (for an app CN hosts, CN's gateway). To send
+  > none, set it off in the dataset's config:
   >
   > ```json
-  > "config": { "url": "${DATA_SERVER_URL:-}", "token": "${DATA_SERVER_TOKEN:-}", "forwardEndUser": false }
+  > "config": { "url": "${DATA_SERVER_URL:-}", "token": "${DATA_SERVER_TOKEN:-}", "forwardUserToken": false }
   > ```
 - Trailing slashes are trimmed from `url`. A `url` that is present but empty (an unset
   `${DATA_SERVER_URL:-}`) never falls back to the no-url form: `init()` and every method throw
