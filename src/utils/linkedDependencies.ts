@@ -21,12 +21,40 @@ export interface LinkedDependency {
   copies: { path: string; version?: string }[];
 }
 
+// linkedKind: twin of @_linked/cli src/installed-packages.ts, keep byte-identical.
+/** What a `package.json` is, by its `linked.kind`. */
+export type LinkedKind = 'app' | 'ontology' | 'assets' | 'library';
+
+/** Every value `linked.kind` may take. */
+export const LINKED_KINDS: readonly LinkedKind[] = [
+  'app',
+  'ontology',
+  'assets',
+  'library',
+];
+
 /**
- * A package whose backend providers the server loads at boot: one whose
- * package.json declares `"linkedPackage": true`. That flag is the only test —
+ * THE way to tell what a `package.json` is: its `"linked": {"kind": …}`. `app` is an app (built
+ * by `linked build-app`); `ontology`, `assets` and `library` are linked packages (an ontology
+ * package may carry shapes for its own terms; `library` is framework code). Undefined for
+ * anything else: no `linked` object, a kind that is not one of these, and the retired
+ * `linkedPackage` / `linkedApp` flags, which are not read.
+ */
+export function linkedKind(json: unknown): LinkedKind | undefined {
+  if (!json || typeof json !== 'object') return undefined;
+  const linked: unknown = (json as {linked?: unknown}).linked;
+  if (!linked || typeof linked !== 'object') return undefined;
+  const kind: unknown = (linked as {kind?: unknown}).kind;
+  return LINKED_KINDS.find((k) => k === kind);
+}
+// end of the linkedKind twin.
+
+/**
+ * A package whose backend providers the server loads at boot: a named package
+ * whose `linked.kind` is not `app` ({@link linkedKind}). That is the only test —
  * not the package's scope. `@_linked/localize` is in the `@_linked` scope and
- * is a CLI tool, not a linked package; a custom-scope package with the flag is
- * a linked package. The CLI's workspace discovery uses the same flag.
+ * is a CLI tool, not a linked package; a custom-scope package with a kind is
+ * a linked package. The CLI's workspace discovery uses the same test.
  *
  * The legacy `"lincd": true` flag is deliberately NOT enough. Those packages
  * import the old `lincd` core, and loading them at boot is what produced
@@ -35,7 +63,8 @@ export interface LinkedDependency {
  */
 export function isLinkedPackageJson(json: any): boolean {
   if (!json || typeof json.name !== 'string') return false;
-  return json.linkedPackage === true;
+  const kind = linkedKind(json);
+  return kind !== undefined && kind !== 'app';
 }
 
 /**
@@ -105,10 +134,15 @@ export function readInstalledPackage(
  * is the one the app itself resolves, so it is the same module instance the
  * app's own imports reach; when the app cannot resolve the package at all
  * (it is only installed nested) it is the first copy found.
+ *
+ * `isLinked` decides which installed packages are linked ones (default
+ * {@link isLinkedPackageJson}); a caller reading installs of another
+ * generation passes its own.
  */
 export function discoverLinkedDependencies(
   appDir: string,
-  appPackageJson: any
+  appPackageJson: any,
+  isLinked: (json: any) => boolean = isLinkedPackageJson
 ): LinkedDependency[] {
   const out: LinkedDependency[] = [];
   const byName = new Map<string, LinkedDependency>();
@@ -118,7 +152,7 @@ export function discoverLinkedDependencies(
   const visit = (name: string, fromDir: string) => {
     if (name === appName) return;
     const installed = readInstalledPackage(name, fromDir);
-    if (!installed || !isLinkedPackageJson(installed.json)) return;
+    if (!installed || !isLinked(installed.json)) return;
     const realRoot = realpathOr(installed.root);
     if (visitedRoots.has(realRoot)) return;
     visitedRoots.add(realRoot);
@@ -143,7 +177,7 @@ export function discoverLinkedDependencies(
   for (const entry of out) {
     if (entry.copies.length < 2) continue;
     const fromApp = readInstalledPackage(entry.packageName, appDir);
-    if (fromApp && isLinkedPackageJson(fromApp.json)) {
+    if (fromApp && isLinked(fromApp.json)) {
       const appCopy = realpathOr(fromApp.root);
       if (entry.copies.some((c) => c.path === appCopy)) entry.path = appCopy;
     }

@@ -124,7 +124,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'server-shape-graphs-'));
 function packageDir(name: string, turtle?: string): string {
   const dir = path.join(tmp, name);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, version: '1.0.0', linkedPackage: true }));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, version: '1.0.0', linked: { kind: 'library' } }));
   if (turtle !== undefined) {
     fs.mkdirSync(path.join(dir, 'lib/esm/data'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'lib/esm/data/shapes.ttl'), turtle);

@@ -15,7 +15,7 @@ describe('hasModuleEntry', () => {
   });
 
   test('a pure-CSS package has no entry', () => {
-    expect(hasModuleEntry({name: '@_linked/css', linkedPackage: true})).toBe(false);
+    expect(hasModuleEntry({name: '@_linked/css', linked: {kind: 'library'}})).toBe(false);
     expect(hasModuleEntry({exports: {'./*.css': './src/*.css'}})).toBe(false);
     expect(hasModuleEntry(undefined)).toBe(false);
   });

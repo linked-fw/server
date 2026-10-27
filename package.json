@@ -12,7 +12,6 @@
   },
   "version": "3.12.1",
   "packageManager": "npm@12.2.0",
-  "linkedPackage": true,
   "type": "module",
   "main": "lib/esm/index.js",
   "types": "index.d.ts",
@@ -91,6 +90,7 @@
     }
   },
   "linked": {
+    "kind": "library",
     "serverOnly": [
       ".",
       "./backend",

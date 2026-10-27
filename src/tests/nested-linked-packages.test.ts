@@ -48,7 +48,7 @@ function install(
       name,
       version: opts.version ?? '1.0.0',
       type: 'module',
-      linkedPackage: true,
+      linked: { kind: 'library' },
       main: 'lib/esm/index.js',
       exports: opts.exports ?? LINKED_EXPORTS,
       dependencies: opts.deps ?? {},

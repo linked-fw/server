@@ -395,7 +395,7 @@ export class LinkedServer extends Shape {
    * could not be loaded at all.
    */
   private linkedPackageDirs: Map<string, string> = new Map();
-  /** The app's own workspace packages (`linkedPackage: true`), by real path. */
+  /** The app's own workspace packages (`linked.kind` of a package), by real path. */
   private workspacePackageDirs: string[] = [];
   /** The names of the app's own workspace packages. */
   private workspacePackageNames: Set<string> = new Set();
