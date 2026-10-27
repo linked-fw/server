@@ -82,3 +82,7 @@ The hook is read from `globalThis`, as the call context is, so the store stays b
 works with two copies of `@_linked/auth` in one process. `RemoteDataset`'s ping (`init`) goes
 through `post` and so carries the user token when a request context has one; CN's gateway ignores
 it there.
+
+## Review addendum
+
+The review fixes of this step are in Create Now report 151 §Review addendum (`docs/reports/151-user-token-at-the-gateway.md`).
