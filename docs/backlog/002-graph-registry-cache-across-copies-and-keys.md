@@ -50,7 +50,7 @@ in `two-copies-built.test.ts` (core backlog 060). Fix with core's.
 ## 5. Review lows of report 013
 
 - **Whose identity reads the registry.** A url-form `RemoteDataset` reads the registry records
-  under whichever end user's request triggers the load (`forwardEndUser`) and caches the result
+  under whichever end user's request triggers the load (with their token, `forwardUserToken`) and caches the result
   for every user of the process. Records name graphs and packages, not data; whether the read
   should run as the service (no end user) is a design choice. A refused read leaves the names
   unexpanded, so nothing breaks.
