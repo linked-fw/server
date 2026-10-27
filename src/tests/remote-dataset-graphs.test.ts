@@ -156,7 +156,7 @@ describe('RemoteDataset.graphQuery', () => {
     expect(isGraphQueryError(err, 'graph-exists')).toBe(true);
   });
 
-  it('lets the ontology sync fall back to the default graph behind a gateway without graph queries', async () => {
+  it('makes the ontology sync refuse a gateway without graph queries, before it writes', async () => {
     const methods: string[] = [];
     (globalThis as any).fetch = async (input: any, init?: RequestInit) => {
       const call = { url: String(input), init: init ?? {} };
@@ -167,22 +167,19 @@ describe('RemoteDataset.graphQuery', () => {
     };
     const { linkedPackage } = await import('@_linked/core/utils/Package');
     const { createNameSpace } = await import('@_linked/core/utils/NameSpace');
-    linkedPackage('remote-graph-fallback-test').linkedOntology(
+    linkedPackage('remote-graph-refused-test').linkedOntology(
       {},
-      createNameSpace('http://example.org/fallback/'),
-      'fallback',
-      async () => ['<http://example.org/fallback/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/fallback/A> .'],
-      '../data/fallback.ttl',
+      createNameSpace('http://example.org/refused/'),
+      'refused',
+      async () => ['<http://example.org/refused/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/refused/A> .'],
+      '../data/refused.ttl',
     );
-    const result = await syncOntologies(new RemoteDataset({ url: URL_BASE }), {
-      packages: ['remote-graph-fallback-test'],
-    });
-    expect(result.written).toEqual(['remote-graph-fallback-test']);
+    await expect(
+      syncOntologies(new RemoteDataset({ url: URL_BASE }), { packages: ['remote-graph-refused-test'] }),
+    ).rejects.toThrow(/has no graph queries/);
+    // The refused graph query was the probe's; the sync wrote nothing with ordinary queries.
     expect(methods).toContain('graphQuery');
-    // The default-graph sync wrote the hierarchy with ordinary queries after the refusal.
-    expect(methods.slice(methods.indexOf('graphQuery') + 1)).toEqual(
-      expect.arrayContaining(['updateQuery']),
-    );
+    expect(methods).not.toContain('updateQuery');
   });
 });
 

@@ -32,7 +32,7 @@ export interface OntologyCore {
   syncOntologies(
     ds: unknown,
     options: {orphanScope: BootOrphanScope},
-  ): Promise<{written: string[]; skipped: string[]; pruned: string[]; target?: string; fallback?: true}>;
+  ): Promise<{written: string[]; skipped: string[]; pruned: string[]; target?: string}>;
   checkShapeHierarchy(options: {dependencies?: Record<string, string[]>}): Promise<
     Array<{kind: string; severity: 'error' | 'warning'; shape?: string; iri?: string; message: string}>
   >;
@@ -214,16 +214,14 @@ export async function runOntologyPhase(
       const {graphs, droppedGraphs} = graphsWrittenAndDropped(ops.filter((op) => op.ok));
       result.ontologies = {written: sync.written, skipped: sync.skipped, graphs, droppedGraphs};
       hierarchyLoaded = true;
-      // Core ≥ 2.41 says where it wrote (the global `ontologyGraph`); an older core is told
-      // apart by a write that sent no graph query.
+      // Core says where it wrote (the global `ontologyGraph`). A store without graph queries makes
+      // the sync throw in the 'package' and shared modes, reported below as a failed sync.
       const where =
         sync.target === 'default'
           ? " (default graph: ontologyGraph is 'default')"
-          : sync.fallback || (sync.target === undefined && !!stop && sync.written.length > 0 && graphs.length === 0)
-            ? ' (default graph: the store has no graph queries)'
-            : sync.target && sync.target !== 'package'
-              ? ` (one shared graph <${sync.target}>)`
-              : '';
+          : sync.target && sync.target !== 'package'
+            ? ` (one shared graph <${sync.target}>)`
+            : '';
       log(
         `[LinkedServer] ontology sync${where}: ` +
           writtenAndUnchanged(sync.written, sync.skipped) +

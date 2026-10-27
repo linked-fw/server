@@ -27,7 +27,7 @@ function fakeCore({
   withRegister = true,
   registerFails = false,
   graphQueries = [{ kind: 'graph_replace', graph: GA }] as Array<{ kind: string; graph: string; fails?: boolean }>,
-  where = {} as { target?: string; fallback?: true },
+  where = {} as { target?: string },
 } = {}) {
   const calls: string[] = [];
   const seen: {
@@ -270,21 +270,18 @@ describe('graphsWrittenAndDropped', () => {
 });
 
 describe('runOntologyPhase: where the sync wrote', () => {
-  const run = async (where: { target?: string; fallback?: true }, graphQueries: Array<{ kind: string; graph: string }>) => {
+  const run = async (where: { target?: string }, graphQueries: Array<{ kind: string; graph: string }>) => {
     const { core } = fakeCore({ where, graphQueries });
     const lines: string[] = [];
     await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
     return lines[0];
   };
 
-  it("names the default graph of ontologyGraph 'default', a shared graph, and the fallback", async () => {
+  it("names the default graph of ontologyGraph 'default' and a shared graph", async () => {
     expect(await run({ target: 'default' }, [])).toMatch(/^\[LinkedServer\] ontology sync \(default graph: ontologyGraph is 'default'\): written @x\/a/);
     const shared = 'https://data.example.org/graph/ontology';
     expect(await run({ target: shared }, [{ kind: 'graph_replace', graph: shared }])).toContain(
       `ontology sync (one shared graph <${shared}>): written @x/a`,
-    );
-    expect(await run({ target: 'package', fallback: true }, [])).toContain(
-      'ontology sync (default graph: the store has no graph queries)',
     );
     expect(await run({ target: 'package' }, [{ kind: 'graph_replace', graph: GA }])).toMatch(/^\[LinkedServer\] ontology sync: written/);
   });
@@ -456,16 +453,6 @@ describe('runOntologyPhase: the graphs the sync wrote', () => {
       `[LinkedServer] ontology sync: written @x/a; 1 unchanged; pruned none; graphs written ${GA}, ${GB}; graphs dropped ${GOLD}`,
     );
     expect(seen.unobserved).toBe(true);
-  });
-
-  it('says so when packages were written without a graph query (a store without graph queries)', async () => {
-    const { core } = fakeCore({ graphQueries: [] });
-    const lines: string[] = [];
-    const result = await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
-    expect(result.ontologies).toEqual({ written: ['@x/a'], skipped: ['@x/b'], graphs: [], droppedGraphs: [] });
-    expect(lines[0]).toBe(
-      '[LinkedServer] ontology sync (default graph: the store has no graph queries): written @x/a; 1 unchanged',
-    );
   });
 
   it('stops observing when the sync fails', async () => {
