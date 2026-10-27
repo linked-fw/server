@@ -23,6 +23,7 @@ const GA = 'https://linked.cm/pkg/x-a/graph/ontology';
 function fakeCore({
   syncFails = false,
   findings = [] as Finding[],
+  checkFails = false,
   withHierarchy = true,
   withRegister = true,
   registerFails = false,
@@ -62,6 +63,7 @@ function fakeCore({
     async checkShapeHierarchy(options) {
       calls.push('check');
       seen.checkOptions = options;
+      if (checkFails) throw new Error('check bug');
       return findings;
     },
     loadOntologyHierarchy: withHierarchy
@@ -213,6 +215,22 @@ describe('runOntologyPhase', () => {
     expect(warnings[0]).toContain('ontology sync failed');
   });
 
+  it('reports a shape check that throws in shapeCheck, not as the phase failure', async () => {
+    const { core, calls } = fakeCore({ checkFails: true });
+    const warnings: string[] = [];
+    const result = await runOntologyPhase({}, {
+      core,
+      sync: true,
+      orphanScope: 'none',
+      log: () => {},
+      warn: (m) => warnings.push(m),
+    });
+    expect(calls).toEqual(['sync', 'check']);
+    expect(result.failure).toBeUndefined();
+    expect(result.shapeCheck).toEqual({ errors: 0, warnings: 0, failed: 'check bug' });
+    expect(warnings).toContain('[LinkedServer] shape check failed:');
+  });
+
   it('counts the findings by severity and logs each one', async () => {
     const findings: Finding[] = [
       { kind: 'extends-without-subclass', severity: 'error', message: 'sC extends sD' },
@@ -325,6 +343,19 @@ describe('syncOntologiesThenShapes (the host re-sync)', () => {
       )
     ).rejects.toThrow('store unreachable');
     expect(shapesRan).toBe(true);
+  });
+
+  it('answers with a shape check that threw instead of failing, when both syncs succeeded', async () => {
+    const { core } = fakeCore({ checkFails: true });
+    const result = await syncOntologiesThenShapes(
+      () => runOntologyPhase({}, { core, sync: true, orphanScope: 'none', ...quiet }),
+      async () => ({ written: 1 })
+    );
+    expect(result).toEqual({
+      written: 1,
+      ontologies: { written: ['@x/a'], skipped: ['@x/b'], graphs: [GA], droppedGraphs: [] },
+      shapeCheck: { errors: 0, warnings: 0, failed: 'check bug' },
+    });
   });
 });
 

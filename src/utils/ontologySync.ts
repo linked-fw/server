@@ -56,6 +56,13 @@ export interface OntologyCore {
   ) => Promise<string[]>;
 }
 
+/** The shape check's findings by severity; `failed` holds the message of a check that threw. */
+export interface ShapeCheckSummary {
+  errors: number;
+  warnings: number;
+  failed?: string;
+}
+
 /** What the ontology sync and the shape check did, as `POST /admin/sync-shapes` reports it. */
 export interface OntologyPhaseResult {
   /**
@@ -64,9 +71,12 @@ export interface OntologyPhaseResult {
    * dropped (empty on a store without graph queries).
    */
   ontologies: {written: string[]; skipped: string[]; graphs?: string[]; droppedGraphs?: string[]};
-  /** The shape check's findings, counted by severity. */
-  shapeCheck: {errors: number; warnings: number};
-  /** The first error the sync or the check threw; the phase went on without it. */
+  /**
+   * The shape check's findings, counted by severity, and the message of the error the check
+   * threw, if it did (`failed`). A thrown check is reported here and never fails the phase.
+   */
+  shapeCheck: ShapeCheckSummary;
+  /** The error the ontology sync threw; the phase went on without it. */
   failure?: Error;
 }
 
@@ -148,8 +158,9 @@ const list = (names: string[]) => (names.length ? names.join(', ') : 'none');
 /**
  * Register the ontologies of the installed linked packages in `packageDirs` (package roots), sync
  * the registered ontologies into `ds` (when `sync` is set and there is a dataset), then run the
- * shape check. Never throws: a failed registration is logged and the phase goes on; a failed sync is logged and returned as `failure`, and the
- * check still runs; a failed check likewise. Logs one line for the sync, one summary line for
+ * shape check. Never throws: a failed registration is logged and the phase goes on; a failed sync
+ * is logged and returned as `failure`, and the check still runs; a check that throws is logged and
+ * returned as `shapeCheck.failed`. Logs one line for the sync, one summary line for
  * the check and one line per finding.
  */
 export async function runOntologyPhase(
@@ -253,7 +264,7 @@ export async function runOntologyPhase(
     }
     for (const f of findings) warn(`[LinkedServer] shape check ${f.severity} (${f.kind}): ${f.message}`);
   } catch (err) {
-    result.failure ??= asError(err);
+    result.shapeCheck = {errors: 0, warnings: 0, failed: asError(err).message};
     warn('[LinkedServer] shape check failed:', err);
   }
   return result;
@@ -286,8 +297,9 @@ export function graphsWrittenAndDropped(ops: Array<{kind: string; graph: string}
 
 /**
  * The host's re-sync: the ontology phase, then the shape sync, which runs also when the ontology
- * phase failed. The ontology phase's failure is then thrown, so the route answers with it, as
- * it does for a failed shape sync.
+ * sync failed. The ontology sync's failure is then thrown, so the route answers with it, as it
+ * does for a failed shape sync. A shape check that threw fails nothing: the answer reports it as
+ * `shapeCheck.failed`.
  */
 export async function syncOntologiesThenShapes<T extends object>(
   ontologyPhase: () => Promise<OntologyPhaseResult>,

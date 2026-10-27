@@ -125,7 +125,7 @@ describe('the sync pin warning', () => {
     }
   });
 
-  it('names an ontology term shape and its sub-shapes, pinned through the parent', async () => {
+  it('names an ontology term shape and its sub-shapes, pinned through the parent, each under its own class', async () => {
     const { Shape } = await import('@_linked/core/shapes/Shape');
     const { linkedShape } = await import('@_linked/core/package');
     class TermClass extends (Shape as any) {
@@ -134,8 +134,10 @@ describe('the sync pin warning', () => {
     class TermRestriction extends TermClass {
       static targetClass = { id: 'http://www.w3.org/2002/07/owl#Restriction' };
     }
+    class TermClassView extends TermClass {}
     (linkedShape as any)(TermClass);
     (linkedShape as any)(TermRestriction);
+    (linkedShape as any)(TermClassView);
     const appData = new (Store as any)();
     const ontology = new (Other as any)();
     const before = LinkedStorage.getDefaultDataset();
@@ -144,10 +146,33 @@ describe('the sync pin warning', () => {
       LinkedStorage.setDatasetForShapes(ontology, TermClass as any);
       const warning = syncPinWarning(BOTH);
       expect(warning).toContain('TermClass (http://www.w3.org/2002/07/owl#Class)');
-      expect(warning).toContain('TermRestriction (http://www.w3.org/2002/07/owl#Class)');
+      expect(warning).toContain('TermRestriction (http://www.w3.org/2002/07/owl#Restriction)');
+      expect(warning).toContain('TermClassView (http://www.w3.org/2002/07/owl#Class)');
       expect(warning).toContain('→ Other');
     } finally {
       LinkedStorage.unsetDatasetForShape(TermClass as any);
+      if (before) LinkedStorage.setDefaultDataset(before);
+    }
+  });
+});
+
+describe('the sync pin warning and a sub-shape with its own target class', () => {
+  it('leaves out a sub-shape of a watched shape that targets a class of its own', async () => {
+    const { linkedShape } = await import('@_linked/core/package');
+    class CatalogNodeShape extends (NodeShape as any) {
+      static targetClass = { id: 'https://example.org/CatalogNodeShape' };
+    }
+    (linkedShape as any)(CatalogNodeShape);
+    const appData = new (Store as any)();
+    const catalog = new (Other as any)();
+    catalog.id = 'catalog';
+    const before = LinkedStorage.getDefaultDataset();
+    LinkedStorage.setDefaultDataset(appData);
+    try {
+      LinkedStorage.setDatasetForShapes(catalog, CatalogNodeShape as any);
+      expect(syncPinWarning(BOTH)).toBeUndefined();
+    } finally {
+      LinkedStorage.unsetDatasetForShape(CatalogNodeShape as any);
       if (before) LinkedStorage.setDefaultDataset(before);
     }
   });

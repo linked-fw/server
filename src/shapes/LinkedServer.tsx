@@ -629,7 +629,8 @@ export class LinkedServer extends Shape {
    * Re-sync the registered ontologies and shapes into app data, as the boot does,
    * and report what was written: the ontology sync (every registered package,
    * hash-skipped), the shape check's counts, then the shape sync. A failed ontology
-   * sync does not stop the shape sync; the run then fails with the ontology error. The host calls it (`POST /admin/sync-shapes`) after it
+   * sync does not stop the shape sync; the run then fails with the ontology error. A shape
+   * check that throws fails nothing: the answer reports it (`shapeCheck.failed`). The host calls it (`POST /admin/sync-shapes`) after it
    * changed the app's shape code, so the app — the only process that loads that
    * code — writes its own shapes and their hashes.
    *

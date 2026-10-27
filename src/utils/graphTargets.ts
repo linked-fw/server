@@ -60,6 +60,7 @@ export const SHAPE_SHAPE_CLASSES: readonly string[] = [`${SH}NodeShape`, `${SH}P
 export const ONTOLOGY_TERM_CLASSES: readonly string[] = [
   `${RDFS}Class`,
   `${OWL}Class`,
+  `${OWL}Restriction`,
   `${RDF}Property`,
   `${OWL}ObjectProperty`,
   `${OWL}DatatypeProperty`,
@@ -78,13 +79,16 @@ function datasetName(dataset: IDataset): string {
 }
 
 /**
- * The watched class `shapeClass` or one of its super-shapes targets (a sub-shape of `owl:Class`,
- * say `owl:Restriction`, goes where its parent is pinned), else undefined.
+ * The class the instances of `shapeClass` carry, when it is watched, else undefined: the
+ * `targetClass` of the shape itself or, when it declares none of its own, of the nearest
+ * super-shape that does. A sub-shape with its own target class is not its parent's class: the
+ * syncs' data of the parent's class never reads through it.
  */
 function watchedClassOf(shapeClass: Function, watched: ReadonlySet<string>): string | undefined {
   for (let current: unknown = shapeClass; typeof current === 'function' && current !== Function.prototype; current = Object.getPrototypeOf(current)) {
+    if (!Object.prototype.hasOwnProperty.call(current, 'targetClass')) continue;
     const id = (current as { targetClass?: { id?: unknown } }).targetClass?.id;
-    if (typeof id === 'string' && watched.has(id)) return id;
+    return typeof id === 'string' && watched.has(id) ? id : undefined;
   }
   return undefined;
 }
@@ -102,7 +106,8 @@ export interface BootSyncs {
  * `NodeShape` / `PropertyShape` for the shape sync, an ontology term shape such as `rdfs:Class` /
  * `owl:ObjectProperty` for the ontology sync) to a dataset other than the default one: the syncs
  * write into the default dataset only, so reads of those shapes on the pinned dataset miss what
- * they wrote. Names each such shape (sub-shapes of a watched shape included) and its dataset.
+ * they wrote. Names each such shape and its dataset; a sub-shape counts under the target class it
+ * declares, or its parent's when it declares none.
  * Undefined when there is nothing to warn about (no sync runs, or no default dataset). Reads the
  * registered shapes outside any shape catalog (run it at boot, never inside `withShapeCatalog`).
  */
