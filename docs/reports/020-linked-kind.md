@@ -36,12 +36,10 @@ it is given for both the walk and the app-copy choice.
 - `npm test` (`NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.cjs`):
   `Test Suites: 2 skipped, 34 passed, 34 of 36 total` / `Tests: 2 skipped, 499 passed, 501 total`,
   12 s.
-- Rebased on `dev` with CK's core: `Tests: 1 failed, 2 skipped, 498 passed, 501 total`. The
-  failure is `RemoteDataset.graphQuery › lets the ontology sync fall back to the default graph
-  behind a gateway without graph queries` (`[syncOntologies] ontologyGraph is 'package', but the
-  store RemoteDataset has no graph queries …`): CK removed that fallback from core; it fails the
-  same on `dev` without this change (`Tests: 1 failed, 13 passed, 14 total` for that file) and CK
-  is fixing it.
+- Rebased on `dev` with CK's core and CK's server fix (3d946b4): `Test Suites: 2 skipped, 34 passed,
+  34 of 36 total` / `Tests: 2 skipped, 498 passed, 500 total`, 12 s. (Before CK's fix one test,
+  `RemoteDataset.graphQuery › lets the ontology sync fall back to the default graph…`, failed on
+  `dev` with or without this change.)
 - `npx linked build`: `✔ Build successful`, 9 s.
 
 ### Deviations
