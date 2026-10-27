@@ -1,36 +1,35 @@
 ---
 summary: >
-  Three lows from the review of the ontology phase, not fixed: a thrown shape check makes
-  `POST /admin/sync-shapes` answer 500; the boot parses the ontology hierarchy twice; a workspace
+  Two lows from the review of the ontology phase, not fixed: the boot parses the ontology
+  hierarchy twice (core exposes no way to hand the sync's parse to the shape check); a workspace
   package built once keeps registering its ontologies from a stale `lib/` in dev.
-packages: [server]
+packages: [server, core]
 ---
 
 # 001 — Ontology phase: review lows
 
-Source: CN plan 070, independent review of `store-inference` (reports 010-012).
+Source: CN plan 070, independent review of `store-inference` (reports 010-012). The third low (a
+thrown shape check answered `POST /admin/sync-shapes` with 500) is fixed: report 021.
 
-## 1. A thrown shape check answers 500
+## 1. The hierarchy is parsed twice per boot
 
-`runOntologyPhase` (`src/utils/ontologySync.ts`) records a shape check that throws as the phase's
-`failure` (when the sync did not fail first), and `syncOntologiesThenShapes` rethrows it after the
-shape sync, so the route answers 500 although both syncs succeeded. The shape check never stops a
-running app at boot; on the route a bug in the check reads as a failed sync.
+The ontology sync (core `syncOntologies`) parses every package's Turtle and sets the in-memory
+hierarchy (`setHierarchyFromPackages`); the shape check is then called without `hierarchy` and
+loads it again (`loadOntologyHierarchy` → `readPackageOntologies`), parsing the same data a second
+time. With schema.org's hierarchy that is measurable boot time.
 
-First questions: report it in the body (`shapeCheck: {failed: message}`) with 200, keeping 500 for
-a failed sync? A test through `syncOntologiesThenShapes`.
+Checked in report 021: core has no way to hand that parse on. `syncOntologies` returns no
+triples, `@_linked/core/ontology/classHierarchy` keeps them in its shared state but exports only
+`setOntologyHierarchy`, `superClassesOf`, `subClassesOf` and a version, and
+`checkShapeHierarchy` takes a `hierarchy` array or parses. The fix needs a core change first,
+then one line in `runOntologyPhase` (`src/utils/ontologySync.ts`): after a sync, pass the
+in-memory triples as `hierarchy`.
 
-## 2. The hierarchy is parsed twice per boot
+First questions: core exports a getter for the triples last set (`ontologyHierarchyTriples()` in
+`classHierarchy.ts`), or `checkShapeHierarchy` takes `{hierarchy: 'in-memory'}`? Measure the boot
+before and after.
 
-The ontology sync parses every package's Turtle and sets the in-memory hierarchy; the shape check
-is then called without `hierarchy` and loads it again (`loadOntologyHierarchy`), parsing the same
-data a second time. With schema.org's hierarchy that is measurable boot time.
-
-First questions: pass the hierarchy the sync already set into `checkShapeHierarchy` (does core
-expose it, or does `checkShapeHierarchy` need a "use the in-memory hierarchy" option)? Measure the
-boot before and after.
-
-## 3. A dev package built once keeps registering from a stale `lib/`
+## 2. A dev package built once keeps registering from a stale `lib/`
 
 `registerInstalledOntologies` imports `lib/esm/ontologies/*.register.js` when any exist and falls
 back to `src/ontologies/*.register.ts` (through `importModule`) only when there are none. A
