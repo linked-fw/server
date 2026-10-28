@@ -197,6 +197,19 @@ export interface ShapeGraphsReport {
 const list = (names: string[]) => (names.length ? names.join(', ') : 'none');
 
 /**
+ * The head of a sync's log line: the packages written, then how many were unchanged (`skipped`
+ * in the syncs' results): `written a, b; 17 unchanged`, `written a, b`, or `19 unchanged`.
+ */
+export function writtenAndUnchanged(written: string[], unchanged: string[]): string {
+  const parts = written.length ? [`written ${written.join(', ')}`] : [];
+  if (unchanged.length || !written.length) parts.push(`${unchanged.length} unchanged`);
+  return parts.join('; ');
+}
+
+/** An app graph's status in a log line: core's `skipped` is an unchanged graph. */
+const appGraphStatus = (status: 'written' | 'skipped' | 'dropped') => (status === 'skipped' ? 'unchanged' : status);
+
+/**
  * Sync the registered shapes into `ds`, one shape graph per package (see the module doc), and log
  * one line naming what was written and skipped, the graphs written, the packages without
  * `shapes.ttl` and the default-graph shapes removed. Throws when the sync fails.
@@ -311,9 +324,9 @@ export async function syncShapeGraphsInto(
     log(`[LinkedServer] shape sync (default graph: ${why}): ${report.defaultGraph} shape(s) written`);
   } else if (shared) {
     log(
-      `[LinkedServer] shape graph sync (one shared graph <${shared}>): written ${list(report.written)}; ` +
-        `skipped ${list(report.skipped)}` +
-        (report.appGraph ? `; app shapes ${report.appGraph.status}` : '') +
+      `[LinkedServer] shape graph sync (one shared graph <${shared}>): ` +
+        writtenAndUnchanged(report.written, report.skipped) +
+        (report.appGraph ? `; app shapes ${appGraphStatus(report.appGraph.status)}` : '') +
         (report.pruned.length ? `; dropped from the graph ${list(report.pruned)}` : '') +
         (withoutTurtle.length ? `; no shapes.ttl (not in the graph): ${list(withoutTurtle)}` : ''),
     );
@@ -327,8 +340,8 @@ export async function syncShapeGraphsInto(
     }
   } else {
     log(
-      `[LinkedServer] shape graph sync: written ${list(report.written)}; skipped ${list(report.skipped)}` +
-        (report.appGraph ? `; app graph ${report.appGraph.status}` : '; no app graph (DATA_ROOT not set)') +
+      `[LinkedServer] shape graph sync: ${writtenAndUnchanged(report.written, report.skipped)}` +
+        (report.appGraph ? `; app graph ${appGraphStatus(report.appGraph.status)}` : '; no app graph (DATA_ROOT not set)') +
         (report.graphs.length ? `; graphs written ${list(report.graphs)}` : '') +
         (orphanScope === 'all' ? `; pruned ${list(report.pruned)}` : '') +
         (report.cleaned ? `; ${report.cleaned} default-graph shape(s) removed` : '') +

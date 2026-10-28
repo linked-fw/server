@@ -237,7 +237,7 @@ describe('syncShapeGraphsInto', () => {
       warn: () => {},
     });
     expect(lines).toEqual([
-      '[LinkedServer] shape graph sync: written dep; skipped app; app graph skipped; ' +
+      '[LinkedServer] shape graph sync: written dep; 1 unchanged; app graph unchanged; ' +
         'graphs written https://linked.cm/pkg/dep/graph/shapes; 3 default-graph shape(s) removed; ' +
         'no shapes.ttl (no shape graph): bare',
     ]);
@@ -254,7 +254,7 @@ describe('syncShapeGraphsInto', () => {
       log: (m) => lines.push(m),
     });
     expect(report.graphs).toEqual([]);
-    expect(lines).toEqual(['[LinkedServer] shape graph sync: written none; skipped dep; app graph skipped']);
+    expect(lines).toEqual(['[LinkedServer] shape graph sync: 1 unchanged; app graph unchanged']);
   });
 
   it('reports the default-graph sync of a store without graph queries', async () => {
@@ -287,7 +287,7 @@ describe('syncShapeGraphsInto', () => {
     expect(report.graphs).toEqual([SHARED]);
     expect(report.appGraph).toEqual({ graph: SHARED, status: 'written' });
     expect(report.target).toBe(SHARED);
-    expect(lines).toEqual([`[LinkedServer] shape graph sync (one shared graph <${SHARED}>): written dep; skipped none; app shapes written`]);
+    expect(lines).toEqual([`[LinkedServer] shape graph sync (one shared graph <${SHARED}>): written dep; app shapes written`]);
 
     // Without DATA_ROOT the app's shapes are still in the graph; a package without Turtle is not.
     const noRoot = fakeCore(['bare', 'dep'], { written: ['dep'], pruned: ['bare'], target: SHARED });
@@ -302,7 +302,7 @@ describe('syncShapeGraphsInto', () => {
     });
     expect(noRootReport.graphs).toEqual([SHARED]);
     expect(noRootLines).toEqual([
-      `[LinkedServer] shape graph sync (one shared graph <${SHARED}>): written dep; skipped none; dropped from the graph bare; no shapes.ttl (not in the graph): bare`,
+      `[LinkedServer] shape graph sync (one shared graph <${SHARED}>): written dep; dropped from the graph bare; no shapes.ttl (not in the graph): bare`,
     ]);
     expect(warnings).toEqual([expect.stringContaining('holds no shapes of bare')]);
 

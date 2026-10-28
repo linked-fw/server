@@ -23,11 +23,12 @@ const GA = 'https://linked.cm/pkg/x-a/graph/ontology';
 function fakeCore({
   syncFails = false,
   findings = [] as Finding[],
+  checkFails = false,
   withHierarchy = true,
   withRegister = true,
   registerFails = false,
   graphQueries = [{ kind: 'graph_replace', graph: GA }] as Array<{ kind: string; graph: string; fails?: boolean }>,
-  where = {} as { target?: string; fallback?: true },
+  where = {} as { target?: string },
 } = {}) {
   const calls: string[] = [];
   const seen: {
@@ -62,6 +63,7 @@ function fakeCore({
     async checkShapeHierarchy(options) {
       calls.push('check');
       seen.checkOptions = options;
+      if (checkFails) throw new Error('check bug');
       return findings;
     },
     loadOntologyHierarchy: withHierarchy
@@ -213,6 +215,22 @@ describe('runOntologyPhase', () => {
     expect(warnings[0]).toContain('ontology sync failed');
   });
 
+  it('reports a shape check that throws in shapeCheck, not as the phase failure', async () => {
+    const { core, calls } = fakeCore({ checkFails: true });
+    const warnings: string[] = [];
+    const result = await runOntologyPhase({}, {
+      core,
+      sync: true,
+      orphanScope: 'none',
+      log: () => {},
+      warn: (m) => warnings.push(m),
+    });
+    expect(calls).toEqual(['sync', 'check']);
+    expect(result.failure).toBeUndefined();
+    expect(result.shapeCheck).toEqual({ errors: 0, warnings: 0, failed: 'check bug' });
+    expect(warnings).toContain('[LinkedServer] shape check failed:');
+  });
+
   it('counts the findings by severity and logs each one', async () => {
     const findings: Finding[] = [
       { kind: 'extends-without-subclass', severity: 'error', message: 'sC extends sD' },
@@ -231,11 +249,25 @@ describe('runOntologyPhase', () => {
     });
     expect(result.shapeCheck).toEqual({ errors: 1, warnings: 2 });
     expect(lines).toEqual([
-      `[LinkedServer] ontology sync: written @x/a; skipped @x/b; graphs written ${GA}`,
+      `[LinkedServer] ontology sync: written @x/a; 1 unchanged; graphs written ${GA}`,
       '[LinkedServer] shape check: 1 error(s), 2 warning(s)',
     ]);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('error (extends-without-subclass): sC extends sD');
+  });
+
+  it('logs nothing for a clean shape check', async () => {
+    const { core } = fakeCore();
+    const lines: string[] = [];
+    const result = await runOntologyPhase({}, {
+      core,
+      sync: true,
+      orphanScope: 'none',
+      log: (m) => lines.push(m),
+      warn: () => {},
+    });
+    expect(result.shapeCheck).toEqual({ errors: 0, warnings: 0 });
+    expect(lines).toEqual([`[LinkedServer] ontology sync: written @x/a; 1 unchanged; graphs written ${GA}`]);
   });
 });
 
@@ -256,21 +288,18 @@ describe('graphsWrittenAndDropped', () => {
 });
 
 describe('runOntologyPhase: where the sync wrote', () => {
-  const run = async (where: { target?: string; fallback?: true }, graphQueries: Array<{ kind: string; graph: string }>) => {
+  const run = async (where: { target?: string }, graphQueries: Array<{ kind: string; graph: string }>) => {
     const { core } = fakeCore({ where, graphQueries });
     const lines: string[] = [];
     await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
     return lines[0];
   };
 
-  it("names the default graph of ontologyGraph 'default', a shared graph, and the fallback", async () => {
+  it("names the default graph of ontologyGraph 'default' and a shared graph", async () => {
     expect(await run({ target: 'default' }, [])).toMatch(/^\[LinkedServer\] ontology sync \(default graph: ontologyGraph is 'default'\): written @x\/a/);
     const shared = 'https://data.example.org/graph/ontology';
     expect(await run({ target: shared }, [{ kind: 'graph_replace', graph: shared }])).toContain(
       `ontology sync (one shared graph <${shared}>): written @x/a`,
-    );
-    expect(await run({ target: 'package', fallback: true }, [])).toContain(
-      'ontology sync (default graph: the store has no graph queries)',
     );
     expect(await run({ target: 'package' }, [{ kind: 'graph_replace', graph: GA }])).toMatch(/^\[LinkedServer\] ontology sync: written/);
   });
@@ -314,6 +343,19 @@ describe('syncOntologiesThenShapes (the host re-sync)', () => {
       )
     ).rejects.toThrow('store unreachable');
     expect(shapesRan).toBe(true);
+  });
+
+  it('answers with a shape check that threw instead of failing, when both syncs succeeded', async () => {
+    const { core } = fakeCore({ checkFails: true });
+    const result = await syncOntologiesThenShapes(
+      () => runOntologyPhase({}, { core, sync: true, orphanScope: 'none', ...quiet }),
+      async () => ({ written: 1 })
+    );
+    expect(result).toEqual({
+      written: 1,
+      ontologies: { written: ['@x/a'], skipped: ['@x/b'], graphs: [GA], droppedGraphs: [] },
+      shapeCheck: { errors: 0, warnings: 0, failed: 'check bug' },
+    });
   });
 });
 
@@ -439,19 +481,9 @@ describe('runOntologyPhase: the graphs the sync wrote', () => {
     expect(result.ontologies.graphs).toEqual([GA, GB]);
     expect(result.ontologies.droppedGraphs).toEqual([GOLD]);
     expect(lines[0]).toBe(
-      `[LinkedServer] ontology sync: written @x/a; skipped @x/b; pruned none; graphs written ${GA}, ${GB}; graphs dropped ${GOLD}`,
+      `[LinkedServer] ontology sync: written @x/a; 1 unchanged; pruned none; graphs written ${GA}, ${GB}; graphs dropped ${GOLD}`,
     );
     expect(seen.unobserved).toBe(true);
-  });
-
-  it('says so when packages were written without a graph query (a store without graph queries)', async () => {
-    const { core } = fakeCore({ graphQueries: [] });
-    const lines: string[] = [];
-    const result = await runOntologyPhase({}, { core, sync: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
-    expect(result.ontologies).toEqual({ written: ['@x/a'], skipped: ['@x/b'], graphs: [], droppedGraphs: [] });
-    expect(lines[0]).toBe(
-      '[LinkedServer] ontology sync (default graph: the store has no graph queries): written @x/a; skipped @x/b',
-    );
   });
 
   it('stops observing when the sync fails', async () => {

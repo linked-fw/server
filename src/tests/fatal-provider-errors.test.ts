@@ -35,7 +35,7 @@ function installPackage(name: string, backend: string) {
       name,
       version: '1.0.0',
       type: 'module',
-      linkedPackage: true,
+      linked: { kind: 'library' },
       main: 'lib/esm/index.js',
       exports: {
         '.': { import: './lib/esm/index.js' },

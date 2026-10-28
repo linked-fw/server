@@ -49,6 +49,8 @@ import {pathToFileURL} from 'node:url';
 import { FatalStartupError, isFatalError } from '../utils/fatalError.js';
 import {
   discoverLinkedDependencies,
+  listedPackageNames,
+  unpublishedNames,
   hasModuleEntry,
   isBundledBySsr,
   NODE_IMPORT_CONDITIONS,
@@ -395,7 +397,7 @@ export class LinkedServer extends Shape {
    * could not be loaded at all.
    */
   private linkedPackageDirs: Map<string, string> = new Map();
-  /** The app's own workspace packages (`linkedPackage: true`), by real path. */
+  /** The app's own workspace packages (`linked.kind` of a package), by real path. */
   private workspacePackageDirs: string[] = [];
   /** The names of the app's own workspace packages. */
   private workspacePackageNames: Set<string> = new Set();
@@ -572,10 +574,14 @@ export class LinkedServer extends Shape {
   /**
    * Boot: one warning when routing pins the shape shapes or the ontology term shapes to a dataset
    * other than the default one, since the syncs write into the default dataset only (see
-   * {@link syncPinWarning}).
+   * {@link syncPinWarning}). Only for the syncs this boot runs.
    */
   private warnOfSyncPins(): void {
-    const warning = syncPinWarning();
+    const flag = (this.config as any)?.syncShapesOnBoot;
+    const warning = syncPinWarning({
+      shapeSync: shapeSyncOn(process.env, flag),
+      ontologySync: bootSyncsOntologies(process.env, flag),
+    });
     if (warning) console.warn(warning);
   }
 
@@ -625,12 +631,13 @@ export class LinkedServer extends Shape {
    * Re-sync the registered ontologies and shapes into app data, as the boot does,
    * and report what was written: the ontology sync (every registered package,
    * hash-skipped), the shape check's counts, then the shape sync. A failed ontology
-   * sync does not stop the shape sync; the run then fails with the ontology error. The host calls it (`POST /admin/sync-shapes`) after it
+   * sync does not stop the shape sync; the run then fails with the ontology error. A shape
+   * check that throws fails nothing: the answer reports it (`shapeCheck.failed`). The host calls it (`POST /admin/sync-shapes`) after it
    * changed the app's shape code, so the app — the only process that loads that
    * code — writes its own shapes and their hashes.
    *
    * `packages` names the packages whose source changed: the app itself or its
-   * direct dependencies, never `@_linked/*` ({@link assertReloadablePackages}). In
+   * direct dependencies (its `linked.unpublishedPackages` among them), never `@_linked/*` ({@link assertReloadablePackages}). In
    * dev (Vite) their modules are invalidated and their backends reloaded first
    * ({@link onSourceChange}), so a shape added since the boot is registered before
    * the sync; without Vite (a built app) nothing is reloaded. The answer names the
@@ -663,17 +670,26 @@ export class LinkedServer extends Shape {
     return run;
   }
 
-  /** The packages a host may ask to reload: the app itself and its direct dependencies. */
+  /**
+   * The packages a host may ask to reload: the app itself and its direct dependencies, which
+   * include every package in its `linked.unpublishedPackages`, transitively
+   * ({@link listedPackageNames}). Read from disk on each call: a list written after the boot
+   * counts. A malformed list throws.
+   */
   private reloadablePackages(): Set<string> {
     const names = new Set<string>();
     if (this.package?.name) names.add(this.package.name);
+    let json: any;
     try {
-      const json = JSON.parse(fsNative.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
-      if (json.name) names.add(json.name);
-      for (const field of ['dependencies', 'devDependencies']) {
-        for (const name of Object.keys(json[field] ?? {})) names.add(name);
-      }
-    } catch {}
+      json = JSON.parse(fsNative.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
+    } catch {
+      return names;
+    }
+    if (json.name) names.add(json.name);
+    for (const field of ['dependencies', 'devDependencies']) {
+      for (const name of Object.keys(json[field] ?? {})) names.add(name);
+    }
+    for (const name of listedPackageNames(process.cwd(), json)) names.add(name);
     return names;
   }
 
@@ -1259,7 +1275,8 @@ export class LinkedServer extends Shape {
 
   /**
    * Filters local workspace packages to only those reachable from the app's
-   * dependency tree. Mirrors the logic used by `buildAll` in lincd-cli.
+   * dependency tree: `dependencies` and `linked.unpublishedPackages`, of the app
+   * and of each package reached. Mirrors the logic used by `buildAll` in the cli.
    */
   private filterPackagesByDependencyTree(
     allPackages: Map<string, { packageName: string; path: string }>,
@@ -1272,12 +1289,13 @@ export class LinkedServer extends Shape {
     const packagesToCheck = new Set<string>();
     const processedPackages = new Set<string>();
 
-    // Start with direct dependencies from the app
-    if (appPackageJson.dependencies) {
-      for (const dep of Object.keys(appPackageJson.dependencies)) {
-        if (allPackages.has(dep)) {
-          packagesToCheck.add(dep);
-        }
+    // Start with direct dependencies from the app, its linked.unpublishedPackages among them
+    for (const dep of [
+      ...Object.keys(appPackageJson.dependencies ?? {}),
+      ...unpublishedNames(appPackageJson),
+    ]) {
+      if (allPackages.has(dep)) {
+        packagesToCheck.add(dep);
       }
     }
 
@@ -1293,11 +1311,12 @@ export class LinkedServer extends Shape {
       if (packageDetails) {
         relevantPackages.set(packageName, packageDetails);
         const pkg = getPackageJSON(packageDetails.path);
-        if (pkg?.dependencies) {
-          for (const dep of Object.keys(pkg.dependencies)) {
-            if (allPackages.has(dep) && !processedPackages.has(dep)) {
-              packagesToCheck.add(dep);
-            }
+        for (const dep of [
+          ...Object.keys(pkg?.dependencies ?? {}),
+          ...unpublishedNames(pkg),
+        ]) {
+          if (allPackages.has(dep) && !processedPackages.has(dep)) {
+            packagesToCheck.add(dep);
           }
         }
       }

@@ -33,6 +33,7 @@ import { createHash, timingSafeEqual } from 'crypto';
 import type express from 'express';
 import { invalidateGraphRegistry } from '@_linked/core/utils/graphRegistryCache';
 import type { ShapeGraphsReport } from './syncShapes.js';
+import type { ShapeCheckSummary } from './ontologySync.js';
 import { effectiveGraphRoutes, type EffectiveRoutes } from './effectiveRoutes.js';
 
 /** The environment variable that holds the control channel's secret. */
@@ -77,8 +78,11 @@ export interface ShapeSyncResult {
    * be read), and the graphs written and dropped. Set by `POST /admin/sync-shapes`.
    */
   ontologies?: { written: string[]; skipped: string[]; graphs?: string[]; droppedGraphs?: string[] };
-  /** The shape check's findings, counted by severity (each is logged). Set by `POST /admin/sync-shapes`. */
-  shapeCheck?: { errors: number; warnings: number };
+  /**
+   * The shape check's findings, counted by severity (each is logged), and the message of the
+   * error the check threw, if it did (`failed`). Set by `POST /admin/sync-shapes`.
+   */
+  shapeCheck?: ShapeCheckSummary;
 }
 
 /** npm's package-name rule: optional `@scope/`, lower case, URL-safe, no leading `.` or `_` (a scope may start with `_`, as `@_linked` does). */
@@ -92,14 +96,14 @@ export function isValidPackageName(name: string): boolean {
 /**
  * Refuse a package a host may not ask to reload: not a valid npm name, a framework
  * (`@_linked/*`) package, or not in `allowed` (the app's own name and its direct
- * dependencies). Throws {@link AdminRequestError}.
+ * dependencies, its `linked.unpublishedPackages` among them). Throws {@link AdminRequestError}.
  */
 export function assertReloadablePackages(packages: string[], allowed: ReadonlySet<string>): void {
   for (const pkg of packages) {
     if (!isValidPackageName(pkg)) throw new AdminRequestError(`not a package name: ${JSON.stringify(pkg)}`);
     if (pkg.startsWith('@_linked/')) throw new AdminRequestError(`framework packages are not reloaded: ${pkg}`);
     if (!allowed.has(pkg)) {
-      throw new AdminRequestError(`unknown package: ${pkg} is neither the app nor one of its direct dependencies`);
+      throw new AdminRequestError(`unknown package: ${pkg} is neither the app nor one of its direct dependencies (dependencies, devDependencies, linked.unpublishedPackages)`);
     }
   }
 }

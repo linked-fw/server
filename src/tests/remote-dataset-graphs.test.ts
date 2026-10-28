@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 process.env.SITE_ROOT ??= 'http://app.test:4000';
 const { Server } = await import('@_linked/server-utils/utils/Server');
-const { RemoteDataset, RemoteDatasetUnauthorizedError, END_USER_HEADER } = await import(
+const { RemoteDataset, RemoteDatasetUnauthorizedError, USER_TOKEN_HEADER, USER_TOKEN_HEADERS_HOOK } = await import(
   '../shapes/quadstores/RemoteDataset.js'
 );
 const { runWithCallContext } = await import('@_linked/server-utils/utils/CallContext');
@@ -93,20 +93,23 @@ const replace = {
 };
 
 describe('RemoteDataset.graphQuery', () => {
-  it('posts the graph query as is, with the token and the end user, and resolves the result', async () => {
+  it("posts the graph query as is, with the token and the user's token, and resolves the result", async () => {
     const plane = stubPlane({ ontology: [], shapes: [] });
     const ds = new RemoteDataset({ url: URL_BASE, token: TOKEN });
+    const hooks = globalThis as unknown as Record<symbol, unknown>;
+    hooks[USER_TOKEN_HEADERS_HOOK] = async () => ({ [USER_TOKEN_HEADER]: 'user-at', DPoP: 'proof' });
     const result = await runWithCallContext(
-      { kind: 'http', request: { linkedAuth: { userAccount: { accountOf: { id: 'https://u.test/me' } } } } } as any,
+      { kind: 'http', request: { linkedAuth: { sid: 's1' } } } as any,
       () => ds.graphQuery(replace),
-    );
+    ).finally(() => delete hooks[USER_TOKEN_HEADERS_HOOK]);
     expect(result).toEqual({ graph: G_A, changed: true, contentHash: 'h' });
     const [call] = plane.calls;
     expect(call.url).toBe(`${URL_BASE}/call/${packageName}/graphQuery`);
     expect(sent(call)).toEqual({ args: [replace] });
     const headers = call.init.headers as Record<string, string>;
     expect(headers.Authorization).toBe(`Bearer ${TOKEN}`);
-    expect(headers[END_USER_HEADER]).toBe('https://u.test/me');
+    expect(headers[USER_TOKEN_HEADER]).toBe('user-at');
+    expect(headers.DPoP).toBe('proof');
   });
 
   it('turns a refusal with a graph code into a GraphQueryError with that code', async () => {
@@ -153,7 +156,7 @@ describe('RemoteDataset.graphQuery', () => {
     expect(isGraphQueryError(err, 'graph-exists')).toBe(true);
   });
 
-  it('lets the ontology sync fall back to the default graph behind a gateway without graph queries', async () => {
+  it('makes the ontology sync refuse a gateway without graph queries, before it writes', async () => {
     const methods: string[] = [];
     (globalThis as any).fetch = async (input: any, init?: RequestInit) => {
       const call = { url: String(input), init: init ?? {} };
@@ -164,22 +167,19 @@ describe('RemoteDataset.graphQuery', () => {
     };
     const { linkedPackage } = await import('@_linked/core/utils/Package');
     const { createNameSpace } = await import('@_linked/core/utils/NameSpace');
-    linkedPackage('remote-graph-fallback-test').linkedOntology(
+    linkedPackage('remote-graph-refused-test').linkedOntology(
       {},
-      createNameSpace('http://example.org/fallback/'),
-      'fallback',
-      async () => ['<http://example.org/fallback/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/fallback/A> .'],
-      '../data/fallback.ttl',
+      createNameSpace('http://example.org/refused/'),
+      'refused',
+      async () => ['<http://example.org/refused/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/refused/A> .'],
+      '../data/refused.ttl',
     );
-    const result = await syncOntologies(new RemoteDataset({ url: URL_BASE }), {
-      packages: ['remote-graph-fallback-test'],
-    });
-    expect(result.written).toEqual(['remote-graph-fallback-test']);
+    await expect(
+      syncOntologies(new RemoteDataset({ url: URL_BASE }), { packages: ['remote-graph-refused-test'] }),
+    ).rejects.toThrow(/has no graph queries/);
+    // The refused graph query was the probe's; the sync wrote nothing with ordinary queries.
     expect(methods).toContain('graphQuery');
-    // The default-graph sync wrote the hierarchy with ordinary queries after the refusal.
-    expect(methods.slice(methods.indexOf('graphQuery') + 1)).toEqual(
-      expect.arrayContaining(['updateQuery']),
-    );
+    expect(methods).not.toContain('updateQuery');
   });
 });
 

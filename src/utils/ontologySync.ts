@@ -25,14 +25,14 @@
  * this server depends on has all of them. Kept apart from `LinkedServer` so the order and the failure handling can be tested without
  * booting a server.
  */
-import type {BootOrphanScope} from './syncShapes.js';
+import {writtenAndUnchanged, type BootOrphanScope} from './syncShapes.js';
 
 /** The subset of core's ontology and shape-check API this module calls. */
 export interface OntologyCore {
   syncOntologies(
     ds: unknown,
     options: {orphanScope: BootOrphanScope},
-  ): Promise<{written: string[]; skipped: string[]; pruned: string[]; target?: string; fallback?: true}>;
+  ): Promise<{written: string[]; skipped: string[]; pruned: string[]; target?: string}>;
   checkShapeHierarchy(options: {dependencies?: Record<string, string[]>}): Promise<
     Array<{kind: string; severity: 'error' | 'warning'; shape?: string; iri?: string; message: string}>
   >;
@@ -56,6 +56,13 @@ export interface OntologyCore {
   ) => Promise<string[]>;
 }
 
+/** The shape check's findings by severity; `failed` holds the message of a check that threw. */
+export interface ShapeCheckSummary {
+  errors: number;
+  warnings: number;
+  failed?: string;
+}
+
 /** What the ontology sync and the shape check did, as `POST /admin/sync-shapes` reports it. */
 export interface OntologyPhaseResult {
   /**
@@ -64,9 +71,12 @@ export interface OntologyPhaseResult {
    * dropped (empty on a store without graph queries).
    */
   ontologies: {written: string[]; skipped: string[]; graphs?: string[]; droppedGraphs?: string[]};
-  /** The shape check's findings, counted by severity. */
-  shapeCheck: {errors: number; warnings: number};
-  /** The first error the sync or the check threw; the phase went on without it. */
+  /**
+   * The shape check's findings, counted by severity, and the message of the error the check
+   * threw, if it did (`failed`). A thrown check is reported here and never fails the phase.
+   */
+  shapeCheck: ShapeCheckSummary;
+  /** The error the ontology sync threw; the phase went on without it. */
   failure?: Error;
 }
 
@@ -148,8 +158,9 @@ const list = (names: string[]) => (names.length ? names.join(', ') : 'none');
 /**
  * Register the ontologies of the installed linked packages in `packageDirs` (package roots), sync
  * the registered ontologies into `ds` (when `sync` is set and there is a dataset), then run the
- * shape check. Never throws: a failed registration is logged and the phase goes on; a failed sync is logged and returned as `failure`, and the
- * check still runs; a failed check likewise. Logs one line for the sync, one summary line for
+ * shape check. Never throws: a failed registration is logged and the phase goes on; a failed sync
+ * is logged and returned as `failure`, and the check still runs; a check that throws is logged and
+ * returned as `shapeCheck.failed`. Logs one line for the sync, one summary line for
  * the check and one line per finding.
  */
 export async function runOntologyPhase(
@@ -214,19 +225,17 @@ export async function runOntologyPhase(
       const {graphs, droppedGraphs} = graphsWrittenAndDropped(ops.filter((op) => op.ok));
       result.ontologies = {written: sync.written, skipped: sync.skipped, graphs, droppedGraphs};
       hierarchyLoaded = true;
-      // Core ≥ 2.41 says where it wrote (the global `ontologyGraph`); an older core is told
-      // apart by a write that sent no graph query.
+      // Core says where it wrote (the global `ontologyGraph`). A store without graph queries makes
+      // the sync throw in the 'package' and shared modes, reported below as a failed sync.
       const where =
         sync.target === 'default'
           ? " (default graph: ontologyGraph is 'default')"
-          : sync.fallback || (sync.target === undefined && !!stop && sync.written.length > 0 && graphs.length === 0)
-            ? ' (default graph: the store has no graph queries)'
-            : sync.target && sync.target !== 'package'
-              ? ` (one shared graph <${sync.target}>)`
-              : '';
+          : sync.target && sync.target !== 'package'
+            ? ` (one shared graph <${sync.target}>)`
+            : '';
       log(
         `[LinkedServer] ontology sync${where}: ` +
-          `written ${list(sync.written)}; skipped ${list(sync.skipped)}` +
+          writtenAndUnchanged(sync.written, sync.skipped) +
           (orphanScope === 'all' ? `; pruned ${list(sync.pruned)}` : '') +
           (graphs.length ? `; graphs written ${list(graphs)}` : '') +
           (droppedGraphs.length ? `; graphs dropped ${list(droppedGraphs)}` : ''),
@@ -250,10 +259,12 @@ export async function runOntologyPhase(
     const findings = await core.checkShapeHierarchy({dependencies});
     const errors = findings.filter((f) => f.severity === 'error').length;
     result.shapeCheck = {errors, warnings: findings.length - errors};
-    log(`[LinkedServer] shape check: ${errors} error(s), ${findings.length - errors} warning(s)`);
+    if (findings.length) {
+      log(`[LinkedServer] shape check: ${errors} error(s), ${findings.length - errors} warning(s)`);
+    }
     for (const f of findings) warn(`[LinkedServer] shape check ${f.severity} (${f.kind}): ${f.message}`);
   } catch (err) {
-    result.failure ??= asError(err);
+    result.shapeCheck = {errors: 0, warnings: 0, failed: asError(err).message};
     warn('[LinkedServer] shape check failed:', err);
   }
   return result;
@@ -286,8 +297,9 @@ export function graphsWrittenAndDropped(ops: Array<{kind: string; graph: string}
 
 /**
  * The host's re-sync: the ontology phase, then the shape sync, which runs also when the ontology
- * phase failed. The ontology phase's failure is then thrown, so the route answers with it, as
- * it does for a failed shape sync.
+ * sync failed. The ontology sync's failure is then thrown, so the route answers with it, as it
+ * does for a failed shape sync. A shape check that threw fails nothing: the answer reports it as
+ * `shapeCheck.failed`.
  */
 export async function syncOntologiesThenShapes<T extends object>(
   ontologyPhase: () => Promise<OntologyPhaseResult>,

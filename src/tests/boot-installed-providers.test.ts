@@ -95,24 +95,29 @@ beforeEach(() => {
         'plain-lib': '1.0.0',
         'legacy-lincd': '1.0.0',
         '@_linked/unflagged-tool': '1.0.0',
+        'retired-flag': '1.0.0',
+        'an-app': '1.0.0',
       },
     })
   );
-  // The "linkedPackage": true flag qualifies; a flagged dependency is reached
+  // A linked.kind qualifies; a dependency with one is reached
   // transitively.
   installPackage(
     '@_linked/fixture-auth',
-    { linkedPackage: true, dependencies: { '@_linked/fixture-nested': '1.0.0' } },
+    { linked: { kind: 'library' }, dependencies: { '@_linked/fixture-nested': '1.0.0' } },
     providerSource('auth')
   );
-  installPackage('@_linked/fixture-nested', { linkedPackage: true }, providerSource('nested'));
+  installPackage('@_linked/fixture-nested', { linked: { kind: 'library' } }, providerSource('nested'));
   // An unscoped package qualifies through the flag too.
-  installPackage('custom-linked', { linkedPackage: true }, providerSource('custom'));
+  installPackage('custom-linked', { linked: { kind: 'library' } }, providerSource('custom'));
   // None of these may be loaded at boot: no flag, the legacy flag only, and
   // the @_linked scope without the flag (a CLI tool like @_linked/localize).
   installPackage('plain-lib', {}, providerSource('plain'));
   installPackage('legacy-lincd', { lincd: true }, providerSource('legacy'));
   installPackage('@_linked/unflagged-tool', {}, providerSource('unflagged'));
+  // Nor an app, by `linked.kind: "app"` or by the retired `linkedApp` flag.
+  installPackage('retired-flag', { linkedApp: true }, providerSource('retired'));
+  installPackage('an-app', { linked: { kind: 'app' } }, providerSource('app'));
   // The app's own compiled backend, so loading it is quiet.
   writeFile('lib/backend.js', 'export {};\n');
   process.chdir(appDir);
@@ -155,7 +160,7 @@ describe('boot indexes installed linked packages', () => {
     });
   });
 
-  it('loads only linkedPackage-flagged packages, whatever their scope', async () => {
+  it('loads only packages with a linked.kind, whatever their scope', async () => {
     const server = makeServer();
     await server.initBackendProviders();
     expect(Object.keys(g.__constructed).sort()).toEqual(['auth', 'custom', 'nested']);
@@ -296,12 +301,12 @@ describe('a provider whose hooks throw', () => {
     );
     installPackage(
       'healthy-linked',
-      { linkedPackage: true, dependencies: { '@_linked/fixture-broken': '1.0.0' } },
+      { linked: { kind: 'library' }, dependencies: { '@_linked/fixture-broken': '1.0.0' } },
       recordingProviderSource('healthy')
     );
     installPackage(
       '@_linked/fixture-broken',
-      { linkedPackage: true },
+      { linked: { kind: 'library' } },
       throwingProviderSource
     );
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});

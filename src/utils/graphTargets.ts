@@ -12,7 +12,7 @@
  * store expands it under this setting.
  *
  * The syncs write into the default dataset only. {@link syncPinWarning} names the shapes whose
- * routing sends their reads elsewhere.
+ * routing sends their reads elsewhere, when the boot runs those syncs.
  */
 import {
   GRAPH_TARGET_ENV,
@@ -60,44 +60,65 @@ export const SHAPE_SHAPE_CLASSES: readonly string[] = [`${SH}NodeShape`, `${SH}P
 export const ONTOLOGY_TERM_CLASSES: readonly string[] = [
   `${RDFS}Class`,
   `${OWL}Class`,
+  `${OWL}Restriction`,
   `${RDF}Property`,
   `${OWL}ObjectProperty`,
   `${OWL}DatatypeProperty`,
   `${OWL}AnnotationProperty`,
 ];
 
-/** A dataset as `GET /admin/routes` tells it apart: its store class, and its `id` when it has one. */
+/**
+ * A dataset as a log line tells it apart: its store class, and its `id` when it has one, else the
+ * dataset name a SPARQL store keeps from its endpoint (`FusekiStore`'s `dataset`).
+ */
 function datasetName(dataset: IDataset): string {
-  const id = (dataset as { id?: unknown }).id;
+  const { id, dataset: name } = dataset as { id?: unknown; dataset?: unknown };
   const store = dataset?.constructor?.name || 'unknown';
-  return typeof id === 'string' && id ? `${store} "${id}"` : store;
+  const label = typeof id === 'string' && id ? id : typeof name === 'string' && name ? name : undefined;
+  return label ? `${store} "${label}"` : store;
 }
 
 /**
- * The watched class `shapeClass` or one of its super-shapes targets (a sub-shape of `owl:Class`,
- * say `owl:Restriction`, goes where its parent is pinned), else undefined.
+ * The class the instances of `shapeClass` carry, when it is watched, else undefined: the
+ * `targetClass` of the shape itself or, when it declares none of its own, of the nearest
+ * super-shape that does. A sub-shape with its own target class is not its parent's class: the
+ * syncs' data of the parent's class never reads through it.
  */
 function watchedClassOf(shapeClass: Function, watched: ReadonlySet<string>): string | undefined {
   for (let current: unknown = shapeClass; typeof current === 'function' && current !== Function.prototype; current = Object.getPrototypeOf(current)) {
+    if (!Object.prototype.hasOwnProperty.call(current, 'targetClass')) continue;
     const id = (current as { targetClass?: { id?: unknown } }).targetClass?.id;
-    if (typeof id === 'string' && watched.has(id)) return id;
+    return typeof id === 'string' && watched.has(id) ? id : undefined;
   }
   return undefined;
 }
 
+/** Which boot syncs run: only the shapes a running sync writes are worth a warning. */
+export interface BootSyncs {
+  /** The shape sync runs (`shapeSyncOn`): it writes the shape shapes. */
+  shapeSync: boolean;
+  /** The ontology sync runs (`bootSyncsOntologies`): it writes the ontology term shapes. */
+  ontologySync: boolean;
+}
+
 /**
- * One warning when routing pins a shape the boot syncs write (the shape shapes `NodeShape` /
- * `PropertyShape`, or an ontology term shape such as `rdfs:Class` / `owl:ObjectProperty`) to a
- * dataset other than the default one: the syncs write into the default dataset only, so reads of
- * those shapes on the pinned dataset miss what they wrote. Names each such shape (sub-shapes of a
- * watched shape included) and its dataset. Undefined when there is nothing to warn about (or no
- * default dataset). Reads the registered shapes outside any shape catalog (run it at boot, never
- * inside `withShapeCatalog`).
+ * One warning when routing pins a shape a boot sync that runs writes (the shape shapes
+ * `NodeShape` / `PropertyShape` for the shape sync, an ontology term shape such as `rdfs:Class` /
+ * `owl:ObjectProperty` for the ontology sync) to a dataset other than the default one: the syncs
+ * write into the default dataset only, so reads of those shapes on the pinned dataset miss what
+ * they wrote. Names each such shape and its dataset; a sub-shape counts under the target class it
+ * declares, or its parent's when it declares none.
+ * Undefined when there is nothing to warn about (no sync runs, or no default dataset). Reads the
+ * registered shapes outside any shape catalog (run it at boot, never inside `withShapeCatalog`).
  */
-export function syncPinWarning(): string | undefined {
+export function syncPinWarning(syncs: BootSyncs): string | undefined {
   const defaultDataset = LinkedStorage.getDefaultDataset();
   if (!defaultDataset) return undefined;
-  const watched = new Set([...SHAPE_SHAPE_CLASSES, ...ONTOLOGY_TERM_CLASSES]);
+  const watched = new Set([
+    ...(syncs.shapeSync ? SHAPE_SHAPE_CLASSES : []),
+    ...(syncs.ontologySync ? ONTOLOGY_TERM_CLASSES : []),
+  ]);
+  if (watched.size === 0) return undefined;
   const pinned = new Map<IDataset, string[]>();
   for (const [iri, shapeClass] of getAllShapeClasses()) {
     const targetClass = watchedClassOf(shapeClass, watched);
@@ -110,10 +131,11 @@ export function syncPinWarning(): string | undefined {
   }
   if (pinned.size === 0) return undefined;
   const parts = [...pinned].map(([dataset, shapes]) => `${shapes.sort().join(', ')} → ${datasetName(dataset)}`);
+  const writers =
+    syncs.ontologySync && syncs.shapeSync ? 'ontology and shape syncs write' : `${syncs.shapeSync ? 'shape' : 'ontology'} sync writes`;
   return (
     `[LinkedServer] Routing pins shapes the boot syncs write to a dataset other than the default ` +
-    `one: ${parts.join('; ')}. The ontology and shape syncs, when they run, write into the default dataset ` +
-    `(${datasetName(defaultDataset)}) only, so reads of these shapes on the pinned dataset do not ` +
-    `see what the syncs wrote.`
+    `one: ${parts.join('; ')}. The ${writers} into the default dataset (${datasetName(defaultDataset)}) ` +
+    `only, so reads of these shapes on the pinned dataset do not see what the boot wrote.`
   );
 }

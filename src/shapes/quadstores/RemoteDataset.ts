@@ -52,19 +52,34 @@ export interface RemoteDatasetConfig {
   /** Or pass a fully-qualified URI directly. */
   id?: string;
   /**
-   * In the url form, send the signed-in user's WebID of the current call as
-   * `x-linked-end-user` (see {@link END_USER_HEADER}). Default true; `false` (or the
-   * string `'false'`, as an interpolated config gives it) turns it off.
+   * In the url form, send the signed-in user's own access token with each request made
+   * while their HTTP request is answered (see {@link USER_TOKEN_HEADER}). Default true;
+   * `false` (or the string `'false'`, as an interpolated config gives it) turns it off: do so
+   * for a data server you do not trust with your users' tokens.
    */
-  forwardEndUser?: boolean | string;
+  forwardUserToken?: boolean | string;
 }
 
 /**
- * The header the url form sends with a query made while a signed-in user's HTTP request is
- * being answered: that user's WebID. The data server decides what to do with it; the bearer
- * token still decides which data the store reaches.
+ * The header the url form sends the signed-in user's Solid-OIDC access token in, with a
+ * `DPoP` proof for that request beside it. Both come from {@link USER_TOKEN_HEADERS_HOOK};
+ * the data server verifies them and acts as that user. The bearer token still decides which
+ * data the store reaches.
  */
-export const END_USER_HEADER = 'x-linked-end-user';
+export const USER_TOKEN_HEADER = 'x-linked-user-token';
+
+/**
+ * The `globalThis` key of the hook that answers the user token headers for a request:
+ * `(request, {method, url}) => Promise<{'x-linked-user-token': string; DPoP: string} | undefined>`.
+ * `@_linked/auth`'s backend installs it; read here instead of importing auth, so this store
+ * stays browser-safe and free of auth.
+ */
+export const USER_TOKEN_HEADERS_HOOK = Symbol.for('@_linked/auth:userTokenHeaders');
+
+type UserTokenHeadersHook = (
+  request: unknown,
+  target: { method: string; url: string },
+) => Promise<unknown>;
 
 // The store `@_linked/server-utils/utils/CallContext` keeps the call context in, shared on
 // `globalThis` under this key. Read here instead of importing that module: it imports
@@ -77,16 +92,39 @@ function currentCallContext(): CallContext | undefined {
   return typeof store?.getStore === 'function' ? (store.getStore() as CallContext | undefined) : undefined;
 }
 
+let warnedUserTokenHook = false;
+const warnUserTokenHook = (problem: string): void => {
+  if (warnedUserTokenHook) return;
+  warnedUserTokenHook = true;
+  console.warn(`RemoteDataset: the user token hook ${problem}; queries go without the user's token`);
+};
+
 /**
- * The WebID of the signed-in user behind the current call: the http context's
- * `request.linkedAuth.userAccount.accountOf.id`. Undefined in a system context
- * (`runAsSystem`), outside any call, and for a request without a session.
+ * The user token headers for a request to `url`, made in the current call: the hook's
+ * answer for the http context's request. Undefined in a system context (`runAsSystem`),
+ * outside any call, without the hook, and when it answers nothing. A hook that throws or
+ * answers something else than two non-empty strings sends nothing (one warning per process).
  */
-export function currentEndUserWebId(): string | undefined {
+async function userTokenHeadersFor(url: string): Promise<Record<string, string> | undefined> {
   const ctx = currentCallContext();
-  if (!ctx || ctx.kind !== 'http') return undefined;
-  const webId = ctx.request?.linkedAuth?.userAccount?.accountOf?.id;
-  return typeof webId === 'string' && webId ? webId : undefined;
+  if (!ctx || ctx.kind !== 'http' || !ctx.request) return undefined;
+  const hook = (globalThis as Record<symbol, unknown>)[USER_TOKEN_HEADERS_HOOK];
+  if (typeof hook !== 'function') return undefined;
+  let answer: unknown;
+  try {
+    answer = await (hook as UserTokenHeadersHook)(ctx.request, { method: 'POST', url });
+  } catch {
+    warnUserTokenHook('failed');
+    return undefined;
+  }
+  if (answer === undefined || answer === null) return undefined;
+  const token = (answer as Record<string, unknown>)[USER_TOKEN_HEADER];
+  const proof = (answer as Record<string, unknown>).DPoP;
+  if (typeof token !== 'string' || !token || typeof proof !== 'string' || !proof) {
+    warnUserTokenHook('answered something else than a token and a proof');
+    return undefined;
+  }
+  return { [USER_TOKEN_HEADER]: token, DPoP: proof };
 }
 
 /**
@@ -213,8 +251,8 @@ export class RemoteDataset implements IDataset {
   /** The data server base url, trailing slashes trimmed; undefined in the no-url form. */
   readonly url?: string;
   private readonly token?: string;
-  /** Whether the url form sends {@link END_USER_HEADER}; see `RemoteDatasetConfig.forwardEndUser`. */
-  readonly forwardEndUser: boolean = true;
+  /** Whether the url form sends {@link USER_TOKEN_HEADER}; see `RemoteDatasetConfig.forwardUserToken`. */
+  readonly forwardUserToken: boolean = true;
   private initialized?: Promise<RemoteDatasetPingInfo | undefined>;
   private pingInfo?: RemoteDatasetPingInfo;
   private readonly instanceRegistryKey = `remote-dataset:${nextRegistryKey++}`;
@@ -231,8 +269,8 @@ export class RemoteDataset implements IDataset {
       const token = typeof config.token === 'string' ? config.token.trim() : '';
       if (token) this.token = token;
     }
-    if (config.forwardEndUser === false || config.forwardEndUser === 'false') {
-      this.forwardEndUser = false;
+    if (config.forwardUserToken === false || config.forwardUserToken === 'false') {
+      this.forwardUserToken = false;
     }
     if (config.id) {
       this.id = config.id;
@@ -442,9 +480,10 @@ export class RemoteDataset implements IDataset {
       Accept: 'application/json',
     };
     if (this.token) headers.Authorization = `Bearer ${this.token}`;
-    if (this.forwardEndUser) {
-      const endUser = currentEndUserWebId();
-      if (endUser) headers[END_USER_HEADER] = endUser;
+    if (this.forwardUserToken) {
+      // a fresh proof for every request: never cached (each has its own `jti`)
+      const userHeaders = await userTokenHeadersFor(target);
+      if (userHeaders) Object.assign(headers, userHeaders);
     }
 
     let response: Response;
@@ -453,6 +492,9 @@ export class RemoteDataset implements IDataset {
         method: 'POST',
         headers,
         body: JSON.stringify({ args }),
+        // A redirect is an answer, never followed: the bearer and the user's token and proof
+        // go to the data server at `url` and nowhere else.
+        redirect: 'manual',
       });
     } catch (err) {
       const cause = err instanceof Error ? err.message : String(err);

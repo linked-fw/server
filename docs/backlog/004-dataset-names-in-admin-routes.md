@@ -28,3 +28,9 @@ host can match a route by its shape IRI in whichever dataset holds it.
    accessor on the shared global), or should `IDataset` gain an optional public `name`?
 2. Should the route then key `datasets` by alias (a breaking change of the body) or add `alias` to
    each entry?
+
+## Also: the routing-pin warning reads a private field
+
+`syncPinWarning` names a store without an `id` by its dataset (`FusekiStore "cn-main"`), and it gets
+that name from FusekiStore's private `dataset` field (`datasetName()` in `src/utils/graphTargets.ts`).
+The same public store name would replace that read.

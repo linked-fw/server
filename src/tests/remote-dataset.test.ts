@@ -19,7 +19,8 @@ const {
   RemoteDatasetError,
   RemoteDatasetUnauthorizedError,
   RemoteDatasetUnreachableError,
-  END_USER_HEADER,
+  USER_TOKEN_HEADER,
+  USER_TOKEN_HEADERS_HOOK,
 } = await import('../shapes/quadstores/RemoteDataset.js');
 const { runWithCallContext, runAsSystem } = await import('@_linked/server-utils/utils/CallContext');
 const { LinkedServer, registerCallRoutes } = await import('../shapes/LinkedServer.js');
@@ -368,52 +369,123 @@ describe('RemoteDataset url form: other errors', () => {
   });
 });
 
-describe('RemoteDataset url form: the end user', () => {
-  const WEBID = 'https://alice.example/profile/card#me';
-  const signedIn = (webId: string | undefined) => ({
+describe('RemoteDataset url form: the user token', () => {
+  const SID = 'session-1';
+  const signedIn = (sid: string | undefined) => ({
     kind: 'http' as const,
-    request: webId ? { linkedAuth: { userAccount: { id: 'urn:acct', accountOf: { id: webId } } } } : {},
+    request: sid ? { linkedAuth: { sid, userAccount: { id: 'urn:acct', accountOf: { id: 'https://u.test/me' } } } } : {},
     response: {},
   });
   const sentHeaders = (call: Call) => call.init.headers as Record<string, string>;
-
-  it('sends the signed-in user\'s WebID as x-linked-end-user', async () => {
-    expect(END_USER_HEADER).toBe('x-linked-end-user');
-    const calls = stubFetch(() => jsonResponse(200, true));
-    const query = AskBuilder.forNode(IRI);
-    await runWithCallContext(signedIn(WEBID), () => store().askQuery(query));
-    expect(sentHeaders(calls[0])[END_USER_HEADER]).toBe(WEBID);
-    expect(sentHeaders(calls[0]).Authorization).toBe(`Bearer ${TOKEN}`);
+  const hooks = globalThis as unknown as Record<symbol, unknown>;
+  let seen: Array<{ request: any; target: { method: string; url: string } }>;
+  let proofs = 0;
+  /** Install a hook like auth's: answers for a request with a session, a new proof each time. */
+  const installHook = (answer?: (request: any) => unknown) => {
+    seen = [];
+    hooks[USER_TOKEN_HEADERS_HOOK] = async (request: any, target: { method: string; url: string }) => {
+      seen.push({ request, target });
+      if (answer) return answer(request);
+      return request?.linkedAuth?.sid ? { [USER_TOKEN_HEADER]: 'user-at', DPoP: `proof-${++proofs}` } : undefined;
+    };
+  };
+  afterEach(() => {
+    delete hooks[USER_TOKEN_HEADERS_HOOK];
   });
 
-  it('sends no end user in a system context, for an anonymous request, or outside any call', async () => {
+  it("sends the hook's token and proof beside the bearer, with the request's method and URL", async () => {
+    expect(USER_TOKEN_HEADER).toBe('x-linked-user-token');
+    expect(USER_TOKEN_HEADERS_HOOK).toBe(Symbol.for('@_linked/auth:userTokenHeaders'));
+    installHook();
+    const calls = stubFetch(() => jsonResponse(200, true));
+    const query = AskBuilder.forNode(IRI);
+    await runWithCallContext(signedIn(SID), async () => {
+      await store().askQuery(query);
+      await store().askQuery(query);
+    });
+    expect(sentHeaders(calls[0])[USER_TOKEN_HEADER]).toBe('user-at');
+    expect(sentHeaders(calls[0]).DPoP).toBe('proof-' + (proofs - 1));
+    expect(sentHeaders(calls[1]).DPoP).toBe('proof-' + proofs);
+    expect(sentHeaders(calls[0]).Authorization).toBe(`Bearer ${TOKEN}`);
+    expect(seen[0].request.linkedAuth.sid).toBe(SID);
+    expect(seen[0].target).toEqual({ method: 'POST', url: `${URL_BASE}/call/@_linked/server/askQuery` });
+  });
+
+  it('sends neither in a system context, for an anonymous request, outside any call, or without the hook', async () => {
+    installHook();
     const calls = stubFetch(() => jsonResponse(200, true));
     const query = AskBuilder.forNode(IRI);
     // A system context opened from inside a signed-in request still has no user.
-    await runWithCallContext(signedIn(WEBID), () => runAsSystem(() => store().askQuery(query), 'job'));
+    await runWithCallContext(signedIn(SID), () => runAsSystem(() => store().askQuery(query), 'job'));
     await runWithCallContext(signedIn(undefined), () => store().askQuery(query));
     await store().askQuery(query);
-    expect(calls).toHaveLength(3);
+    delete hooks[USER_TOKEN_HEADERS_HOOK];
+    await runWithCallContext(signedIn(SID), () => store().askQuery(query));
+    expect(calls).toHaveLength(4);
     for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
+  });
+
+  it('a hook that throws or answers something else sends neither; the query still goes, one warning', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const calls = stubFetch(() => jsonResponse(200, true));
+    const query = AskBuilder.forNode(IRI);
+    const answers: Array<(request: any) => unknown> = [
+      () => {
+        throw new Error('broken');
+      },
+      () => ({ [USER_TOKEN_HEADER]: 'user-at' }),
+      () => ({ [USER_TOKEN_HEADER]: '', DPoP: 'p' }),
+      () => 'nonsense',
+      () => null,
+    ];
+    for (const answer of answers) {
+      installHook(answer);
+      await runWithCallContext(signedIn(SID), () => store().askQuery(query));
+    }
+    expect(calls).toHaveLength(answers.length);
+    for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
+    expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
+    for (const call of warn.mock.calls) expect(String(call[0])).not.toContain('user-at');
   });
 
   it('imports nothing server-only: the no-url form runs in the browser', async () => {
     const { readFile } = await import('fs/promises');
     const source = await readFile(new URL('../shapes/quadstores/RemoteDataset.ts', import.meta.url), 'utf8');
     const imports = [...source.matchAll(/^import\s+(?!type\b)[^;]*from\s+'([^']+)'/gm)].map((m) => m[1]);
-    expect(imports.filter((m) => /CallContext|async_hooks|^node:|^fs|^path$/.test(m))).toEqual([]);
+    expect(imports.filter((m) => /CallContext|async_hooks|^node:|^fs|^path$|@_linked\/auth/.test(m))).toEqual([]);
   });
 
-  it('forwardEndUser: false (or "false") sends no end user', async () => {
+  it('forwardUserToken: false (or "false") sends neither and never asks the hook', async () => {
+    installHook();
     const calls = stubFetch(() => jsonResponse(200, true));
     const query = AskBuilder.forNode(IRI);
-    expect(store().forwardEndUser).toBe(true);
-    await runWithCallContext(signedIn(WEBID), async () => {
-      await store({ forwardEndUser: false }).askQuery(query);
-      await store({ forwardEndUser: 'false' }).askQuery(query);
+    expect(store().forwardUserToken).toBe(true);
+    await runWithCallContext(signedIn(SID), async () => {
+      await store({ forwardUserToken: false }).askQuery(query);
+      await store({ forwardUserToken: 'false' }).askQuery(query);
     });
     expect(calls).toHaveLength(2);
     for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('never follows a redirect: the 3xx is the answer, an error', async () => {
+    installHook();
+    const calls = stubFetch(() => new Response(null, { status: 307, headers: { location: 'https://elsewhere.test/q' } }));
+    const err = await runWithCallContext(signedIn(SID), () => caught(store().askQuery(AskBuilder.forNode(IRI))));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.redirect).toBe('manual');
+    expect(err).toBeInstanceOf(RemoteDatasetError);
+    expect(err.status).toBe(307);
+  });
+
+  it('no error message contains the user token or the proof', async () => {
+    installHook();
+    stubFetch(() => jsonResponse(401, { error: 'invalid user token', code: 'invalid-user-token' }));
+    const err = await runWithCallContext(signedIn(SID), () => caught(store().askQuery(AskBuilder.forNode(IRI))));
+    expect(err).toBeInstanceOf(RemoteDatasetError);
+    expect(err.message).not.toContain('user-at');
+    expect(err.message).not.toContain('proof-');
   });
 });
 
