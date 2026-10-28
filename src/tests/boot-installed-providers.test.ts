@@ -115,8 +115,8 @@ beforeEach(() => {
   installPackage('plain-lib', {}, providerSource('plain'));
   installPackage('legacy-lincd', { lincd: true }, providerSource('legacy'));
   installPackage('@_linked/unflagged-tool', {}, providerSource('unflagged'));
-  // Nor the retired `linkedPackage` flag alone, nor an app (`linked.kind: "app"`).
-  installPackage('retired-flag', { linkedPackage: true }, providerSource('retired'));
+  // Nor an app, by `linked.kind: "app"` or by the retired `linkedApp` flag.
+  installPackage('retired-flag', { linkedApp: true }, providerSource('retired'));
   installPackage('an-app', { linked: { kind: 'app' } }, providerSource('app'));
   // The app's own compiled backend, so loading it is quiet.
   writeFile('lib/backend.js', 'export {};\n');
