@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { unpublishedPackages } from '@_linked/cli/installed-packages';
 
 /**
  * A linked package found in the app's dependency tree, wherever it is
@@ -116,7 +117,74 @@ export function readInstalledPackage(
 }
 
 /**
- * Every linked package reachable from the app's `dependencies`, each one AFTER
+ * The npm names a `package.json` lists in `linked.unpublishedPackages` (K-unpublished): packages
+ * it uses that are not on npm, localized into the app's `packages-local/`. The server treats them
+ * as direct dependencies of whoever lists them. Read with the cli's one reader, so a malformed
+ * list throws rather than shrinking silently.
+ */
+export function unpublishedNames(json: unknown): string[] {
+  return unpublishedPackages(json).map((p) => p.name);
+}
+
+/** Where a listed package's checkout lives in the app, when npm has not linked it yet. */
+const LOCAL_DIR = 'packages-local';
+
+/**
+ * A package the app lists in `linked.unpublishedPackages`, found by its npm name: first the
+ * way Node finds it (`node_modules/<name>` from `fromDir` up, which is npm's workspace link into
+ * `packages-local/` once the app is installed), else among `<appDir>/packages-local/<dir>`
+ * by the `name` in each `package.json` (a checkout not yet installed). Null when there is no
+ * checkout of it.
+ */
+export function findListedPackage(
+  name: string,
+  fromDir: string,
+  appDir: string
+): { root: string; json: any } | null {
+  const installed = readInstalledPackage(name, fromDir);
+  if (installed) return installed;
+  const localDir = path.join(appDir, LOCAL_DIR);
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(localDir).sort();
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    const root = path.join(localDir, entry);
+    try {
+      const json = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
+      if (json?.name === name) return { root, json };
+    } catch {}
+  }
+  return null;
+}
+
+/**
+ * Every name in the app's `linked.unpublishedPackages`, and transitively in the lists of the
+ * listed packages it finds ({@link findListedPackage}): the packages the server treats as the
+ * app's own direct dependencies. A listed package without a checkout still counts; only its own
+ * list cannot be read.
+ */
+export function listedPackageNames(appDir: string, appPackageJson: any): Set<string> {
+  const names = new Set<string>();
+  const queue = unpublishedNames(appPackageJson).map((name) => ({ name, fromDir: appDir }));
+  while (queue.length) {
+    const { name, fromDir } = queue.shift()!;
+    if (names.has(name) || name === appPackageJson?.name) continue;
+    names.add(name);
+    const found = findListedPackage(name, fromDir, appDir);
+    if (!found) continue;
+    const root = realpathOr(found.root);
+    for (const next of unpublishedNames(found.json)) queue.push({ name: next, fromDir: root });
+  }
+  return names;
+}
+
+/**
+ * Every linked package reachable from the app's `dependencies` and its
+ * `linked.unpublishedPackages` (transitively, through each package's own
+ * `dependencies` and list), each one AFTER
  * the linked packages it depends on. Providers register middleware in the
  * order they are indexed, so a package's middleware must not run before that
  * of a package it builds on (e.g. anything reading `request.linkedAuth` after
@@ -149,9 +217,11 @@ export function discoverLinkedDependencies(
   const visitedRoots = new Set<string>();
   const appName = appPackageJson?.name;
 
-  const visit = (name: string, fromDir: string) => {
+  const visit = (name: string, fromDir: string, listed = false) => {
     if (name === appName) return;
-    const installed = readInstalledPackage(name, fromDir);
+    const installed = listed
+      ? findListedPackage(name, fromDir, appDir)
+      : readInstalledPackage(name, fromDir);
     if (!installed || !isLinked(installed.json)) return;
     const realRoot = realpathOr(installed.root);
     if (visitedRoots.has(realRoot)) return;
@@ -165,6 +235,9 @@ export function discoverLinkedDependencies(
     for (const dep of Object.keys(installed.json.dependencies ?? {})) {
       visit(dep, realRoot);
     }
+    for (const dep of unpublishedNames(installed.json)) {
+      visit(dep, realRoot, true);
+    }
     // Pushed after its dependencies, once per name: the first copy found
     // fixes the package's place in the order.
     if (!out.includes(entry)) out.push(entry);
@@ -172,6 +245,9 @@ export function discoverLinkedDependencies(
 
   for (const name of Object.keys(appPackageJson?.dependencies ?? {})) {
     visit(name, appDir);
+  }
+  for (const name of unpublishedNames(appPackageJson)) {
+    visit(name, appDir, true);
   }
 
   for (const entry of out) {
@@ -186,7 +262,8 @@ export function discoverLinkedDependencies(
 }
 
 /**
- * Package name → the names of its direct `dependencies` and `peerDependencies`, for the app
+ * Package name → the names of its direct `dependencies`, `peerDependencies` and
+ * `linked.unpublishedPackages`, for the app
  * (`appPackageJson`) and every package in `packageDirs` (name → package root, as discovery
  * found it). The shape check scopes its direction-I errors with it. A package whose
  * `package.json` cannot be read is left out.
@@ -202,6 +279,7 @@ export function readDependencyLists(
       ...new Set([
         ...Object.keys(json?.dependencies ?? {}),
         ...Object.keys(json?.peerDependencies ?? {}),
+        ...unpublishedNames(json),
       ]),
     ].sort();
   };

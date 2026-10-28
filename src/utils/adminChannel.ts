@@ -96,14 +96,14 @@ export function isValidPackageName(name: string): boolean {
 /**
  * Refuse a package a host may not ask to reload: not a valid npm name, a framework
  * (`@_linked/*`) package, or not in `allowed` (the app's own name and its direct
- * dependencies). Throws {@link AdminRequestError}.
+ * dependencies, its `linked.unpublishedPackages` among them). Throws {@link AdminRequestError}.
  */
 export function assertReloadablePackages(packages: string[], allowed: ReadonlySet<string>): void {
   for (const pkg of packages) {
     if (!isValidPackageName(pkg)) throw new AdminRequestError(`not a package name: ${JSON.stringify(pkg)}`);
     if (pkg.startsWith('@_linked/')) throw new AdminRequestError(`framework packages are not reloaded: ${pkg}`);
     if (!allowed.has(pkg)) {
-      throw new AdminRequestError(`unknown package: ${pkg} is neither the app nor one of its direct dependencies`);
+      throw new AdminRequestError(`unknown package: ${pkg} is neither the app nor one of its direct dependencies (dependencies, devDependencies, linked.unpublishedPackages)`);
     }
   }
 }
