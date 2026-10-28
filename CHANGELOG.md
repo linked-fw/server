@@ -1,5 +1,44 @@
 # @\_linked/server
 
+## 3.13.0
+
+### Minor Changes
+
+- [#219](https://github.com/linked-fw/server/pull/219) [`bc51824`](https://github.com/linked-fw/server/commit/bc51824cd00843498e46d1267b34369e1eea9d5f) Thanks [@flyon](https://github.com/flyon)! - Boot loading decides which installed packages are linked from their `linked.kind` (any kind but `app`), through `linkedKind(json)` in `@_linked/server/utils/linkedDependencies` (the twin of `@_linked/cli`'s). `linkedPackage: true` is no longer read. `discoverLinkedDependencies` takes an optional third argument, the test for a linked package (default `isLinkedPackageJson`). This package's own `package.json` says `"kind": "library"`, merged into its `linked.serverOnly`.
+
+- [#219](https://github.com/linked-fw/server/pull/219) [`865740c`](https://github.com/linked-fw/server/commit/865740c5ba110acede9941c208556cbe516dc09b) Thanks [@flyon](https://github.com/flyon)! - Quieter boot log:
+
+  - The ontology and shape graph sync lines list the packages written and count the unchanged ones (`shape graph sync: written dep; 3 unchanged; app graph unchanged`), instead of listing every skipped package.
+  - `shape check: …` is logged only when the check has findings.
+  - The routing-pin warning is logged only for a boot sync that runs: `syncPinWarning` takes `{shapeSync, ontologySync}` and watches only the shapes those syncs write, so a boot with `syncShapesOnBoot: false` does not warn. A store without an `id` is named by its endpoint's dataset (`FusekiStore "cn-main"`).
+
+- [#219](https://github.com/linked-fw/server/pull/219) [`4580aa7`](https://github.com/linked-fw/server/commit/4580aa76c72e980a902c897a5df9e891cf498556) Thanks [@flyon](https://github.com/flyon)! - The packages an app lists in `linked.unpublishedPackages` (and, transitively, the lists of those packages) are its direct dependencies: boot loading finds them by npm name (npm's workspace link into `packages-local/`, else the checkout there), the shape sync's reload check accepts them, and the shape check reads each list as dependencies. Lists are read with `@_linked/cli/installed-packages`' `unpublishedPackages`, so a malformed list is an error.
+
+- [#219](https://github.com/linked-fw/server/pull/219) [`47dc659`](https://github.com/linked-fw/server/commit/47dc6590562fd064b12a9c43b2573912593b9f4d) Thanks [@flyon](https://github.com/flyon)! - `RemoteDataset`'s url form sends the signed-in user's own Solid-OIDC access token instead of their
+  WebID: for a query made in a user's HTTP request it asks `@_linked/auth`'s hook
+  (`globalThis[Symbol.for('@_linked/auth:userTokenHeaders')]`, exported as `USER_TOKEN_HEADERS_HOOK`)
+  and sends `x-linked-user-token` (`USER_TOKEN_HEADER`) with a fresh `DPoP` proof for that request.
+  `forwardUserToken: false` turns it off.
+
+  **Breaking:** `x-linked-end-user` is no longer sent; `forwardEndUser`, `END_USER_HEADER` and
+  `currentEndUserWebId` are removed. A data server that read the WebID header verifies the token
+  with `@_linked/auth`'s `verifySolidAccessToken` instead.
+
+### Patch Changes
+
+- [#219](https://github.com/linked-fw/server/pull/219) [`3d946b4`](https://github.com/linked-fw/server/commit/3d946b41fffdcd2189bdfb1592ed132a95b9ae10) Thanks [@flyon](https://github.com/flyon)! - The boot ontology sync log no longer has a "(default graph: the store has no graph queries)"
+  case: core's ontology sync refuses such a store instead of falling back (core report 080), which
+  the server reports as a failed ontology sync. The unused `fallback` field is gone from the
+  `OntologyCore` type.
+
+- [#219](https://github.com/linked-fw/server/pull/219) [`b39cddb`](https://github.com/linked-fw/server/commit/b39cddb14cc904b268edcebcba6a10b2b959b033) Thanks [@flyon](https://github.com/flyon)! - `RemoteDataset`'s url form never follows a redirect: a 3xx answer is a `RemoteDatasetError` with
+  its status, so the bearer, the user's token and its proof are sent to the configured data server
+  only.
+
+- [#219](https://github.com/linked-fw/server/pull/219) [`757655e`](https://github.com/linked-fw/server/commit/757655e5a548eb2129742c7eedbee6b46908b6b8) Thanks [@flyon](https://github.com/flyon)! - Boot loading reads a `package.json` without `linked.kind` by the retired flags (`linkedPackage: true` is a `library`, `linkedApp: true` an `app`), so packages published before `linked.kind` still load until they are republished.
+
+- [#219](https://github.com/linked-fw/server/pull/219) [`c457627`](https://github.com/linked-fw/server/commit/c45762703c589d91b52661c820b19f33c711548f) Thanks [@flyon](https://github.com/flyon)! - `POST /admin/sync-shapes` answers 200 with `shapeCheck.failed` when the shape check throws and both syncs succeeded (it answered 500). The sync-pin warning counts a sub-shape under the target class it declares, so a sub-shape with its own class is no longer reported as its parent's; `owl:Restriction` is watched with the ontology term classes.
+
 ## 3.12.1
 
 ### Patch Changes
