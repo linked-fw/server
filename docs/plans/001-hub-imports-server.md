@@ -20,20 +20,25 @@ for every step, status table, numbers, starter prompt). Steps land on master `hu
 ## Contracts
 
 Copied verbatim from plan 282; the rest are there. A step that changes one updates it here, in
-core plan 006 and in 282 in the same landing. Core plan 006 §Contracts holds a proposed
-refinement of K3 (ontology content as N-Triples, a `reload` input, `POST /admin/graph-content`)
-and the proposed names of K4, for the master to accept before SY starts.
+core plan 006 and in 282 in the same landing. Core plan 006 §Contracts holds K3's full wording
+(accepted by the master, 282 M9) and K4's names (M10–M12).
 
-- **K3 Hosted-app writer flag and Turtle endpoint** (provider SY in `@_linked/server`; consumer HS):
-  one env flag `LINKED_GRAPH_WRITER=host` (the app writes no shape or ontology graph, at boot or on
-  request); `GET /admin/graph-turtle?packages=<n1,n2>` on the admin channel returns, without
-  writing, per package `{name, shapes: {graph, turtle, hash}, ontology?: {graph, turtle, hash}}`
-  and the app's single-owner graph `{graph, turtle, hash}`; hashes as the existing sync computes
-  them. `/admin/sync-shapes` and `LINKED_SYNC_*_ON_BOOT` stay until HS (M5).
+- **K3 Hosted-app writer flag and graph-content endpoint** (provider SY in `@_linked/server`; consumer
+  HS; M9): `LINKED_GRAPH_WRITER=app|host` (under `host` the app writes no shape or ontology graph,
+  at boot or on request); `POST /admin/graph-content {packages?, reload?}` on the admin channel
+  returns, without writing, per package its shapes and ontology graphs and the app's single-owner
+  graph, each `{graph, mediaType, text, hash, sources}` (the exact bytes and hash the package-mode
+  sync writes); `appGraph` null when the app has none, absent without `DATA_ROOT`; 409 when a graph
+  target is not `package`. `/admin/sync-shapes` and `LINKED_SYNC_*_ON_BOOT` stay until HS (M5);
+  under `host`, `/admin/sync-shapes` reloads but answers `skipped: 'host-writer'`; `/admin/routes`
+  reports `graphWriter`. Exact text in core sub-plan 006 §Contracts.
 - **K4 Open-source sync targets** (provider SY in `@_linked/core`; consumer `@_linked/server`'s boot
-  sync): the datasets a package's graphs go to = every dataset any of its shapes route to ∪ the
-  dataset NodeShape/PropertyShape (and the ontology term shapes) are pinned to (G2); an
-  ontology-only package follows the shapes that target its classes; graphs left behind are pruned.
+  sync; M10–M12): `graphSyncTargets()`, `syncShapeGraphsRouted`, `syncOntologiesRouted` in core
+  `src/shapes/syncTargets.ts`. A package's graphs go to every dataset any of its shapes route to ∪
+  the dataset NodeShape/PropertyShape (and the ontology term shapes) are pinned to (G2); an ontology
+  graph also where shapes targeting its classes route; the single-owner graph to the datasets of
+  shapes declaring `contains` properties ∪ the NodeShape/PropertyShape dataset. Prune only in the
+  app's default dataset (M11). Per-dataset `syncShapeGraphs(ds)`/`syncOntologies(ds)` unchanged.
 
 ## SY — server half
 
