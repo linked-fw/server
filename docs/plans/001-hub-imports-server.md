@@ -145,4 +145,4 @@ the server no longer has). The step starts after CN step VD (283 §HS, "The cata
 ## Progress
 
 - [x] SY — server half (report 023; see core plan 006).
-- [ ] HS — server half (report 024).
+- [x] HS — server half (report 024; with CN report 289).
