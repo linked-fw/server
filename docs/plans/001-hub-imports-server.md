@@ -81,5 +81,5 @@ to K3 (cross-repo pair, M5). Report `docs/reports/024-…`. Detailed when wave 2
 
 ## Progress
 
-- [ ] SY — server half (report 023; see core plan 006).
+- [x] SY — server half (report 023; see core plan 006).
 - [ ] HS — server half (report 024).
