@@ -39,8 +39,8 @@ export function applyGraphTargetsFromEnv(env: Record<string, string | undefined>
 export const GRAPH_WRITER_ENV = 'LINKED_GRAPH_WRITER';
 
 /**
- * Who writes the app's shape and ontology graphs: `'app'` (the default) the app itself, at boot
- * and on `POST /admin/sync-shapes`; `'host'` a host that runs it (Create Now), which reads the
+ * Who writes the app's shape and ontology graphs: `'app'` (the default) the app itself, at boot;
+ * `'host'` a host that runs it (Create Now), which reads the
  * content through `POST /admin/graph-content` and writes it itself, so the app writes none.
  */
 export type GraphWriter = 'app' | 'host';
@@ -60,7 +60,7 @@ export function graphWriterFromEnv(env: Record<string, string | undefined>): Gra
 
 /**
  * Whether this process writes its shape and ontology graphs: the one check every write path of the
- * syncs goes through (the boot's ontology and shape syncs and `POST /admin/sync-shapes`). False
+ * syncs goes through (the boot's ontology and shape syncs). False
  * under `LINKED_GRAPH_WRITER=host`.
  */
 export function appWritesGraphs(env: Record<string, string | undefined> = process.env): boolean {
@@ -81,7 +81,7 @@ export function graphTargetEnv(env: Record<string, string | undefined>): Record<
 export interface BootSyncs {
   /** The shape sync runs (`shapeSyncOn`): it writes the shape graphs and the app's shape graph. */
   shapeSync: boolean;
-  /** The ontology sync runs (`bootSyncsOntologies`): it writes the ontology graphs. */
+  /** The ontology sync runs (the same switch as the shape sync): it writes the ontology graphs. */
   ontologySync: boolean;
 }
 

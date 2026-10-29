@@ -40,7 +40,6 @@ import { nativeImport } from '../utils/nativeImport.js';
 import { createJsonBodyParser } from '../utils/jsonBodyParser.js';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import {
-  getAllShapeClasses,
   getShapeClass,
   getSuperShapesClasses,
 } from '@_linked/core/utils/ShapeClass';
@@ -196,13 +195,11 @@ import {
   viteShapesTurtleGenerator,
 } from '../utils/syncShapes.js';
 import {
-  bootSyncsOntologies,
   loadOntologyCore,
   runOntologyPhase,
   ontologyPackageDirs,
   sourceModuleImporter,
   shapeSyncOn,
-  syncOntologiesThenShapes,
   type OntologyPhaseResult,
 } from '../utils/ontologySync.js';
 import { getGraphTargets } from '@_linked/core/utils/graphTargets';
@@ -214,7 +211,6 @@ import {
   type GraphContentAnswer,
   registerAdminRoutes,
   resolveAdminSecret,
-  type ShapeSyncResult,
 } from '../utils/adminChannel.js';
 import { envMs, withTimeout } from '../utils/withTimeout.js';
 import { invalidateSourceUnder } from '../utils/reloadSource.js';
@@ -516,9 +512,8 @@ export class LinkedServer extends Shape {
    * `{package IRI}/graph/shapes`, from its built
    * `shapes.ttl` (an installed package without one gets no shape graph), the app's own packages
    * generated in process in dev (through Vite's loader), and the app's generated single-owner
-   * shapes in `{DATA_ROOT}/graph/shapes`. Runs at boot, after the ontology sync, and again when
-   * the host asks for it over the control channel ({@link resyncShapes}). A source reload (HMR)
-   * does not sync shapes by itself.
+   * shapes in `{DATA_ROOT}/graph/shapes`. Runs at boot, after the ontology sync. A source reload
+   * (HMR) does not sync shapes.
    *
    * A graph whose stored content hash matches is not written, so a sync of unchanged shapes
    * writes nothing. Shapes an earlier sync wrote into the default graph are removed there once
@@ -528,10 +523,9 @@ export class LinkedServer extends Shape {
    * Shape graphs of packages no longer registered stay unless the operator sets
    * `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` — see `bootOrphanScope` in utils/syncShapes.
    *
-   * Opt-out via `linked.config` `syncShapesOnBoot` (default true); env
-   * LINKED_SYNC_SHAPES_ON_BOOT overrides for deployment. A host whose default
-   * dataset is a context router (one that can't write context-free) sets
-   * `syncShapesOnBoot: false` and syncs its shapes itself.
+   * Runs when {@link bootSyncs}: the app writes its own graphs and `linked.config` does not set
+   * `syncShapesOnBoot: false`. A host that writes the app's graphs (`LINKED_GRAPH_WRITER=host`)
+   * reads their content through `POST /admin/graph-content` ({@link graphContent}).
    */
   private async materializeShapesIntoStore(): Promise<void> {
     try {
@@ -541,21 +535,25 @@ export class LinkedServer extends Shape {
     }
   }
 
+  /**
+   * Whether the boot syncs the shapes and the ontologies: the app writes its own graphs
+   * (`LINKED_GRAPH_WRITER` is `app`) and `linked.config` does not set `syncShapesOnBoot: false`.
+   */
+  private bootSyncs(): boolean {
+    return appWritesGraphs(process.env) && shapeSyncOn((this.config as any)?.syncShapesOnBoot);
+  }
+
   /** One shape sync, following the routing; throws when it fails in any dataset. */
-  private async syncRegisteredShapes(): Promise<ShapeSyncResult> {
-    if (!appWritesGraphs(process.env)) return { written: 0, skipped: 'host-writer' };
-    if (!shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)) {
-      return { written: 0, skipped: 'disabled' };
-    }
-    const appData = LinkedStorage.getDefaultDataset();
-    if (!appData) return { written: 0, skipped: 'no-default-dataset' };
+  private async syncRegisteredShapes(): Promise<void> {
+    if (!this.bootSyncs()) return;
+    if (!LinkedStorage.getDefaultDataset()) return;
     const orphanScope = bootOrphanScope();
     const appName: string | undefined = this.package?.name;
     const vite = (this.config.server as any)?.vite;
     const generate = viteShapesTurtleGenerator(vite);
     // Follows the routing: each package's shape graph goes to every dataset its shapes (and the
     // shape shapes) route to; the default dataset is one of them unless routing sends all elsewhere.
-    const shapeGraphs = await syncRoutedShapeGraphs({
+    await syncRoutedShapeGraphs({
       core: await loadShapeGraphCore(),
       orphanScope,
       isOwn: (name) => name === appName || this.workspacePackageNames.has(name),
@@ -565,9 +563,6 @@ export class LinkedServer extends Shape {
       appGraph: appShapesGraph(),
       appPackage: appName,
     });
-    const written =
-      shapeGraphs.defaultGraph ?? shapeGraphs.written.length + (shapeGraphs.appGraph?.status === 'written' ? 1 : 0);
-    return { written, orphanScope, shapeGraphs };
   }
 
   /** The root directory of a package with shapes: the app, a discovered linked package, or one the app resolves. */
@@ -584,20 +579,17 @@ export class LinkedServer extends Shape {
    * beyond the default dataset (see {@link syncTargetsLine}). Only for the syncs this boot runs.
    */
   private async logSyncTargets(): Promise<void> {
-    const flag = (this.config as any)?.syncShapesOnBoot;
     if (!appWritesGraphs(process.env)) {
       console.log(
         `[LinkedServer] ${GRAPH_WRITER_ENV}=host: the host writes this app's shape and ontology graphs; ` +
-          'the boot and POST /admin/sync-shapes write none (the host reads them through POST /admin/graph-content).'
+          'the boot writes none (the host reads them through POST /admin/graph-content).'
       );
       return;
     }
     try {
+      const on = this.bootSyncs();
       const line = syncTargetsLine(
-        {
-          shapeSync: shapeSyncOn(process.env, flag),
-          ontologySync: bootSyncsOntologies(process.env, flag),
-        },
+        { shapeSync: on, ontologySync: on },
         await import('@_linked/core/shapes/syncTargets')
       );
       if (line) console.log(line);
@@ -609,19 +601,12 @@ export class LinkedServer extends Shape {
   /**
    * Boot: sync the registered ontologies into their graphs in app data and run the shape
    * check, before the shape sync (see utils/ontologySync). The sync follows the shape sync's
-   * switch (`syncShapesOnBoot`, `LINKED_SYNC_SHAPES_ON_BOOT`), plus the opt-out
-   * `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false`; the in-memory class hierarchy is loaded either way.
+   * switch ({@link bootSyncs}); the in-memory class hierarchy is loaded either way.
    * Never stops the boot: failures and findings are logged.
    */
   private async syncOntologiesOnBoot(): Promise<void> {
     try {
-      await runAsSystem(
-        () =>
-          this.runOntologyPhase(
-            appWritesGraphs(process.env) && bootSyncsOntologies(process.env, (this.config as any)?.syncShapesOnBoot)
-          ),
-        'ontology sync at boot'
-      );
+      await runAsSystem(() => this.runOntologyPhase(this.bootSyncs()), 'ontology sync at boot');
     } catch (err) {
       console.warn('[LinkedServer] ontology sync failed (non-fatal):', err);
     }
@@ -649,57 +634,28 @@ export class LinkedServer extends Shape {
     });
   }
 
-  /** Tail of the {@link resyncShapes} queue: one re-sync at a time. */
+  /** Tail of the graph content's queue: one request at a time. */
   private shapeSyncQueue: Promise<unknown> = Promise.resolve();
-
-  /**
-   * Re-sync the registered ontologies and shapes into app data, as the boot does,
-   * and report what was written: the ontology sync (every registered package,
-   * hash-skipped), the shape check's counts, then the shape sync. A failed ontology
-   * sync does not stop the shape sync; the run then fails with the ontology error. A shape
-   * check that throws fails nothing: the answer reports it (`shapeCheck.failed`). The host calls it (`POST /admin/sync-shapes`) after it
-   * changed the app's shape code, so the app — the only process that loads that
-   * code — writes its own shapes and their hashes.
-   *
-   * `packages` names the packages whose source changed: the app itself or its
-   * direct dependencies (its `linked.unpublishedPackages` among them), never `@_linked/*` ({@link assertReloadablePackages}). In
-   * dev (Vite) their modules are invalidated and their backends reloaded first
-   * ({@link onSourceChange}), so a shape added since the boot is registered before
-   * the sync; without Vite (a built app) nothing is reloaded. The answer names the
-   * packages reloaded and the node shapes registered after it, so the host can check
-   * that the shape it wrote is there. Runs as the system, never as the caller of a
-   * request, one at a time; a run that takes longer than
-   * `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120 s) fails and releases the queue.
-   */
-  async resyncShapes({packages = []}: {packages?: string[]} = {}): Promise<ShapeSyncResult> {
-    assertReloadablePackages(packages, this.reloadablePackages());
-    return this.inShapeSyncQueue('the shape sync', 'shape sync requested by the host', async () => {
-      const reloaded = await this.reloadPackages(packages);
-      const shapes = () => [...getAllShapeClasses().keys()].sort();
-      if (!appWritesGraphs(process.env)) {
-        // The host writes the graphs: reload, register and check, write nothing.
-        const { shapeCheck } = await this.runOntologyPhase(false);
-        return { written: 0, skipped: 'host-writer' as const, reloaded, shapes: shapes(), shapeCheck };
-      }
-      const result = await syncOntologiesThenShapes(
-        () => this.runOntologyPhase(shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)),
-        () => this.syncRegisteredShapes()
-      );
-      return { ...result, reloaded, shapes: shapes() };
-    });
-  }
 
   /**
    * What the app's `'package'`-mode syncs would write, writing nothing (`POST /admin/graph-content`):
    * per package its shape graph's Turtle and its ontology graph's N-Triples with the hash each
    * record gets and its sources, and the app's own shape graph (`null` when it has no single-owner
    * shapes; left out without `DATA_ROOT`). A host that writes the app's graphs itself
-   * (`LINKED_GRAPH_WRITER=host`) reads them here. `reload` follows {@link resyncShapes}' rule for
-   * `packages` and is reloaded first (then the ontologies are registered again and the shape check
-   * runs, as a sync does); `packages` limits the answer. Each package's Turtle comes from where the
-   * shape sync takes it (an installed package without `shapes.ttl` has none: `withoutTurtle`).
-   * Refused with {@link AdminConflictError} unless both graph targets are `'package'`. Runs in the
-   * shape sync's queue, as the system, under `LINKED_SHAPE_SYNC_TIMEOUT_MS`.
+   * (`LINKED_GRAPH_WRITER=host`) reads them here, after it changed the app's shape code: the app
+   * is the only process that loads that code.
+   *
+   * `reload` names the packages whose source changed: the app itself or its direct dependencies
+   * (its `linked.unpublishedPackages` among them), never `@_linked/*`
+   * ({@link assertReloadablePackages}). In dev (Vite) their modules are invalidated and their
+   * backends reloaded first ({@link onSourceChange}), then the ontologies are registered again and
+   * the shape check runs, so a shape added since the boot is in the answer; without Vite (a built
+   * app) nothing is reloaded. `reloaded` names the packages reloaded. `packages` limits the
+   * answer. Each package's Turtle comes from where the shape sync takes it (an installed package
+   * without `shapes.ttl` has none: `withoutTurtle`).
+   * Refused with {@link AdminConflictError} unless both graph targets are `'package'`. Runs one at
+   * a time, as the system, never as the caller of a request; a run that takes longer than
+   * `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120 s) fails and releases the queue.
    */
   async graphContent({packages, reload = []}: {packages?: string[]; reload?: string[]} = {}): Promise<GraphContentAnswer> {
     assertReloadablePackages(reload, this.reloadablePackages());
@@ -739,7 +695,7 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Run `fn` in the shape sync's queue (one at a time), as the system, failing it after
+   * Run `fn` in the graph content's queue (one at a time), as the system, failing it after
    * `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120 s) and releasing the queue.
    */
   private inShapeSyncQueue<T>(what: string, why: string, fn: () => Promise<T>): Promise<T> {
@@ -775,7 +731,7 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Re-read one package's source from disk (dev only); see {@link resyncShapes}.
+   * Re-read one package's source from disk (dev only); see {@link graphContent}.
    * Resolves whether it reloaded anything.
    */
   private async reloadPackageFromDisk(pkg: string): Promise<boolean> {
@@ -1039,7 +995,6 @@ export class LinkedServer extends Shape {
     registerAdminRoutes(this.server, resolveAdminSecret(), {
       // The host's provisioner starts the app again after it exits.
       exit: () => process.exit(0),
-      syncShapes: (request) => this.resyncShapes(request),
       graphContent: (request) => this.graphContent(request),
     });
 
@@ -1952,7 +1907,7 @@ export class LinkedServer extends Shape {
    * Reload one package's backend providers from source.
    *
    * Called by the CLI orchestrator's Vite watcher whenever a `.ts`/`.tsx`
-   * file inside a workspace package changes, and by {@link resyncShapes}.
+   * file inside a workspace package changes, and by {@link graphContent}.
    * Disposes the package's existing providers (so routes, listeners, timers
    * don't accumulate), drops them from the registry, and re-runs
    * indexPackageBackendProviders to pick up the freshly-imported module.

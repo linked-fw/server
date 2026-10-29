@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 // LINKED_GRAPH_WRITER: who writes the app's shape and ontology graphs. Checked at boot (an invalid
-// value is fatal); under `host` the boot and POST /admin/sync-shapes send no graph query (observed
-// on core's query dispatch); GET /admin/routes reports it.
+// value is fatal); under `host` the boot sends no graph query (observed on core's query dispatch)
+// and POST /admin/graph-content with a reload still reloads, registers and answers; GET /admin/routes
+// reports it.
 
 process.env.SITE_ROOT ??= 'http://app.test:4000';
 const { graphWriterFromEnv, appWritesGraphs, GRAPH_WRITER_ENV } = await import('../utils/graphTargets.js');
@@ -61,8 +62,10 @@ function server(): any {
   return s;
 }
 
-/** Run the boot's three sync steps and a sync-shapes request; count the graph queries sent. */
-async function bootAndResync(): Promise<{ sent: number; received: number; resync: any; lines: string[] }> {
+/** Run the boot's three sync steps and a graph-content request; count the graph queries sent. */
+async function bootAndGraphContent(
+  config: Record<string, unknown> = {},
+): Promise<{ sent: number; received: number; content: any; reloads: string[]; lines: string[] }> {
   const store = new (Recording as any)();
   const before = LinkedStorage.getDefaultDataset();
   LinkedStorage.setDefaultDataset(store);
@@ -75,11 +78,16 @@ async function bootAndResync(): Promise<{ sent: number; received: number; resync
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   try {
     const s = server();
+    Object.assign(s.config, config);
+    // A dev server: a module graph to invalidate, and a source reload that is only recorded.
+    s.config.server = { vite: { moduleGraph: { idToModuleMap: new Map(), onFileChange: () => {} } } };
+    const reloads: string[] = [];
+    s.onSourceChange = async (pkg: string) => void reloads.push(pkg);
     await s.logSyncTargets();
     await s.syncOntologiesOnBoot();
     await s.materializeShapesIntoStore();
-    const resync = await s.resyncShapes();
-    return { sent, received: store.graphQueries, resync, lines };
+    const content = await s.graphContent({ reload: ['gw-app'] });
+    return { sent, received: store.graphQueries, content, reloads, lines };
   } finally {
     stop();
     if (before) LinkedStorage.setDefaultDataset(before);
@@ -118,28 +126,31 @@ describe('LINKED_GRAPH_WRITER', () => {
     }
   });
 
-  it('the app writer: the boot and sync-shapes send graph queries (the observation sees them)', async () => {
+  it('the app writer: the boot sends graph queries (the observation sees them); graph content sends none', async () => {
     delete process.env[GRAPH_WRITER_ENV];
-    const { sent, received, resync } = await bootAndResync();
+    const { sent, received } = await bootAndGraphContent();
     expect(sent).toBeGreaterThan(0);
     expect(received).toBeGreaterThan(0);
-    expect(resync.skipped).toBeUndefined();
   });
 
-  it('the host writer: no graph query at boot or on sync-shapes, which still reloads and checks', async () => {
-    process.env[GRAPH_WRITER_ENV] = 'host';
-    const { sent, received, resync, lines } = await bootAndResync();
+  it("the app writer with linked.config syncShapesOnBoot: false: the boot sends no graph query", async () => {
+    delete process.env[GRAPH_WRITER_ENV];
+    const { sent, received } = await bootAndGraphContent({ syncShapesOnBoot: false });
     expect(sent).toBe(0);
     expect(received).toBe(0);
-    expect(resync).toEqual({
-      written: 0,
-      skipped: 'host-writer',
-      reloaded: [],
-      shapes: expect.arrayContaining([GwThing.shape.id]),
-      shapeCheck: expect.objectContaining({ errors: expect.any(Number), warnings: expect.any(Number) }),
-    });
+  });
+
+  it('the host writer: no graph query at boot or on graph content, which still reloads and answers', async () => {
+    process.env[GRAPH_WRITER_ENV] = 'host';
+    const { sent, received, content, reloads, lines } = await bootAndGraphContent();
+    expect(sent).toBe(0);
+    expect(received).toBe(0);
+    expect(reloads).toEqual(['gw-app']);
+    expect(content.reloaded).toEqual(['gw-app']);
+    expect(content.graphTargets).toEqual({ ontologyGraph: 'package', shapeGraph: 'package' });
+    expect(content.packages.map((p: any) => p.name)).toContain('gw-app');
     expect(lines).toContain(
-      '[LinkedServer] LINKED_GRAPH_WRITER=host: the host writes this app\'s shape and ontology graphs; the boot and POST /admin/sync-shapes write none (the host reads them through POST /admin/graph-content).',
+      '[LinkedServer] LINKED_GRAPH_WRITER=host: the host writes this app\'s shape and ontology graphs; the boot writes none (the host reads them through POST /admin/graph-content).',
     );
   });
 

@@ -6,13 +6,12 @@ import {
   AdminRequestError,
   assertReloadablePackages,
   isValidPackageName,
-  parseSyncShapesBody,
+  parseGraphContentBody,
   registerAdminRoutes,
-  type ShapeSyncResult,
+  type GraphContentAnswer,
 } from '../utils/adminChannel.js';
 import { invalidateSourceUnder } from '../utils/reloadSource.js';
 import { envMs, withTimeout } from '../utils/withTimeout.js';
-import { syncOntologiesThenShapes } from '../utils/ontologySync.js';
 
 const SECRET = 's3cret-s3cret';
 const servers: any[] = [];
@@ -21,14 +20,24 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));
 });
 
+type GraphContentRequest = { packages?: string[]; reload: string[] };
+
+const answer = (reloaded: string[] = []): GraphContentAnswer => ({
+  graphTargets: { ontologyGraph: 'package', shapeGraph: 'package' },
+  packages: [],
+  withoutTurtle: [],
+  unreadable: [],
+  reloaded,
+});
+
 async function serve(
   secret: string | undefined,
-  syncShapes: (r: { packages: string[] }) => Promise<ShapeSyncResult>,
+  graphContent: (r: GraphContentRequest) => Promise<GraphContentAnswer> = async () => answer(),
   exit: () => void = () => {}
 ): Promise<string> {
   const app = express();
   app.use(express.json());
-  registerAdminRoutes(app, secret, { exit, syncShapes });
+  registerAdminRoutes(app, secret, { exit, graphContent });
   const server = await new Promise<any>((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -36,8 +45,8 @@ async function serve(
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-const post = (base: string, body: unknown, secret: string | null = SECRET) =>
-  fetch(`${base}/admin/sync-shapes`, {
+const post = (base: string, route: string, body: unknown, secret: string | null = SECRET) =>
+  fetch(`${base}/admin/${route}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -46,103 +55,68 @@ const post = (base: string, body: unknown, secret: string | null = SECRET) =>
     body: JSON.stringify(body),
   });
 
-describe('admin channel: sync-shapes', () => {
-  it('runs the sync with the named packages and answers its result', async () => {
-    const calls: Array<{ packages: string[] }> = [];
+describe('admin channel', () => {
+  it('has no sync-shapes route: it answers 404, with and without the secret', async () => {
+    const base = await serve(SECRET);
+    expect((await post(base, 'sync-shapes', {})).status).toBe(404);
+    expect((await post(base, 'sync-shapes', { packages: ['my-assets'] })).status).toBe(404);
+    expect((await post(base, 'sync-shapes', {}, null)).status).toBe(404);
+  });
+
+  it('passes graph-content its reload list and answers what it answers', async () => {
+    const calls: GraphContentRequest[] = [];
     const base = await serve(SECRET, async (r) => {
       calls.push(r);
-      return { written: 2, orphanScope: 'none' };
+      return answer(r.reload);
     });
-    const res = await post(base, { packages: ['my-assets', 'my-assets'] });
+    const res = await post(base, 'graph-content', { reload: ['my-assets', 'my-assets'] });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ written: 2, orphanScope: 'none' });
-    expect(calls).toEqual([{ packages: ['my-assets'] }]);
+    expect(await res.json()).toEqual(answer(['my-assets']));
+    expect(calls).toEqual([{ reload: ['my-assets'] }]);
   });
 
-  it('answers the ontology sync and the shape check counts with the shape sync', async () => {
-    const base = await serve(SECRET, (r) =>
-      syncOntologiesThenShapes(
-        async () => ({
-          ontologies: { written: ['@x/a'], skipped: ['@_linked/server'] },
-          shapeCheck: { errors: 1, warnings: 3 },
-        }),
-        async () => ({ written: 2, orphanScope: 'none' as const, reloaded: r.packages })
-      )
-    );
-    const res = await post(base, { packages: ['my-assets'] });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      written: 2,
-      orphanScope: 'none',
-      reloaded: ['my-assets'],
-      ontologies: { written: ['@x/a'], skipped: ['@_linked/server'] },
-      shapeCheck: { errors: 1, warnings: 3 },
-    });
-  });
-
-  it('answers 500 for a failed ontology sync, after the shape sync ran', async () => {
-    let shapesRan = false;
-    const base = await serve(SECRET, () =>
-      syncOntologiesThenShapes(
-        async () => ({
-          ontologies: { written: [], skipped: [] },
-          shapeCheck: { errors: 0, warnings: 0 },
-          failure: new Error('store unreachable'),
-        }),
-        async () => {
-          shapesRan = true;
-          return { written: 0 };
-        }
-      )
-    );
-    const res = await post(base, {});
-    expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'store unreachable' });
-    expect(shapesRan).toBe(true);
-  });
-
-  it('runs a sync without packages for an empty body', async () => {
-    const calls: Array<{ packages: string[] }> = [];
+  it('runs graph-content without a reload for an empty body', async () => {
+    const calls: GraphContentRequest[] = [];
     const base = await serve(SECRET, async (r) => {
       calls.push(r);
-      return { written: 0, orphanScope: 'none' };
+      return answer();
     });
-    const res = await fetch(`${base}/admin/sync-shapes`, {
+    const res = await fetch(`${base}/admin/graph-content`, {
       method: 'POST',
       headers: { 'x-app-admin-secret': SECRET },
     });
     expect(res.status).toBe(200);
-    expect(calls).toEqual([{ packages: [] }]);
+    expect(calls).toEqual([{ reload: [] }]);
   });
 
-  it('answers 500 with the reason when the sync fails', async () => {
+  it('answers 500 with the reason when graph-content fails', async () => {
     const base = await serve(SECRET, async () => {
-      throw new Error('data server answered 503');
+      throw new Error('the graph content did not finish within 120000 ms');
     });
-    const res = await post(base, {});
+    const res = await post(base, 'graph-content', {});
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'data server answered 503' });
+    expect(await res.json()).toEqual({ error: 'the graph content did not finish within 120000 ms' });
   });
 
   it('answers 400 for an unknown package and for a malformed body', async () => {
     const base = await serve(SECRET, async (r) => {
-      throw new AdminRequestError(`unknown package: ${r.packages[0]}`);
+      throw new AdminRequestError(`unknown package: ${r.reload[0]}`);
     });
-    const unknown = await post(base, { packages: ['nope'] });
+    const unknown = await post(base, 'graph-content', { reload: ['nope'] });
     expect(unknown.status).toBe(400);
     expect(await unknown.json()).toEqual({ error: 'unknown package: nope' });
-    const malformed = await post(base, { packages: 'nope' });
+    const malformed = await post(base, 'graph-content', { reload: 'nope' });
     expect(malformed.status).toBe(400);
   });
 
-  it('refuses a wrong or missing secret with 401 and never syncs', async () => {
+  it('refuses a wrong or missing secret with 401 and never runs', async () => {
     let ran = 0;
     const base = await serve(SECRET, async () => {
       ran++;
-      return { written: 0 };
+      return answer();
     });
-    expect((await post(base, {}, 'wrong-secret!')).status).toBe(401);
-    expect((await post(base, {}, null)).status).toBe(401);
+    expect((await post(base, 'graph-content', {}, 'wrong-secret!')).status).toBe(401);
+    expect((await post(base, 'graph-content', {}, null)).status).toBe(401);
     expect(ran).toBe(0);
   });
 
@@ -150,9 +124,9 @@ describe('admin channel: sync-shapes', () => {
     let ran = 0;
     const base = await serve(SECRET, async () => {
       ran++;
-      return { written: 0 };
+      return answer();
     });
-    const res = await fetch(`${base}/admin/sync-shapes`, {
+    const res = await fetch(`${base}/admin/graph-content`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -166,14 +140,14 @@ describe('admin channel: sync-shapes', () => {
   });
 
   it('is absent (404) without a configured secret', async () => {
-    const base = await serve(undefined, async () => ({ written: 0 }));
-    expect((await post(base, {})).status).toBe(404);
+    const base = await serve(undefined);
+    expect((await post(base, 'graph-content', {})).status).toBe(404);
     expect((await fetch(`${base}/admin/health`)).status).toBe(404);
   });
 
   it('keeps health and restart', async () => {
     let exited = 0;
-    const base = await serve(SECRET, async () => ({ written: 0 }), () => exited++);
+    const base = await serve(SECRET, undefined, () => exited++);
     const health = await fetch(`${base}/admin/health`, { headers: { 'x-app-admin-secret': SECRET } });
     expect(health.status).toBe(200);
     expect(await health.json()).toEqual({ status: 'ok' });
@@ -187,17 +161,17 @@ describe('admin channel: sync-shapes', () => {
   });
 });
 
-describe('parseSyncShapesBody', () => {
-  it('accepts no body, an empty object and a list of names', () => {
-    expect(parseSyncShapesBody(undefined)).toEqual({ packages: [] });
-    expect(parseSyncShapesBody({})).toEqual({ packages: [] });
-    expect(parseSyncShapesBody({ packages: ['a', 'b'] })).toEqual({ packages: ['a', 'b'] });
+describe('parseGraphContentBody', () => {
+  it('accepts no body, an empty object and lists of names', () => {
+    expect(parseGraphContentBody(undefined)).toEqual({ reload: [] });
+    expect(parseGraphContentBody({})).toEqual({ reload: [] });
+    expect(parseGraphContentBody({ reload: ['a', 'b'] })).toEqual({ reload: ['a', 'b'] });
   });
 
   it('refuses anything else', () => {
-    expect(() => parseSyncShapesBody('x')).toThrow(AdminRequestError);
-    expect(() => parseSyncShapesBody({ packages: [1] })).toThrow(AdminRequestError);
-    expect(() => parseSyncShapesBody({ packages: [''] })).toThrow(AdminRequestError);
+    expect(() => parseGraphContentBody('x')).toThrow(AdminRequestError);
+    expect(() => parseGraphContentBody({ reload: [1] })).toThrow(AdminRequestError);
+    expect(() => parseGraphContentBody({ reload: [''] })).toThrow(AdminRequestError);
   });
 });
 
@@ -237,7 +211,7 @@ describe('package names a host may ask to reload', () => {
   });
 
   it('the body parser refuses a name that is not a package name', () => {
-    expect(() => parseSyncShapesBody({ packages: ['../../etc'] })).toThrow(AdminRequestError);
+    expect(() => parseGraphContentBody({ reload: ['../../etc'] })).toThrow(AdminRequestError);
   });
 
   it('allows only the app and its direct dependencies, never @_linked/*', () => {

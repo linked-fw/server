@@ -5,7 +5,9 @@ import type { AddressInfo } from 'net';
 // POST /admin/graph-content: behind the admin secret; 400 for a bad name or a package it may not
 // reload; 409 when a graph target is not 'package'; the body equals what the app writer stores
 // (text and hash, per package and for the app graph); appGraph null without single-owner shapes
-// and absent without DATA_ROOT; an installed package without shapes.ttl has no shape graph.
+// and absent without DATA_ROOT; an installed package without shapes.ttl has no shape graph; `reload`
+// reloads the named packages first (dev: Vite's modules invalidated, the backend reloaded, the
+// ontologies registered again), writing nothing, and names them in `reloaded`.
 
 process.env.SITE_ROOT ??= 'http://app.test:4000';
 const { registerAdminRoutes, parseGraphContentBody } = await import('../utils/adminChannel.js');
@@ -74,6 +76,8 @@ function server(): any {
 
 const servers: any[] = [];
 let base: string;
+/** The server behind the route. */
+let routeServer: any;
 let store: any;
 let before: unknown;
 const savedRoot = process.env.DATA_ROOT;
@@ -83,11 +87,11 @@ beforeAll(async () => {
   before = LinkedStorage.getDefaultDataset();
   LinkedStorage.setDefaultDataset(store);
   const s = server();
+  routeServer = s;
   const appExpress = express();
   appExpress.use(express.json());
   registerAdminRoutes(appExpress, SECRET, {
     exit: () => {},
-    syncShapes: (r) => s.resyncShapes(r),
     graphContent: (r) => s.graphContent(r),
   });
   const srv = await new Promise<any>((resolve) => {
@@ -229,5 +233,47 @@ describe('POST /admin/graph-content', () => {
     });
     const appStored = store.written.get(APP_GRAPH);
     expect(content.appGraph).toEqual({ graph: APP_GRAPH, mediaType: 'text/turtle', text: appStored.text, hash: appStored.hash, sources: [] });
+  });
+
+  it('reload: reloads the named packages first (dev), registers again without syncing, and names them', async () => {
+    quiet();
+    delete process.env.DATA_ROOT;
+    const reloads: string[] = [];
+    const changed: string[] = [];
+    const saved = { config: routeServer.config, onSourceChange: routeServer.onSourceChange };
+    // A dev server: Vite's module graph holds one module of the app (cwd is the app's root here).
+    routeServer.config = {
+      server: { vite: { moduleGraph: { idToModuleMap: new Map([['m', { file: `${process.cwd()}/src/shapes/GcsReloaded.ts` }]]), onFileChange: (f: string) => changed.push(f) } } },
+    };
+    let phases = 0;
+    const runOntologyPhase = routeServer.runOntologyPhase;
+    routeServer.runOntologyPhase = function (this: any, sync: boolean) {
+      phases++;
+      expect(sync).toBe(false);
+      return runOntologyPhase.call(this, sync);
+    };
+    routeServer.onSourceChange = async (pkg: string) => void reloads.push(pkg);
+    try {
+      store.written.clear();
+      const res = await post({ packages: ['gcs-app'], reload: ['gcs-app'] });
+      expect(res.status).toBe(200);
+      const content = await res.json();
+      expect(reloads).toEqual(['gcs-app']);
+      expect(changed).toEqual([`${process.cwd()}/src/shapes/GcsReloaded.ts`]);
+      expect(phases).toBe(1);
+      expect(content.reloaded).toEqual(['gcs-app']);
+      expect(content.packages.map((p: any) => p.name)).toEqual(['gcs-app']);
+      expect(store.written.size).toBe(0);
+
+      // Without a reload nothing is reloaded and the ontology phase does not run again.
+      const plain = await (await post({ packages: ['gcs-app'] })).json();
+      expect(plain.reloaded).toEqual([]);
+      expect(reloads).toEqual(['gcs-app']);
+      expect(phases).toBe(1);
+    } finally {
+      routeServer.config = saved.config;
+      routeServer.onSourceChange = saved.onSourceChange;
+      delete routeServer.runOntologyPhase;
+    }
   });
 });

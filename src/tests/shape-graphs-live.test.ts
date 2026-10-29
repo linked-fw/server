@@ -10,8 +10,8 @@ import type { AddressInfo } from 'net';
 // `shapes.ttl` gets its shape graph from that file; an installed package without one gets none
 // (nothing is generated for it); the app's own workspace package is generated in process; the
 // app's single-owner shapes go in `{DATA_ROOT}/graph/shapes`. The boot logs the graphs it
-// writes; a second boot writes nothing; the control channel's `POST /admin/sync-shapes`
-// reports the shape graphs. Runs only when FUSEKI_BASE_URL names a store; it creates its own
+// writes; a second boot writes nothing; the control channel's `POST /admin/graph-content`
+// answers, writing nothing, the content and hash of each graph the boot stored. Runs only when FUSEKI_BASE_URL names a store; it creates its own
 // dataset there and deletes it afterwards.
 
 const FUSEKI = process.env.FUSEKI_BASE_URL;
@@ -23,7 +23,6 @@ const DATA_ROOT = 'https://sg-app.test/data';
 
 process.env.SITE_ROOT ??= 'http://app.test:4000';
 process.env.DATA_ROOT = DATA_ROOT;
-delete process.env.LINKED_SYNC_SHAPES_ON_BOOT;
 delete process.env.LINKED_SYNC_SHAPES_PRUNE_ORPHANS;
 const { LinkedStorage } = await import('@_linked/core/utils/LinkedStorage');
 const { SparqlDataset } = await import('@_linked/core/sparql/SparqlDataset');
@@ -186,7 +185,7 @@ describeLive('[fuseki] shape graphs at boot and on the control channel', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('the boot writes and logs the shape graphs, a second boot writes nothing, the route reports them', async () => {
+  it('the boot writes and logs the shape graphs, a second boot writes nothing, graph content answers them', async () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     const lines: string[] = [];
     const log = jest.spyOn(console, 'log').mockImplementation((m: unknown) => {
@@ -249,32 +248,35 @@ describeLive('[fuseki] shape graphs at boot and on the control channel', () => {
     expect(store.updates - before).toBe(0);
     process.stdout.write(`first boot (ontology phase + shape sync) ${firstMs} ms, second ${secondMs} ms\n`);
 
-    // The control channel reports the shape graphs.
+    // The control channel answers the content of the graphs the boot stored, with their hashes.
     const app = express();
     app.use(express.json());
-    registerAdminRoutes(app, SECRET, { exit: () => {}, syncShapes: (request) => server.resyncShapes(request) });
+    registerAdminRoutes(app, SECRET, { exit: () => {}, graphContent: (request) => server.graphContent(request) });
     const s = await new Promise<any>((resolve) => {
       const srv = app.listen(0, () => resolve(srv));
     });
     servers.push(s);
-    const res = await fetch(`http://127.0.0.1:${(s.address() as AddressInfo).port}/admin/sync-shapes`, {
+    const beforeContent = store.updates;
+    const res = await fetch(`http://127.0.0.1:${(s.address() as AddressInfo).port}/admin/graph-content`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-app-admin-secret': SECRET },
       body: '{}',
     });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.written).toBe(0);
-    expect(body.shapeGraphs).toMatchObject({
-      written: [],
-      skipped: [BUILT, OWN],
-      pruned: [],
-      graphs: [],
-      appGraph: { graph: APP_GRAPH, status: 'skipped' },
-      withoutTurtle: ['@_linked/core', '@_linked/server', BARE],
-      cleaned: 0,
-    });
-    expect(body.shapes).toEqual(expect.arrayContaining([bareShape]));
+    expect(store.updates - beforeContent).toBe(0);
+    expect(body.reloaded).toEqual([]);
+    expect(body.withoutTurtle).toEqual(['@_linked/core', '@_linked/server', BARE]);
+    const storedHash = async (graph: string) =>
+      (await store.executeSparqlSelect(`SELECT ?h WHERE { GRAPH <${REG}> { <${graph}> <${CORE}contentHash> ?h } }`)).results
+        .bindings[0]?.h?.value;
+    for (const [pkg, graph] of [[BUILT, builtGraph], [OWN, ownGraph]]) {
+      const shapes = body.packages.find((p: { name: string }) => p.name === pkg)?.shapes;
+      expect(shapes?.graph).toBe(graph);
+      expect(shapes?.hash).toBe(await storedHash(graph));
+    }
+    expect(body.appGraph.graph).toBe(APP_GRAPH);
+    expect(body.appGraph.hash).toBe(await storedHash(APP_GRAPH));
     log.mockRestore();
   });
 });

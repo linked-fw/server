@@ -1,8 +1,9 @@
 /**
- * Ontology sync and the shape check, as the server runs them before its shape sync: at boot and
- * when the host asks for a re-sync (`POST /admin/sync-shapes`).
+ * Ontology sync and the shape check, as the server runs them before its shape sync at boot. The
+ * registration and the shape check also run when the host reloads packages for
+ * `POST /admin/graph-content`.
  *
- * - The ontology sync (core `syncOntologiesRouted` at boot and on re-sync; `syncOntologies` into one
+ * - The ontology sync (core `syncOntologiesRouted` at boot; `syncOntologies` into one
  *   given dataset otherwise) writes each registered package's ontology data into its own named
  *   graph of every dataset the routing needs it in (`{package IRI}/graph/ontology`, with a
  *   record in the graph registry that marks it as a hierarchy source), skipping a package whose
@@ -73,7 +74,7 @@ export interface ShapeCheckSummary {
   failed?: string;
 }
 
-/** What the ontology sync and the shape check did, as `POST /admin/sync-shapes` reports it. */
+/** What the ontology sync and the shape check did. */
 export interface OntologyPhaseResult {
   /**
    * Packages whose ontology graph (or, on a store without graph queries, hierarchy) was written,
@@ -102,26 +103,13 @@ export interface OntologyPhaseResult {
 }
 
 /**
- * Whether the server syncs shapes (and so ontologies) into its app data: off when `linked.config`
- * sets `syncShapesOnBoot: false` or the environment sets `LINKED_SYNC_SHAPES_ON_BOOT=false`. One
- * switch for both syncs, at boot and on the host's request.
+ * Whether the boot syncs the shapes and the ontologies into app data: off only when `linked.config`
+ * sets `syncShapesOnBoot: false`. One switch for both syncs. It applies only to an app that writes
+ * its own graphs (`appWritesGraphs`, utils/graphTargets): under `LINKED_GRAPH_WRITER=host` the boot
+ * syncs nothing whatever it says.
  */
-export function shapeSyncOn(
-  env: Record<string, string | undefined>,
-  configFlag: unknown,
-): boolean {
-  return configFlag !== false && env.LINKED_SYNC_SHAPES_ON_BOOT !== 'false';
-}
-
-/**
- * Whether the boot syncs ontologies: when shape sync is on ({@link shapeSyncOn}) and the
- * environment does not opt out with `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false`.
- */
-export function bootSyncsOntologies(
-  env: Record<string, string | undefined>,
-  configFlag?: unknown,
-): boolean {
-  return shapeSyncOn(env, configFlag) && env.LINKED_SYNC_ONTOLOGIES_ON_BOOT !== 'false';
+export function shapeSyncOn(configFlag: unknown): boolean {
+  return configFlag !== false;
 }
 
 /**
@@ -206,7 +194,7 @@ export async function runOntologyPhase(
     /**
      * Follow the routing (core's `syncOntologiesRouted`): `ds` is then the default dataset, and each
      * package's graph goes to every dataset the routing needs it in. Otherwise the sync writes into
-     * `ds` only. The server's boot and re-sync run routed.
+     * `ds` only. The server's boot runs routed.
      */
     routed?: boolean;
     orphanScope: BootOrphanScope;
@@ -360,20 +348,4 @@ export function graphsWrittenAndDropped(ops: Array<{kind: string; graph: string}
     else if (kinds[0] !== 'graph_create') droppedGraphs.push(graph);
   }
   return {graphs: graphs.sort(), droppedGraphs: droppedGraphs.sort()};
-}
-
-/**
- * The host's re-sync: the ontology phase, then the shape sync, which runs also when the ontology
- * sync failed. The ontology sync's failure is then thrown, so the route answers with it, as it
- * does for a failed shape sync. A shape check that threw fails nothing: the answer reports it as
- * `shapeCheck.failed`.
- */
-export async function syncOntologiesThenShapes<T extends object>(
-  ontologyPhase: () => Promise<OntologyPhaseResult>,
-  shapeSync: () => Promise<T>,
-): Promise<T & Pick<OntologyPhaseResult, 'ontologies' | 'shapeCheck'>> {
-  const {ontologies, shapeCheck, failure} = await ontologyPhase();
-  const shapes = await shapeSync();
-  if (failure) throw failure;
-  return {...shapes, ontologies, shapeCheck};
 }

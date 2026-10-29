@@ -110,7 +110,7 @@ async function listen(adminSecret?: string): Promise<string> {
     next();
   });
   registerCallRoutes(app, makeLinkedServer());
-  if (adminSecret) registerAdminRoutes(app as any, adminSecret, { exit: () => {}, syncShapes: async () => ({ written: 0 }) });
+  if (adminSecret) registerAdminRoutes(app as any, adminSecret, { exit: () => {} });
   const s = await new Promise<any>((resolve) => {
     const srv = app.listen(0, () => resolve(srv));
   });
@@ -293,7 +293,7 @@ describe('POST /admin/graph-registry-changed', () => {
   it('is absent (404) without a configured secret', async () => {
     const app = express();
     app.use(express.json());
-    registerAdminRoutes(app, undefined, { exit: () => {}, syncShapes: async () => ({ written: 0 }) });
+    registerAdminRoutes(app, undefined, { exit: () => {} });
     const s = await new Promise<any>((resolve) => {
       const srv = app.listen(0, () => resolve(srv));
     });

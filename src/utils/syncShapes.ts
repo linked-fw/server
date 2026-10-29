@@ -1,6 +1,6 @@
 /**
- * The shape sync, as the server runs it at boot and when the host asks for a re-sync
- * (`POST /admin/sync-shapes`): core's `syncShapeGraphsRouted` writes each package's shapes into its
+ * The shape sync, as the server runs it at boot, and the graph content it would write
+ * (`POST /admin/graph-content`, {@link graphContentOf}): core's `syncShapeGraphsRouted` writes each package's shapes into its
  * own named graph (`{package IRI}/graph/shapes`, a `ShapesGraph` record in the graph registry) of
  * every dataset the storage routing needs them in (see "Which datasets the syncs write to" in
  * core's README), skipped when the stored content hash matches, and the app's generated
@@ -188,7 +188,7 @@ export function viteShapesTurtleGenerator(
   };
 }
 
-/** What one shape sync did, as the boot logs it and `POST /admin/sync-shapes` reports it. */
+/** What one shape sync did, as the boot logs it. */
 export interface ShapeGraphsReport {
   /** Packages whose shape graph was written, and those left as they were. */
   written: string[];
