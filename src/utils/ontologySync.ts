@@ -2,8 +2,9 @@
  * Ontology sync and the shape check, as the server runs them before its shape sync: at boot and
  * when the host asks for a re-sync (`POST /admin/sync-shapes`).
  *
- * - The ontology sync (core `syncOntologies`) writes each registered package's ontology data into
- *   its own named graph of the app's default dataset (`{package IRI}/graph/ontology`, with a
+ * - The ontology sync (core `syncOntologiesRouted` at boot and on re-sync; `syncOntologies` into one
+ *   given dataset otherwise) writes each registered package's ontology data into its own named
+ *   graph of every dataset the routing needs it in (`{package IRI}/graph/ontology`, with a
  *   record in the graph registry that marks it as a hierarchy source), skipping a package whose
  *   stored hash matches, so the store's RDFS view infers the class hierarchy. A store without
  *   graph queries (it answers `unsupported-query-kind`, or has no `graphQuery`) gets core's
@@ -25,7 +26,7 @@
  * this server depends on has all of them. Kept apart from `LinkedServer` so the order and the failure handling can be tested without
  * booting a server.
  */
-import {writtenAndUnchanged, type BootOrphanScope} from './syncShapes.js';
+import {writtenAndUnchanged, type BootOrphanScope, type RoutedGraphReport, type RoutedSyncReport} from './syncShapes.js';
 
 /** The subset of core's ontology and shape-check API this module calls. */
 export interface OntologyCore {
@@ -33,6 +34,15 @@ export interface OntologyCore {
     ds: unknown,
     options: {orphanScope: BootOrphanScope},
   ): Promise<{written: string[]; skipped: string[]; pruned: string[]; target?: string}>;
+  /**
+   * Core's routed ontology sync (`@_linked/core/shapes/syncTargets`): every package's ontology
+   * graph into each dataset the routing needs it in. Optional so a test double can leave it out.
+   */
+  syncOntologiesRouted?(options: {orphanScope: BootOrphanScope}): Promise<
+    RoutedSyncReport<{written: string[]; skipped: string[]; pruned: string[]; target?: string}>
+  >;
+  /** Every dataset the router knows (where a routed sync may write). Optional for test doubles. */
+  routedDatasets?(): unknown[];
   checkShapeHierarchy(options: {dependencies?: Record<string, string[]>}): Promise<
     Array<{kind: string; severity: 'error' | 'warning'; shape?: string; iri?: string; message: string}>
   >;
@@ -70,7 +80,18 @@ export interface OntologyPhaseResult {
    * packages left as they were (unchanged or unreadable), and the graphs the sync wrote and
    * dropped (empty on a store without graph queries).
    */
-  ontologies: {written: string[]; skipped: string[]; graphs?: string[]; droppedGraphs?: string[]};
+  ontologies: {
+    written: string[];
+    skipped: string[];
+    graphs?: string[];
+    droppedGraphs?: string[];
+    /** A routed sync: the datasets it wrote into, the default one first. */
+    datasets?: string[];
+    /** A routed sync: package ontology graphs dropped from the default dataset (routing sends them elsewhere). */
+    prunedGraphs?: RoutedGraphReport[];
+    /** A routed sync: package ontology graphs left in another dataset routing no longer sends them to. */
+    leftovers?: RoutedGraphReport[];
+  };
   /**
    * The shape check's findings, counted by severity, and the message of the error the check
    * threw, if it did (`failed`). A thrown check is reported here and never fails the phase.
@@ -113,9 +134,13 @@ export async function loadOntologyCore(): Promise<OntologyCore> {
   const hierarchy = await import('@_linked/core/ontology/hierarchy');
   const registerInstalled = await import('@_linked/core/ontology/registerInstalled');
   const dispatch = await import('@_linked/core/queries/queryDispatch');
+  const targets = await import('@_linked/core/shapes/syncTargets');
+  const storage = await import('@_linked/core/utils/LinkedStorage');
   return {
     syncOntologies: (ds, options) =>
       sync.syncOntologies(ds as Parameters<typeof sync.syncOntologies>[0], options),
+    syncOntologiesRouted: (options) => targets.syncOntologiesRouted(options),
+    routedDatasets: () => [...storage.LinkedStorage.getDatasets()],
     checkShapeHierarchy: (options) => check.checkShapeHierarchy(options),
     loadOntologyHierarchy: () => hierarchy.loadOntologyHierarchy(),
     registerInstalledOntologies: (packageDirs, options) =>
@@ -168,6 +193,7 @@ export async function runOntologyPhase(
   {
     core,
     sync,
+    routed = false,
     orphanScope,
     dependencies,
     packageDirs = [],
@@ -177,6 +203,12 @@ export async function runOntologyPhase(
   }: {
     core: OntologyCore;
     sync: boolean;
+    /**
+     * Follow the routing (core's `syncOntologiesRouted`): `ds` is then the default dataset, and each
+     * package's graph goes to every dataset the routing needs it in. Otherwise the sync writes into
+     * `ds` only. The server's boot and re-sync run routed.
+     */
+    routed?: boolean;
     orphanScope: BootOrphanScope;
     dependencies?: Record<string, string[]>;
     /** Every linked package directory the server discovered (transitively). */
@@ -209,21 +241,47 @@ export async function runOntologyPhase(
     // Every graph query that succeeded, in the order the sync sent them.
     const ops: Array<{kind: string; graph: string; ok?: boolean}> = [];
     const pending: Promise<unknown>[] = [];
-    const stop = core.observeGraphQueries?.(ds, (query, settled) => {
-      const op: {kind: string; graph: string; ok?: boolean} = {kind: query.kind, graph: query.graph};
-      ops.push(op);
-      pending.push(
-        settled.then(
-          () => (op.ok = true),
-          () => undefined,
-        ),
-      );
-    });
+    if (routed && !core.syncOntologiesRouted) {
+      throw new Error('@_linked/core has no syncOntologiesRouted: this server needs the core it was built with');
+    }
+    const observed = routed ? core.routedDatasets?.() ?? [ds] : [ds];
+    const stops = observed.map((target) =>
+      core.observeGraphQueries?.(target, (query, settled) => {
+        const op: {kind: string; graph: string; ok?: boolean} = {kind: query.kind, graph: query.graph};
+        ops.push(op);
+        pending.push(
+          settled.then(
+            () => (op.ok = true),
+            () => undefined,
+          ),
+        );
+      }),
+    );
+    const stop = () => stops.forEach((s) => s?.());
     try {
-      const sync = await core.syncOntologies(ds, {orphanScope});
+      let sync: {written: string[]; skipped: string[]; pruned: string[]; target?: string};
+      let routedRun: RoutedSyncReport<typeof sync> | undefined;
+      if (routed) {
+        routedRun = await core.syncOntologiesRouted!({orphanScope});
+        const runs = routedRun.targets.map((t) => t.result);
+        const written = [...new Set(runs.flatMap((r) => r.written))].sort();
+        sync = {
+          written,
+          skipped: [...new Set(runs.flatMap((r) => r.skipped))].filter((n) => !written.includes(n)).sort(),
+          pruned: [...new Set(runs.flatMap((r) => r.pruned))].sort(),
+          target: runs[0]?.target,
+        };
+      } else {
+        sync = await core.syncOntologies(ds, {orphanScope});
+      }
       await Promise.all(pending);
       const {graphs, droppedGraphs} = graphsWrittenAndDropped(ops.filter((op) => op.ok));
       result.ontologies = {written: sync.written, skipped: sync.skipped, graphs, droppedGraphs};
+      if (routedRun) {
+        result.ontologies.datasets = routedRun.targets.map((t) => t.dataset);
+        result.ontologies.prunedGraphs = routedRun.pruned;
+        result.ontologies.leftovers = routedRun.leftovers;
+      }
       hierarchyLoaded = true;
       // Core says where it wrote (the global `ontologyGraph`). A store without graph queries makes
       // the sync throw in the 'package' and shared modes, reported below as a failed sync.
@@ -238,8 +296,17 @@ export async function runOntologyPhase(
           writtenAndUnchanged(sync.written, sync.skipped) +
           (orphanScope === 'all' ? `; pruned ${list(sync.pruned)}` : '') +
           (graphs.length ? `; graphs written ${list(graphs)}` : '') +
-          (droppedGraphs.length ? `; graphs dropped ${list(droppedGraphs)}` : ''),
+          (droppedGraphs.length ? `; graphs dropped ${list(droppedGraphs)}` : '') +
+          (routedRun && routedRun.targets.length > 1 ? `; datasets ${list(routedRun.targets.map((t) => t.dataset))}` : ''),
       );
+      for (const {dataset, package: name, graph} of routedRun?.pruned ?? []) {
+        log(`[LinkedServer] ontology sync: dropped <${graph}> (${name}) from ${dataset}: routing sends its ontology elsewhere`);
+      }
+      if (routedRun?.failed.length) {
+        throw new Error(
+          `the ontology sync failed in ${routedRun.failed.map((f) => `${f.dataset}: ${f.error}`).join('; ')}`,
+        );
+      }
     } catch (err) {
       result.failure = asError(err);
       warn('[LinkedServer] ontology sync failed:', err);

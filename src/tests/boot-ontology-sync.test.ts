@@ -508,3 +508,78 @@ describe('runOntologyPhase: the graphs the sync wrote', () => {
     expect(seenGraphs).toEqual(['http://e/g1']);
   });
 });
+
+describe('runOntologyPhase, routed', () => {
+  const GB = 'https://linked.cm/pkg/x-b/graph/ontology';
+
+  /** A core whose routed sync wrote x-a into "main" and x-b into both datasets. */
+  function routedCore(failed: Array<{ dataset: string; error: string }> = []) {
+    const listeners: Array<{ ds: unknown; on: (q: { kind: string; graph: string }, s: Promise<unknown>) => void }> = [];
+    const main = { id: 'main' };
+    const two = { id: 'two' };
+    const calls: string[] = [];
+    const core: OntologyCore = {
+      syncOntologies: async () => {
+        throw new Error('not called');
+      },
+      routedDatasets: () => [main, two],
+      observeGraphQueries: (ds, on) => {
+        const entry = { ds, on };
+        listeners.push(entry);
+        return () => listeners.splice(listeners.indexOf(entry), 1);
+      },
+      syncOntologiesRouted: async (options) => {
+        calls.push(`routed ${options.orphanScope}`);
+        const emit = (ds: unknown, graph: string) =>
+          listeners.filter((l) => l.ds === ds).forEach((l) => l.on({ kind: 'graph_create', graph }, Promise.resolve()));
+        emit(main, GA);
+        emit(main, GB);
+        emit(two, GB);
+        return {
+          targets: [
+            { dataset: 'Store "main"', result: { written: ['x-a', 'x-b'], skipped: [], pruned: [], target: 'package' } },
+            { dataset: 'Store "two"', result: { written: ['x-b'], skipped: [], pruned: [], target: 'package' } },
+          ],
+          pruned: [],
+          leftovers: [],
+          failed,
+        };
+      },
+      checkShapeHierarchy: async () => {
+        calls.push('check');
+        return [];
+      },
+      loadOntologyHierarchy: async () => {
+        calls.push('hierarchy');
+      },
+    };
+    return { core, calls, listeners };
+  }
+
+  it('a pinned package is written into both datasets; one line names them; every dataset is observed', async () => {
+    const { core, calls, listeners } = routedCore();
+    const lines: string[] = [];
+    const result = await runOntologyPhase({ id: 'main' }, { core, sync: true, routed: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
+    expect(calls).toEqual(['routed none', 'check']);
+    expect(listeners).toEqual([]);
+    expect(result.ontologies).toEqual({
+      written: ['x-a', 'x-b'],
+      skipped: [],
+      graphs: [GA, GB],
+      droppedGraphs: [],
+      datasets: ['Store "main"', 'Store "two"'],
+      prunedGraphs: [],
+      leftovers: [],
+    });
+    expect(lines).toEqual([
+      `[LinkedServer] ontology sync: written x-a, x-b; graphs written ${GA}, ${GB}; datasets Store "main", Store "two"`,
+    ]);
+  });
+
+  it('a failed dataset is the phase failure; the hierarchy is set and the check runs', async () => {
+    const { core, calls } = routedCore([{ dataset: 'Store "two"', error: 'down' }]);
+    const result = await runOntologyPhase({ id: 'main' }, { core, sync: true, routed: true, orphanScope: 'none', log: () => {}, warn: () => {} });
+    expect(result.failure?.message).toBe('the ontology sync failed in Store "two": down');
+    expect(calls).toEqual(['routed none', 'check']);
+  });
+});

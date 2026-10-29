@@ -501,14 +501,14 @@ Side effects to expect:
 Before its shape sync, at boot and on `POST /admin/sync-shapes`, the server:
 
 1. **Registers the installed packages' ontologies** (core `registerInstalledOntologies`): it imports `lib/esm/ontologies/*.register.js` of every linked package it discovered in the app's dependency tree, so a package the app only deep-imports shape files from (`@_linked/schema/shapes/Person`) is synced and checked too, and of every workspace package of the app (`linkedPackage: true` under its `workspaces`), which no package may import (a Create Now clone's `packages/<slug>-ont`). In dev, a package without a built `lib/` registers from `src/ontologies/*.register.ts` through Vite's `ssrLoadModule`; a built app skips it. A register module that fails is logged and the rest go on.
-2. **Syncs the ontologies** (core `syncOntologies`): every registered package's ontology data is written into the app's default dataset, where `LINKED_ONTOLOGY_GRAPH` says (one graph per package by default; see [Ontology and shape graphs](#ontology-and-shape-graphs)), so the store's RDFS view infers the class hierarchy. The log line names a shared graph or the default graph when the sync wrote there. A package whose stored hash matches is skipped, so an unchanged sync writes nothing. `ontologies.written` and `ontologies.skipped` name the packages (a package whose data cannot be read is skipped with core's warning). Sync nodes of packages no longer registered are pruned only with `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true`, the shape sync's orphan policy.
+2. **Syncs the ontologies** (core `syncOntologiesRouted`): every registered package's ontology data is written into each dataset the storage routing needs it in (see [Which datasets the syncs write to](#which-datasets-the-syncs-write-to)), where `LINKED_ONTOLOGY_GRAPH` says (one graph per package by default; see [Ontology and shape graphs](#ontology-and-shape-graphs)), so the store's RDFS view infers the class hierarchy. The log line names a shared graph or the default graph when the sync wrote there. A package whose stored hash matches is skipped, so an unchanged sync writes nothing. `ontologies.written` and `ontologies.skipped` name the packages (a package whose data cannot be read is skipped with core's warning). Sync nodes of packages no longer registered are pruned only with `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true`, the shape sync's orphan policy.
 3. **Checks the shapes** against that hierarchy (core `checkShapeHierarchy`, with every package's `dependencies` and `peerDependencies`). A running app is never stopped by it: each finding is logged, and `shapeCheck` counts them by severity.
 
 The ontology sync follows the shape sync's switches (`syncShapesOnBoot`, `LINKED_SYNC_SHAPES_ON_BOOT`), at boot and on `POST /admin/sync-shapes` alike: with shape sync off, the route syncs neither ontologies nor shapes (it still registers the packages' ontologies and runs the shape check). `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false` turns off only the boot's ontology sync. The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded at boot either way. A failed ontology sync at boot is logged and the boot goes on.
 
 ### Shape graphs
 
-After the ontology sync and the shape check, at boot and on `POST /admin/sync-shapes`, the server syncs the registered shapes into the app's default dataset with core's `syncShapeGraphs`. This section describes the default, `LINKED_SHAPE_GRAPH=package`; with a shared graph IRI every package's shapes and the app's generated ones go into that one graph (`graphs` lists it, `appGraph.graph` is it), and with `default` the shapes go into the default graph (`defaultGraph` counts the writes). See [Ontology and shape graphs](#ontology-and-shape-graphs).
+After the ontology sync and the shape check, at boot and on `POST /admin/sync-shapes`, the server syncs the registered shapes with core's `syncShapeGraphsRouted`, into each dataset the storage routing needs them in (see [Which datasets the syncs write to](#which-datasets-the-syncs-write-to)). This section describes the default, `LINKED_SHAPE_GRAPH=package`; with a shared graph IRI every package's shapes and the app's generated ones go into that one graph (`graphs` lists it, `appGraph.graph` is it), and with `default` the shapes go into the default graph (`defaultGraph` counts the writes). See [Ontology and shape graphs](#ontology-and-shape-graphs).
 
 - **One graph per package.** Each package's shapes go in `{package IRI}/graph/shapes`, with a `ShapesGraph` record in the graph registry (never a hierarchy source). A graph whose stored content hash matches is not written, so an unchanged sync writes nothing; a changed one is replaced whole.
 - **Where the Turtle comes from.** An installed package's built `lib/esm/data/shapes.ttl`, which `linked build` writes. An installed package without that file gets no shape graph: nothing is generated for it (a package with no shapes has none). The app's own packages (the app and its workspace packages) are generated in process: in dev through Vite's `ssrLoadModule` (core's `packageShapesTurtle` on the core the source shapes registered on, the same bytes `linked build` writes); in a built app from their `lib/esm/data/shapes.ttl` when they have one.
@@ -523,6 +523,33 @@ The boot logs one line, for example:
 ```
 
 `POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned, target}` (plus `defaultGraph`, the default-graph sync's writes, under `LINKED_SHAPE_GRAPH=default` or on a store without graph queries). `target` is the process's `shapeGraph` setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)); with `fallback` set the store had no graph queries and the shapes went into the default graph instead. In a shared graph the rebuild covers the packages with Turtle: a package without it is left out (and logged), where the package mode keeps its old graph.
+
+### Which datasets the syncs write to
+
+The boot syncs follow the app's storage routing (`linked.backend.storage`), through core's
+`@_linked/core/shapes/syncTargets` (its README's "Which datasets the syncs write to" has the rule):
+
+- a package's **shape graph** goes to every dataset one of its shapes routes to, and to the
+  dataset(s) the `sh:NodeShape` / `sh:PropertyShape` shapes route to;
+- a package's **ontology graph** goes to every dataset one of its shapes routes to, wherever a
+  shape targeting one of its classes routes, and to the dataset(s) of the ontology term shapes
+  (`rdfs:Class`, `owl:Class`, `rdf:Property`, …), so the hierarchy is where the instances are;
+- the app's **own shape graph** goes to the datasets of the shapes declaring `contains` properties,
+  and those of the shape shapes.
+
+An app without pins writes everything into its default dataset, as before. With pins the boot logs
+one line naming the datasets per graph kind, for example:
+
+```
+[LinkedServer] The boot syncs follow the routing: shape graphs → FusekiStore "app" (every package), FusekiStore "music" (@acme/music); app shape graph → FusekiStore "app"; ontology graphs → FusekiStore "app" (every package), FusekiStore "music" (@acme/music, @_linked/schema).
+```
+
+Each sync then logs one line per dataset (` in FusekiStore "music"`), and its answer adds
+`datasets` (each dataset's own report). When a pin moves, a package graph routing no longer sends
+to the **default** dataset is dropped there (`prunedGraphs`, one log line each); one left in
+another dataset stays and is reported (`leftovers`, one warning), since a store several apps share
+may hold another app's copy. A dataset that cannot be read or written fails alone: the others are
+synced, then the sync fails naming it (at boot a warning; `POST /admin/sync-shapes` answers 500).
 
 ## Provider lifecycle and HMR
 

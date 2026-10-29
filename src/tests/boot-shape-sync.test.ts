@@ -8,6 +8,8 @@ import {
   readShapesTurtle,
   shapeTurtleSource,
   syncShapeGraphsInto,
+  syncRoutedShapeGraphs,
+  loadShapeGraphCore,
   viteShapesTurtleGenerator,
   type ShapeGraphCore,
   type ShapeGraphSyncResult,
@@ -329,5 +331,131 @@ describe('syncShapeGraphsInto', () => {
       },
     };
     await expect(syncShapeGraphsInto({}, { ...base, core, dev: false, ...quiet })).rejects.toThrow('store down');
+  });
+});
+
+describe('syncRoutedShapeGraphs', () => {
+  const base = {
+    orphanScope: 'none' as const,
+    isOwn: () => false,
+    packageDirOf: (name: string) => `/n/${name}`,
+    read: (dir: string | undefined) => (dir ? `TTL ${dir}` : undefined),
+    dev: false,
+  };
+
+  it("logs one line per dataset, joins the datasets' reports, and names the graphs dropped or left behind", async () => {
+    const calls: any[] = [];
+    const core: ShapeGraphCore = {
+      packagesWithShapes: () => ['a', 'b'],
+      shapesGraphFor: (name) => `https://linked.cm/pkg/${name}/graph/shapes`,
+      syncShapeGraphs: async () => {
+        throw new Error('not called');
+      },
+      syncShapeGraphsRouted: async (options) => {
+        calls.push(options);
+        return {
+          targets: [
+            { dataset: 'Store "main"', result: { written: ['a'], skipped: ['b'], pruned: [], cleaned: 0, appGraph: 'skipped', target: 'package' } },
+            { dataset: 'Store "two"', result: { written: ['b'], skipped: [], pruned: [], cleaned: 0, target: 'package' } },
+          ],
+          pruned: [{ dataset: 'Store "main"', package: 'c', graph: 'https://linked.cm/pkg/c/graph/shapes' }],
+          leftovers: [],
+          failed: [],
+        };
+      },
+    };
+    const lines: string[] = [];
+    const report = await syncRoutedShapeGraphs({ ...base, core, appGraph: 'https://app.test/graph/shapes', log: (m) => lines.push(m), warn: () => {} });
+    expect(calls[0].appShapes).toEqual({ graph: 'https://app.test/graph/shapes' });
+    expect(await calls[0].turtleFor('a')).toBe('TTL /n/a');
+    expect(lines).toEqual([
+      '[LinkedServer] shape graph sync in Store "main": written a; 1 unchanged; app graph unchanged; graphs written https://linked.cm/pkg/a/graph/shapes',
+      '[LinkedServer] shape graph sync in Store "two": written b; no app graph (DATA_ROOT not set); graphs written https://linked.cm/pkg/b/graph/shapes',
+      '[LinkedServer] shape graph sync: dropped <https://linked.cm/pkg/c/graph/shapes> (c) from Store "main": routing sends its shapes elsewhere',
+    ]);
+    expect(report).toMatchObject({
+      written: ['a', 'b'],
+      skipped: [],
+      graphs: ['https://linked.cm/pkg/a/graph/shapes', 'https://linked.cm/pkg/b/graph/shapes'],
+      appGraph: { graph: 'https://app.test/graph/shapes', status: 'skipped' },
+      prunedGraphs: [{ dataset: 'Store "main"', package: 'c', graph: 'https://linked.cm/pkg/c/graph/shapes' }],
+      leftovers: [],
+      target: 'package',
+    });
+    expect(report.datasets.map((d) => d.dataset)).toEqual(['Store "main"', 'Store "two"']);
+  });
+
+  it('one dataset: the line syncShapeGraphsInto logs; a failed dataset fails the run after the others synced', async () => {
+    const core: ShapeGraphCore = {
+      packagesWithShapes: () => ['a'],
+      shapesGraphFor: (name) => `https://linked.cm/pkg/${name}/graph/shapes`,
+      syncShapeGraphs: async () => ({ written: [], skipped: [], pruned: [], cleaned: 0 }),
+      syncShapeGraphsRouted: async () => ({
+        targets: [{ dataset: 'Store "main"', result: { written: [], skipped: ['a'], pruned: [], cleaned: 0 } }],
+        pruned: [],
+        leftovers: [],
+        failed: [{ dataset: 'Store "two"', error: 'down' }],
+      }),
+    };
+    const lines: string[] = [];
+    await expect(syncRoutedShapeGraphs({ ...base, core, log: (m) => lines.push(m), warn: () => {} })).rejects.toThrow(
+      'the shape sync failed in Store "two": down (synced: Store "main")',
+    );
+    expect(lines).toEqual(['[LinkedServer] shape graph sync: 1 unchanged; no app graph (DATA_ROOT not set)']);
+  });
+
+  it("with core's routed sync: a pinned package's shape graph is written into both datasets", async () => {
+    const { SparqlDataset } = await import('@_linked/core/sparql/SparqlDataset');
+    const { LinkedStorage } = await import('@_linked/core/utils/LinkedStorage');
+    const { linkedPackage } = await import('@_linked/core/utils/Package');
+    const { Shape } = await import('@_linked/core/shapes/Shape');
+    /** Records the graphs its graph queries create; reads nothing back. */
+    class Recording extends (SparqlDataset as any) {
+      created: string[] = [];
+      constructor(readonly id: string) {
+        super();
+      }
+      async selectQuery() {
+        return [];
+      }
+      async graphQuery(query: { kind: string; graph: string; contentHash?: string }) {
+        if (query.kind === 'graph_create') this.created.push(query.graph);
+        return { graph: query.graph, contentHash: query.contentHash, changed: true };
+      }
+      async executeSparqlSelect() {
+        return { head: { vars: [] }, results: { bindings: [] } };
+      }
+      async executeSparqlUpdate() {}
+    }
+    class BssAlbum extends (Shape as any) {
+      static targetClass = { id: 'https://example.org/bss#Album' };
+    }
+    (linkedPackage('bss-music').linkedShape as any)(BssAlbum);
+    const main = new Recording('main');
+    const two = new Recording('two');
+    const before = LinkedStorage.getDefaultDataset();
+    LinkedStorage.setDefaultDataset(main as any);
+    LinkedStorage.setDatasetForShapes(two as any, BssAlbum as any);
+    try {
+      const core = await loadShapeGraphCore();
+      const lines: string[] = [];
+      const report = await syncRoutedShapeGraphs({
+        ...base,
+        // only this file's package: core's own built-ins are generated in process here
+        core: { ...core, packagesWithShapes: () => ['bss-music'] },
+        read: () => undefined,
+        isOwn: () => true,
+        log: (m) => lines.push(m),
+        warn: () => {},
+      });
+      const graph = core.shapesGraphFor('bss-music');
+      expect(main.created).toContain(graph);
+      expect(two.created).toEqual([graph]);
+      expect(report.datasets.map((d) => d.dataset)).toEqual(['Recording "main"', 'Recording "two"']);
+      expect(lines[1]).toContain('[LinkedServer] shape graph sync in Recording "two": written bss-music');
+    } finally {
+      LinkedStorage.unsetDatasetForShape(BssAlbum as any);
+      if (before) LinkedStorage.setDefaultDataset(before);
+    }
   });
 });

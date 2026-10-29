@@ -191,7 +191,7 @@ import {
   appShapesGraph,
   bootOrphanScope,
   loadShapeGraphCore,
-  syncShapeGraphsInto,
+  syncRoutedShapeGraphs,
   viteShapesTurtleGenerator,
 } from '../utils/syncShapes.js';
 import {
@@ -204,7 +204,7 @@ import {
   syncOntologiesThenShapes,
   type OntologyPhaseResult,
 } from '../utils/ontologySync.js';
-import { applyGraphTargetsFromEnv, syncPinWarning } from '../utils/graphTargets.js';
+import { applyGraphTargetsFromEnv, syncTargetsLine } from '../utils/graphTargets.js';
 import {
   AdminRequestError,
   assertReloadablePackages,
@@ -498,7 +498,7 @@ export class LinkedServer extends Shape {
 
     await this.initBackendProviders();
 
-    this.warnOfSyncPins();
+    await this.logSyncTargets();
     await this.syncOntologiesOnBoot();
     await this.materializeShapesIntoStore();
     return this;
@@ -506,7 +506,10 @@ export class LinkedServer extends Shape {
 
   /**
    * Sync this server's registered shapes into app data, one named graph per package (see
-   * utils/syncShapes): each package's shapes in `{package IRI}/graph/shapes`, from its built
+   * utils/syncShapes) in every dataset the storage routing needs it in (core's
+   * `syncShapeGraphsRouted`; the default dataset when nothing is pinned, and a graph routing no
+   * longer sends to the default dataset is dropped there): each package's shapes in
+   * `{package IRI}/graph/shapes`, from its built
    * `shapes.ttl` (an installed package without one gets no shape graph), the app's own packages
    * generated in process in dev (through Vite's loader), and the app's generated single-owner
    * shapes in `{DATA_ROOT}/graph/shapes`. Runs at boot, after the ontology sync, and again when
@@ -534,7 +537,7 @@ export class LinkedServer extends Shape {
     }
   }
 
-  /** One shape sync into the default dataset; throws when it fails. */
+  /** One shape sync, following the routing; throws when it fails in any dataset. */
   private async syncRegisteredShapes(): Promise<ShapeSyncResult> {
     if (!shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)) {
       return { written: 0, skipped: 'disabled' };
@@ -545,9 +548,9 @@ export class LinkedServer extends Shape {
     const appName: string | undefined = this.package?.name;
     const vite = (this.config.server as any)?.vite;
     const generate = viteShapesTurtleGenerator(vite);
-    // Explicit target: every registered shape goes into the app's own data store, regardless of
-    // per-shape routing or pins.
-    const shapeGraphs = await syncShapeGraphsInto(appData, {
+    // Follows the routing: each package's shape graph goes to every dataset its shapes (and the
+    // shape shapes) route to; the default dataset is one of them unless routing sends all elsewhere.
+    const shapeGraphs = await syncRoutedShapeGraphs({
       core: await loadShapeGraphCore(),
       orphanScope,
       isOwn: (name) => name === appName || this.workspacePackageNames.has(name),
@@ -572,17 +575,23 @@ export class LinkedServer extends Shape {
   }
 
   /**
-   * Boot: one warning when routing pins the shape shapes or the ontology term shapes to a dataset
-   * other than the default one, since the syncs write into the default dataset only (see
-   * {@link syncPinWarning}). Only for the syncs this boot runs.
+   * Boot: one line naming the datasets the boot syncs write into, when the routing sends any graph
+   * beyond the default dataset (see {@link syncTargetsLine}). Only for the syncs this boot runs.
    */
-  private warnOfSyncPins(): void {
+  private async logSyncTargets(): Promise<void> {
     const flag = (this.config as any)?.syncShapesOnBoot;
-    const warning = syncPinWarning({
-      shapeSync: shapeSyncOn(process.env, flag),
-      ontologySync: bootSyncsOntologies(process.env, flag),
-    });
-    if (warning) console.warn(warning);
+    try {
+      const line = syncTargetsLine(
+        {
+          shapeSync: shapeSyncOn(process.env, flag),
+          ontologySync: bootSyncsOntologies(process.env, flag),
+        },
+        await import('@_linked/core/shapes/syncTargets')
+      );
+      if (line) console.log(line);
+    } catch (err) {
+      console.warn('[LinkedServer] could not name the datasets the boot syncs write into:', err);
+    }
   }
 
   /**
@@ -606,7 +615,7 @@ export class LinkedServer extends Shape {
   /**
    * Every discovered linked package and every workspace package of the app registers its
    * ontologies (in dev, an unbuilt one through Vite), then the ontology sync (when
-   * `sync` is set) into the default dataset, then the shape check.
+   * `sync` is set), following the routing, then the shape check.
    * Orphaned ontology graphs (and earlier sync nodes) are pruned under the shape sync's orphan policy
    * (`LINKED_SYNC_SHAPES_PRUNE_ORPHANS`).
    */
@@ -614,6 +623,7 @@ export class LinkedServer extends Shape {
     return runOntologyPhase(LinkedStorage.getDefaultDataset(), {
       core: await loadOntologyCore(),
       sync,
+      routed: true,
       orphanScope: bootOrphanScope(),
       dependencies: readDependencyLists(this.linkedPackageDirs ?? new Map(), this.package),
       packageDirs: ontologyPackageDirs(
@@ -863,7 +873,7 @@ export class LinkedServer extends Shape {
     // before controllers
     await this.initBackendProviders();
 
-    this.warnOfSyncPins();
+    await this.logSyncTargets();
     await this.syncOntologiesOnBoot();
     await this.materializeShapesIntoStore();
 

@@ -1,8 +1,9 @@
 /**
  * The shape sync, as the server runs it at boot and when the host asks for a re-sync
- * (`POST /admin/sync-shapes`): core's `syncShapeGraphs` writes each package's shapes into its own
- * named graph of the app's default dataset (`{package IRI}/graph/shapes`, a `ShapesGraph` record
- * in the graph registry), skipped when the stored content hash matches, and the app's generated
+ * (`POST /admin/sync-shapes`): core's `syncShapeGraphsRouted` writes each package's shapes into its
+ * own named graph (`{package IRI}/graph/shapes`, a `ShapesGraph` record in the graph registry) of
+ * every dataset the storage routing needs them in (see "Which datasets the syncs write to" in
+ * core's README), skipped when the stored content hash matches, and the app's generated
  * single-owner shapes into the app's own shape graph, `{DATA_ROOT}/graph/shapes`. Shapes an
  * earlier sync wrote into the default graph are removed there once their package's graph holds
  * them. A store without graph queries gets core's default-graph shape sync instead.
@@ -66,6 +67,16 @@ export interface ShapeGraphCore {
       appShapes?: {graph: string; package?: string};
     },
   ): Promise<ShapeGraphSyncResult>;
+  /**
+   * Core's routed sync (`@_linked/core/shapes/syncTargets`): the same options without a dataset;
+   * each package's graph goes where the routing needs it. Optional so a test double can leave it out.
+   */
+  syncShapeGraphsRouted?(options: {
+    orphanScope: BootOrphanScope;
+    packages?: string[];
+    turtleFor: (packageName: string) => Promise<string | undefined>;
+    appShapes?: {graph: string; package?: string};
+  }): Promise<RoutedSyncReport<ShapeGraphSyncResult>>;
   /** Every package with registered shapes (core counted for its built-ins). */
   packagesWithShapes(): string[];
   /** A package's shape graph IRI (`ShapesGraph.iriFor`). */
@@ -77,9 +88,11 @@ export async function loadShapeGraphCore(): Promise<ShapeGraphCore> {
   const sync = await import('@_linked/core/shapes/syncShapeGraphs');
   const turtle = await import('@_linked/core/shapes/shapesToTurtle');
   const graphs = await import('@_linked/core/shapes/NamedGraph');
+  const targets = await import('@_linked/core/shapes/syncTargets');
   return {
     syncShapeGraphs: (ds, options) =>
       sync.syncShapeGraphs(ds as Parameters<typeof sync.syncShapeGraphs>[0], options),
+    syncShapeGraphsRouted: (options) => targets.syncShapeGraphsRouted(options),
     packagesWithShapes: () => turtle.packagesWithShapes(),
     shapesGraphFor: (packageName) => graphs.ShapesGraph.iriFor(packageName),
   };
@@ -209,54 +222,59 @@ export function writtenAndUnchanged(written: string[], unchanged: string[]): str
 /** An app graph's status in a log line: core's `skipped` is an unchanged graph. */
 const appGraphStatus = (status: 'written' | 'skipped' | 'dropped') => (status === 'skipped' ? 'unchanged' : status);
 
+/** The options of {@link syncShapeGraphsInto} and {@link syncRoutedShapeGraphs}. */
+export interface ShapeGraphSyncOptions {
+  core: ShapeGraphCore;
+  orphanScope: BootOrphanScope;
+  /** Whether a package is the app or one of its workspace packages. */
+  isOwn: (packageName: string) => boolean;
+  /** Whether the server runs with Vite (dev). */
+  dev: boolean;
+  /** A package's root directory, when the server knows it. */
+  packageDirOf: (packageName: string) => string | undefined;
+  /**
+   * Generates an own package's Turtle (in dev through Vite's loader); undefined, or a result of
+   * undefined, leaves the generation to the core that runs the sync.
+   */
+  generate?: (packageName: string) => Promise<string | undefined>;
+  /** The app's own shape graph (`{DATA_ROOT}/graph/shapes`). */
+  appGraph?: string;
+  /** The app's package name, recorded on its shape graph's record. */
+  appPackage?: string;
+  read?: (packageDir: string | undefined) => string | undefined;
+  log?: (message: string) => void;
+  warn?: (message: string, err?: unknown) => void;
+}
+
+/** Where each registered package's Turtle comes from, and the sync options that follow from it. */
+export interface ShapeTurtleSources {
+  sources: Map<string, ShapeTurtleSource>;
+  /** Installed packages without `shapes.ttl`: no shape graph, left out of the run. */
+  noFile: string[];
+  /** The package subset to sync: set only when some package has no Turtle file. */
+  packages?: string[];
+  turtleFor: (packageName: string) => Promise<string | undefined>;
+}
+
 /**
- * Sync the registered shapes into `ds`, one shape graph per package (see the module doc), and log
- * one line naming what was written and skipped, the graphs written, the packages without
- * `shapes.ttl` and the default-graph shapes removed. Throws when the sync fails.
+ * Where each registered package's Turtle comes from ({@link shapeTurtleSource}) and the
+ * `turtleFor` the syncs read it through. Shared by the syncs and the graph content endpoint, so
+ * both see the same bytes.
  */
-export async function syncShapeGraphsInto(
-  ds: unknown,
-  {
-    core,
-    orphanScope,
-    isOwn,
-    dev,
-    packageDirOf,
-    generate,
-    appGraph,
-    appPackage,
-    read = readShapesTurtle,
-    log = console.log,
-    warn = console.warn,
-  }: {
-    core: ShapeGraphCore;
-    orphanScope: BootOrphanScope;
-    /** Whether a package is the app or one of its workspace packages. */
-    isOwn: (packageName: string) => boolean;
-    /** Whether the server runs with Vite (dev). */
-    dev: boolean;
-    /** A package's root directory, when the server knows it. */
-    packageDirOf: (packageName: string) => string | undefined;
-    /**
-     * Generates an own package's Turtle (in dev through Vite's loader); undefined, or a result of
-     * undefined, leaves the generation to the core that runs the sync.
-     */
-    generate?: (packageName: string) => Promise<string | undefined>;
-    /** The app's own shape graph (`{DATA_ROOT}/graph/shapes`). */
-    appGraph?: string;
-    /** The app's package name, recorded on its shape graph's record. */
-    appPackage?: string;
-    read?: (packageDir: string | undefined) => string | undefined;
-    log?: (message: string) => void;
-    warn?: (message: string, err?: unknown) => void;
-  },
-): Promise<ShapeGraphsReport> {
+export function shapeTurtleSources({
+  core,
+  isOwn,
+  dev,
+  packageDirOf,
+  generate,
+  read = readShapesTurtle,
+  warn = console.warn,
+}: Pick<ShapeGraphSyncOptions, 'core' | 'isOwn' | 'dev' | 'packageDirOf' | 'generate' | 'read' | 'warn'>): ShapeTurtleSources {
   const sources = new Map<string, ShapeTurtleSource>();
   for (const name of core.packagesWithShapes()) {
     sources.set(name, shapeTurtleSource(name, {own: isOwn(name), dev, packageDir: packageDirOf(name), read}));
   }
   const noFile = [...sources].filter(([, s]) => s.source === 'none').map(([name]) => name);
-
   const turtleFor = async (name: string): Promise<string | undefined> => {
     const source = sources.get(name);
     if (source?.source === 'file') return source.text;
@@ -268,38 +286,49 @@ export async function syncShapeGraphsInto(
       return undefined;
     }
   };
-
-  const result = await core.syncShapeGraphs(ds, {
-    orphanScope,
-    // A package without Turtle is left out: core would generate it otherwise.
+  return {
+    sources,
+    noFile,
     ...(noFile.length ? {packages: [...sources.keys()].filter((n) => !noFile.includes(n))} : {}),
     turtleFor,
-    ...(appGraph ? {appShapes: {graph: appGraph, ...(appPackage ? {package: appPackage} : {})}} : {}),
-  });
+  };
+}
 
-  // A package core neither wrote nor skipped got no Turtle at all: generation produced nothing
-  // (in dev, the server's core may not hold the source shapes the dev loader registered). The
-  // default-graph sync (a store without graph queries) reports no packages, so it is not checked.
-  const covered = new Set([...result.written, ...result.skipped]);
-  const notGenerated =
-    result.defaultGraph !== undefined
-      ? []
-      : [...sources.keys()].filter((n) => !noFile.includes(n) && !covered.has(n));
+/**
+ * The packages with a Turtle source that no run covered (their generation gave nothing), with one
+ * warning naming them. None when the shapes went into the default graph.
+ */
+function notGeneratedIn(
+  results: ShapeGraphSyncResult[],
+  {sources, noFile}: ShapeTurtleSources,
+  warn: (message: string, err?: unknown) => void,
+): string[] {
+  if (results.some((r) => r.defaultGraph !== undefined)) return [];
+  const covered = new Set(results.flatMap((r) => [...r.written, ...r.skipped]));
+  const notGenerated = [...sources.keys()].filter((n) => !noFile.includes(n) && !covered.has(n)).sort();
   if (notGenerated.length) {
     warn(
-      `[LinkedServer] no shapes could be generated for ${list(notGenerated.sort())}, so ` +
+      `[LinkedServer] no shapes could be generated for ${list(notGenerated)}, so ` +
         `${notGenerated.length === 1 ? 'it has' : 'they have'} no shape graph this sync`,
     );
   }
-  const withoutTurtle = [...noFile, ...notGenerated].sort();
+  return notGenerated;
+}
 
-  // A shared graph (the global `shapeGraph` is an IRI) holds every package and the app's shapes.
-  const shared = result.target && result.target !== 'package' && result.target !== 'default' ? result.target : undefined;
+/** One sync's report (one dataset), from core's result. */
+function reportOf(
+  result: ShapeGraphSyncResult,
+  core: ShapeGraphCore,
+  {noFile}: ShapeTurtleSources,
+  appGraph: string | undefined,
+  notGenerated: string[],
+): ShapeGraphsReport {
+  const withoutTurtle = [...noFile, ...notGenerated].sort();
+  const shared = sharedTarget(result);
   const report: ShapeGraphsReport = {
     written: result.written,
     skipped: result.skipped,
     pruned: result.pruned,
-    // A shared graph is written whole or not at all: listed when the run wrote anything into it.
     graphs: shared
       ? result.written.length || result.appGraph === 'written' || result.pruned.length
         ? [shared]
@@ -315,23 +344,34 @@ export async function syncShapeGraphsInto(
     if (result.appGraph === 'written' && !shared) report.graphs.push(appGraph);
   }
   if (result.defaultGraph !== undefined) report.defaultGraph = result.defaultGraph;
+  return report;
+}
 
+const sharedTarget = (result: {target?: string}): string | undefined =>
+  result.target && result.target !== 'package' && result.target !== 'default' ? result.target : undefined;
+
+/** Log one sync's report; `where` names the dataset when a routed sync wrote into several. */
+function logReport(
+  report: ShapeGraphsReport,
+  orphanScope: BootOrphanScope,
+  where: string,
+  log: (message: string) => void,
+  warn: (message: string, err?: unknown) => void,
+): void {
+  const {withoutTurtle} = report;
+  const shared = sharedTarget(report);
   if (report.defaultGraph !== undefined) {
     const why =
-      result.target === 'default' && !result.fallback
-        ? "shapeGraph is 'default'"
-        : 'the store has no graph queries';
-    log(`[LinkedServer] shape sync (default graph: ${why}): ${report.defaultGraph} shape(s) written`);
+      report.target === 'default' && !report.fallback ? "shapeGraph is 'default'" : 'the store has no graph queries';
+    log(`[LinkedServer] shape sync${where} (default graph: ${why}): ${report.defaultGraph} shape(s) written`);
   } else if (shared) {
     log(
-      `[LinkedServer] shape graph sync (one shared graph <${shared}>): ` +
+      `[LinkedServer] shape graph sync${where} (one shared graph <${shared}>): ` +
         writtenAndUnchanged(report.written, report.skipped) +
         (report.appGraph ? `; app shapes ${appGraphStatus(report.appGraph.status)}` : '') +
         (report.pruned.length ? `; dropped from the graph ${list(report.pruned)}` : '') +
         (withoutTurtle.length ? `; no shapes.ttl (not in the graph): ${list(withoutTurtle)}` : ''),
     );
-    // Unlike package graphs, which stay when a package goes missing, the shared graph is rebuilt
-    // from the packages the run covers.
     if (withoutTurtle.length) {
       warn(
         `[LinkedServer] the shared shape graph <${shared}> holds no shapes of ${list(withoutTurtle)}: ` +
@@ -340,7 +380,7 @@ export async function syncShapeGraphsInto(
     }
   } else {
     log(
-      `[LinkedServer] shape graph sync: ${writtenAndUnchanged(report.written, report.skipped)}` +
+      `[LinkedServer] shape graph sync${where}: ${writtenAndUnchanged(report.written, report.skipped)}` +
         (report.appGraph ? `; app graph ${appGraphStatus(report.appGraph.status)}` : '; no app graph (DATA_ROOT not set)') +
         (report.graphs.length ? `; graphs written ${list(report.graphs)}` : '') +
         (orphanScope === 'all' ? `; pruned ${list(report.pruned)}` : '') +
@@ -352,6 +392,111 @@ export async function syncShapeGraphsInto(
     warn(
       '[LinkedServer] orphaned shape graphs were not pruned: core prunes only when the sync covers ' +
         `every registered package, and ${list(withoutTurtle)} has no Turtle`,
+    );
+  }
+}
+
+/**
+ * Sync the registered shapes into `ds`, one shape graph per package (see the module doc), and log
+ * one line naming what was written and skipped, the graphs written, the packages without
+ * `shapes.ttl` and the default-graph shapes removed. Throws when the sync fails. The server's boot
+ * follows the routing instead ({@link syncRoutedShapeGraphs}); this syncs one given dataset.
+ */
+export async function syncShapeGraphsInto(ds: unknown, options: ShapeGraphSyncOptions): Promise<ShapeGraphsReport> {
+  const {core, orphanScope, appGraph, appPackage, log = console.log, warn = console.warn} = options;
+  const turtle = shapeTurtleSources(options);
+  const result = await core.syncShapeGraphs(ds, {
+    orphanScope,
+    ...(turtle.packages ? {packages: turtle.packages} : {}),
+    turtleFor: turtle.turtleFor,
+    ...(appGraph ? {appShapes: {graph: appGraph, ...(appPackage ? {package: appPackage} : {})}} : {}),
+  });
+  const report = reportOf(result, core, turtle, appGraph, notGeneratedIn([result], turtle, warn));
+  logReport(report, orphanScope, '', log, warn);
+  return report;
+}
+
+/** A package graph a routed sync dropped or found left behind (core's `RoutedGraph`). */
+export interface RoutedGraphReport {
+  dataset: string;
+  package: string;
+  graph: string;
+}
+
+/** What core's routed syncs report (`@_linked/core/shapes/syncTargets`). */
+export interface RoutedSyncReport<R> {
+  targets: Array<{dataset: string; result: R}>;
+  pruned: RoutedGraphReport[];
+  leftovers: RoutedGraphReport[];
+  failed: Array<{dataset: string; error: string}>;
+}
+
+/** The routed part of a shape sync's report: per target dataset, and what routing left behind. */
+export interface RoutedShapeGraphsReport extends ShapeGraphsReport {
+  /** Each dataset the shapes went to (the default one first) and what the sync did there. */
+  datasets: Array<{dataset: string} & ShapeGraphsReport>;
+  /** Package shape graphs dropped from the default dataset: routing sends them elsewhere now. */
+  prunedGraphs: RoutedGraphReport[];
+  /** Package shape graphs left in another dataset routing no longer sends them to (reported, never dropped). */
+  leftovers: RoutedGraphReport[];
+}
+
+const union = (lists: string[][]): string[] => [...new Set(lists.flat())].sort();
+
+/**
+ * Sync the registered shapes where the routing needs them (core's `syncShapeGraphsRouted`): each
+ * package's shape graph into every dataset its shapes and the shape shapes route to, the app graph
+ * into the datasets of the shapes declaring `contains` properties, and the graphs routing no longer
+ * sends to the default dataset dropped there. Logs one line per dataset (as
+ * {@link syncShapeGraphsInto} does, naming the dataset when there are several) and one per graph
+ * dropped or left behind. The answer's top-level fields join the datasets'. Throws, after the other
+ * datasets synced, when one failed, naming each.
+ */
+export async function syncRoutedShapeGraphs(options: ShapeGraphSyncOptions): Promise<RoutedShapeGraphsReport> {
+  const {core, orphanScope, appGraph, appPackage, log = console.log, warn = console.warn} = options;
+  if (!core.syncShapeGraphsRouted) {
+    throw new Error("@_linked/core has no syncShapeGraphsRouted: this server needs the core it was built with");
+  }
+  const turtle = shapeTurtleSources(options);
+  const routed = await core.syncShapeGraphsRouted({
+    orphanScope,
+    ...(turtle.packages ? {packages: turtle.packages} : {}),
+    turtleFor: turtle.turtleFor,
+    ...(appGraph ? {appShapes: {graph: appGraph, ...(appPackage ? {package: appPackage} : {})}} : {}),
+  });
+  const several = routed.targets.length > 1;
+  const notGenerated = notGeneratedIn(routed.targets.map((t) => t.result), turtle, warn);
+  const datasets = routed.targets.map(({dataset, result}) => {
+    const report = reportOf(result, core, turtle, appGraph, notGenerated);
+    logReport(report, orphanScope, several ? ` in ${dataset}` : '', log, warn);
+    return {dataset, ...report};
+  });
+  for (const {dataset, package: name, graph} of routed.pruned) {
+    log(`[LinkedServer] shape graph sync: dropped <${graph}> (${name}) from ${dataset}: routing sends its shapes elsewhere`);
+  }
+  const first = datasets[0];
+  const report: RoutedShapeGraphsReport = {
+    written: union(datasets.map((d) => d.written)),
+    skipped: union(datasets.map((d) => d.skipped)).filter((n) => !datasets.some((d) => d.written.includes(n))),
+    pruned: union(datasets.map((d) => d.pruned)),
+    graphs: union(datasets.map((d) => d.graphs)),
+    withoutTurtle: union(datasets.map((d) => d.withoutTurtle)),
+    cleaned: datasets.reduce((n, d) => n + d.cleaned, 0),
+    datasets,
+    prunedGraphs: routed.pruned,
+    leftovers: routed.leftovers,
+  };
+  const app = datasets.find((d) => d.appGraph?.status === 'written') ?? datasets.find((d) => d.appGraph);
+  if (app?.appGraph) report.appGraph = app.appGraph;
+  if (datasets.some((d) => d.defaultGraph !== undefined)) {
+    report.defaultGraph = datasets.reduce((n, d) => n + (d.defaultGraph ?? 0), 0);
+  }
+  if (first?.target) report.target = first.target;
+  if (datasets.some((d) => d.fallback)) report.fallback = true;
+  if (routed.failed.length) {
+    throw new Error(
+      `the shape sync failed in ${routed.failed.map((f) => `${f.dataset}: ${f.error}`).join('; ')}` +
+        (datasets.length ? ` (synced: ${datasets.map((d) => d.dataset).join(', ')})` : ''),
     );
   }
   return report;
