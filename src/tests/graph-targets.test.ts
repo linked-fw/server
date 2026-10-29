@@ -165,7 +165,7 @@ describe('the sync targets line', () => {
 });
 
 describe('the sync targets line and a sub-shape with its own target class', () => {
-  it('leaves out a sub-shape of a watched shape that targets a class of its own', async () => {
+  it('a sub-shape of a watched shape with a class of its own: no shape graph moves, the app graph follows it', async () => {
     const { linkedShape } = await import('@_linked/core/package');
     class CatalogNodeShape extends (NodeShape as any) {
       static targetClass = { id: 'https://example.org/CatalogNodeShape' };
@@ -178,7 +178,13 @@ describe('the sync targets line and a sub-shape with its own target class', () =
     LinkedStorage.setDefaultDataset(appData);
     try {
       LinkedStorage.setDatasetForShapes(catalog, CatalogNodeShape as any);
-      expect(line(BOTH)).toBeUndefined();
+      // Not a shape shape (its own target class): every shape graph stays in Store. Being a
+      // sub-shape of NodeShape, whose contains properties the app graph constrains, it takes the
+      // app graph along.
+      expect(line(BOTH)).toBe(
+        '[LinkedServer] The boot syncs follow the routing: shape graphs → Store (every package); ' +
+          'app shape graph → Store, Other "catalog"; ontology graphs → Store (every package).',
+      );
     } finally {
       LinkedStorage.unsetDatasetForShape(CatalogNodeShape as any);
       if (before) LinkedStorage.setDefaultDataset(before);

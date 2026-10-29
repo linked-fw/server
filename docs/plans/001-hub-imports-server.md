@@ -36,8 +36,9 @@ core plan 006 and in 282 in the same landing. Core plan 006 §Contracts holds K3
   sync; M10–M12): `graphSyncTargets()`, `syncShapeGraphsRouted`, `syncOntologiesRouted` in core
   `src/shapes/syncTargets.ts`. A package's graphs go to every dataset any of its shapes route to ∪
   the dataset NodeShape/PropertyShape (and the ontology term shapes) are pinned to (G2); an ontology
-  graph also where shapes targeting its classes route; the single-owner graph to the datasets of
-  shapes declaring `contains` properties ∪ the NodeShape/PropertyShape dataset. Prune only in the
+  graph also where shapes targeting its classes route; the single-owner graph to every dataset any
+  shape it constrains routes to (the shapes declaring `contains` properties and their sub-shapes) ∪
+  the NodeShape/PropertyShape dataset, the same text everywhere (M19). Prune only in the
   app's default dataset (M11). Per-dataset `syncShapeGraphs(ds)`/`syncOntologies(ds)` unchanged.
 
 ## SY — server half

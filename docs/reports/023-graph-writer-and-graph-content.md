@@ -76,3 +76,9 @@ From `/Users/rene/web/wt/hub-imports--sy/packages-local/_linked-server`, after c
 
 The decision ledger (S1–S18) is in core report 084 §Details: the step's one plan doc was core's
 plan 007. Local data: nothing stored changes shape; no reset needed.
+
+## Addendum: fix round (master decision M19)
+
+The app's single-owner graph also follows sub-shapes of the shapes declaring `contains` (core
+report 084 §Addendum). `syncTargetsLine` names those datasets for the app shape graph; README and
+K4 in plan 001 updated. Touched suites: `Tests: 76 passed, 76 total`.

@@ -90,7 +90,7 @@ export interface BootSyncs {
  * routing sends any graph beyond the default dataset (core's `graphSyncTargets`: a package's
  * shape graph goes wherever its shapes or the shape shapes route, its ontology graph also
  * wherever shapes using its classes or the term shapes route, the app's graph wherever shapes
- * declaring `contains` route). Undefined when every graph goes to the default dataset only (the
+ * declaring `contains`, or their sub-shapes, route). Undefined when every graph goes to the default dataset only (the
  * syncs' own lines say enough), when no sync runs or without a default dataset. `core` is
  * `@_linked/core/shapes/syncTargets` (server only, imported when the boot runs). Reads the
  * registered shapes outside any shape catalog (run it at boot, never inside `withShapeCatalog`).

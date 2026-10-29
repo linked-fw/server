@@ -577,8 +577,8 @@ The boot syncs follow the app's storage routing (`linked.backend.storage`), thro
 - a package's **ontology graph** goes to every dataset one of its shapes routes to, wherever a
   shape targeting one of its classes routes, and to the dataset(s) of the ontology term shapes
   (`rdfs:Class`, `owl:Class`, `rdf:Property`, …), so the hierarchy is where the instances are;
-- the app's **own shape graph** goes to the datasets of the shapes declaring `contains` properties,
-  and those of the shape shapes.
+- the app's **own shape graph** goes to every dataset a shape it constrains routes to (the shapes
+  declaring `contains` properties and their sub-shapes), and those of the shape shapes.
 
 An app without pins writes everything into its default dataset, as before. With pins the boot logs
 one line naming the datasets per graph kind, for example:
