@@ -35,6 +35,38 @@ export function applyGraphTargetsFromEnv(env: Record<string, string | undefined>
   return fromEnv;
 }
 
+/** The variable that says who writes the app's shape and ontology graphs. */
+export const GRAPH_WRITER_ENV = 'LINKED_GRAPH_WRITER';
+
+/**
+ * Who writes the app's shape and ontology graphs: `'app'` (the default) the app itself, at boot
+ * and on `POST /admin/sync-shapes`; `'host'` a host that runs it (Create Now), which reads the
+ * content through `POST /admin/graph-content` and writes it itself, so the app writes none.
+ */
+export type GraphWriter = 'app' | 'host';
+
+/**
+ * `LINKED_GRAPH_WRITER` from `env`: unset or empty is `'app'`; any value other than `app` or
+ * `host` throws, naming the variable (the boot stops on it).
+ */
+export function graphWriterFromEnv(env: Record<string, string | undefined>): GraphWriter {
+  const value = env[GRAPH_WRITER_ENV]?.trim();
+  if (!value || value === 'app') return 'app';
+  if (value === 'host') return 'host';
+  throw new Error(
+    `${GRAPH_WRITER_ENV} must be 'app' or 'host' (who writes the app's shape and ontology graphs), not ${JSON.stringify(value)}`,
+  );
+}
+
+/**
+ * Whether this process writes its shape and ontology graphs: the one check every write path of the
+ * syncs goes through (the boot's ontology and shape syncs and `POST /admin/sync-shapes`). False
+ * under `LINKED_GRAPH_WRITER=host`.
+ */
+export function appWritesGraphs(env: Record<string, string | undefined> = process.env): boolean {
+  return graphWriterFromEnv(env) === 'app';
+}
+
 /** The env variables as set (unset and empty ones left out), for `GET /admin/routes`. */
 export function graphTargetEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};

@@ -10,7 +10,7 @@ import { getAllShapeClasses } from '@_linked/core/utils/ShapeClass';
 import { graphs } from '@_linked/core/ontologies/graphs';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import { getGraphTargets, type GraphTargets } from '@_linked/core/utils/graphTargets';
-import { graphTargetEnv } from './graphTargets.js';
+import { graphTargetEnv, graphWriterFromEnv, type GraphWriter } from './graphTargets.js';
 
 /** One dataset the router knows, and its graph routes. */
 export interface DatasetRoutes {
@@ -47,6 +47,11 @@ export interface EffectiveRoutes {
    * so a host can tell where {@link graphTargets} came from.
    */
   graphTargetEnv: Record<string, string>;
+  /**
+   * Who writes the app's shape and ontology graphs (`LINKED_GRAPH_WRITER`): `'app'`, or `'host'`
+   * when a host writes them and the process writes none.
+   */
+  graphWriter: GraphWriter;
 }
 
 /** The routes of every dataset the router knows (see {@link EffectiveRoutes}). */
@@ -74,5 +79,6 @@ export function effectiveGraphRoutes(env: Record<string, string | undefined> = p
     }),
     graphTargets: getGraphTargets(),
     graphTargetEnv: graphTargetEnv(env),
+    graphWriter: graphWriterFromEnv(env),
   };
 }

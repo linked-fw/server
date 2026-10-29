@@ -57,8 +57,11 @@ export interface ShapeSyncResult {
   written: number;
   /** The orphan policy the sync ran with (see utils/syncShapes). */
   orphanScope?: 'all' | 'none';
-  /** Set when no sync ran: shape sync is turned off, or there is no default dataset. */
-  skipped?: 'disabled' | 'no-default-dataset';
+  /**
+   * Set when no sync ran: shape sync is turned off, there is no default dataset, or the host
+   * writes the graphs (`LINKED_GRAPH_WRITER=host`).
+   */
+  skipped?: 'disabled' | 'no-default-dataset' | 'host-writer';
   /**
    * The shape graph sync: packages written and skipped, the graphs written, the app's own shape
    * graph, the registered packages without `shapes.ttl` (so without a shape graph) and the

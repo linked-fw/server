@@ -204,7 +204,7 @@ import {
   syncOntologiesThenShapes,
   type OntologyPhaseResult,
 } from '../utils/ontologySync.js';
-import { applyGraphTargetsFromEnv, syncTargetsLine } from '../utils/graphTargets.js';
+import { applyGraphTargetsFromEnv, appWritesGraphs, GRAPH_WRITER_ENV, graphWriterFromEnv, syncTargetsLine } from '../utils/graphTargets.js';
 import {
   AdminRequestError,
   assertReloadablePackages,
@@ -539,6 +539,7 @@ export class LinkedServer extends Shape {
 
   /** One shape sync, following the routing; throws when it fails in any dataset. */
   private async syncRegisteredShapes(): Promise<ShapeSyncResult> {
+    if (!appWritesGraphs(process.env)) return { written: 0, skipped: 'host-writer' };
     if (!shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)) {
       return { written: 0, skipped: 'disabled' };
     }
@@ -580,6 +581,13 @@ export class LinkedServer extends Shape {
    */
   private async logSyncTargets(): Promise<void> {
     const flag = (this.config as any)?.syncShapesOnBoot;
+    if (!appWritesGraphs(process.env)) {
+      console.log(
+        `[LinkedServer] ${GRAPH_WRITER_ENV}=host: the host writes this app's shape and ontology graphs; ` +
+          'the boot and POST /admin/sync-shapes write none (the host reads them through POST /admin/graph-content).'
+      );
+      return;
+    }
     try {
       const line = syncTargetsLine(
         {
@@ -604,7 +612,10 @@ export class LinkedServer extends Shape {
   private async syncOntologiesOnBoot(): Promise<void> {
     try {
       await runAsSystem(
-        () => this.runOntologyPhase(bootSyncsOntologies(process.env, (this.config as any)?.syncShapesOnBoot)),
+        () =>
+          this.runOntologyPhase(
+            appWritesGraphs(process.env) && bootSyncsOntologies(process.env, (this.config as any)?.syncShapesOnBoot)
+          ),
         'ontology sync at boot'
       );
     } catch (err) {
@@ -666,11 +677,17 @@ export class LinkedServer extends Shape {
           for (const pkg of packages) {
             if (await this.reloadPackageFromDisk(pkg)) reloaded.push(pkg);
           }
+          const shapes = () => [...getAllShapeClasses().keys()].sort();
+          if (!appWritesGraphs(process.env)) {
+            // The host writes the graphs: reload, register and check, write nothing.
+            const { shapeCheck } = await this.runOntologyPhase(false);
+            return { written: 0, skipped: 'host-writer' as const, reloaded, shapes: shapes(), shapeCheck };
+          }
           const result = await syncOntologiesThenShapes(
             () => this.runOntologyPhase(shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)),
             () => this.syncRegisteredShapes()
           );
-          return { ...result, reloaded, shapes: [...getAllShapeClasses().keys()].sort() };
+          return { ...result, reloaded, shapes: shapes() };
         }, 'shape sync requested by the host'),
         timeoutMs,
         `the shape sync did not finish within ${timeoutMs} ms`
@@ -1031,8 +1048,10 @@ export class LinkedServer extends Shape {
     // LINKED_ONTOLOGY_GRAPH / LINKED_SHAPE_GRAPH: checked (an invalid value stops the boot) and set
     // once as core's global graph targets, before any store is initialised and before the syncs.
     // A rejected boot does not end the process by itself, so the error is fatal.
+    // LINKED_GRAPH_WRITER: checked here too, so an invalid value stops the boot before anything runs.
     try {
       applyGraphTargetsFromEnv(process.env);
+      graphWriterFromEnv(process.env);
     } catch (err) {
       throw new FatalStartupError(`[LinkedServer] ${(err as Error)?.message ?? err}`, { cause: err });
     }
