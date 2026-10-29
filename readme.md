@@ -468,8 +468,9 @@ A host that starts the app process controls it over HTTP routes on the app's own
 | `GET /admin/health` | 200 `{status: 'ok'}` once the server listens (the boot ontology sync, shape check and shape sync have finished by then) |
 | `POST /admin/restart` | 202, then the process exits; the host starts it again |
 | `POST /admin/graph-registry-changed` | body `{dataset}`: the host changed that dataset's named graphs; the process drops its cached graph registry and answers 200 `{invalidated: dataset}`; 400 without a dataset name |
-| `GET /admin/routes` | 200 `{datasets: [{store, id?, default, routes, defaultGraphShapes}], graphTargets, graphTargetEnv}`: the effective graph routes and graph targets (see below) |
-| `POST /admin/sync-shapes` | 200 `{written, orphanScope, shapeGraphs, reloaded, shapes, ontologies: {written, skipped, graphs, droppedGraphs}, shapeCheck: {errors, warnings}}` (or `{written: 0, skipped, …}` when shape sync is off); 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
+| `GET /admin/routes` | 200 `{datasets: [{store, id?, default, routes, defaultGraphShapes}], graphTargets, graphTargetEnv, graphWriter}`: the effective graph routes, graph targets and graph writer (see below) |
+| `POST /admin/sync-shapes` | 200 `{written, orphanScope, shapeGraphs, reloaded, shapes, ontologies: {written, skipped, graphs, droppedGraphs, datasets, prunedGraphs, leftovers}, shapeCheck: {errors, warnings}}` (or `{written: 0, skipped, …}` when shape sync is off, `skipped: 'host-writer'` under `LINKED_GRAPH_WRITER=host`); 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
+| `POST /admin/graph-content` | body `{packages?, reload?}`: 200 `{graphTargets, packages: [{name, shapes?, ontology?}], appGraph?, withoutTurtle, unreadable, reloaded}`, what the syncs would write, writing nothing (see [Graph writer and graph content](#graph-writer-and-graph-content)); 400 `{error}` for a malformed body or a package it may not reload; 409 `{error}` when a graph target is not `package`; 500 `{error}` when it fails or times out |
 
 `POST /admin/sync-shapes` runs the ontology sync and the shape check (see [Ontology sync and the shape check](#ontology-sync-and-the-shape-check)), then re-syncs the registered shapes into the app's data exactly as the boot does (see [Shape graphs](#shape-graphs): only graphs whose stored content hash differs are written, with the boot's orphan policy and `syncShapesOnBoot` / `LINKED_SYNC_SHAPES_ON_BOOT` switches). `written` counts the shape graphs written, and `shapeGraphs` reports them. The optional body `{packages: [...]}` names packages whose source the host changed; each must be a valid npm package name and the app itself or one of its direct dependencies, never an `@_linked/*` package; the list only says what to reload, it never filters the syncs. In dev their modules are invalidated in Vite and their backends reloaded before the sync, so a shape file written a moment ago is registered; a built app reloads nothing. `reloaded` lists the packages actually reloaded and `shapes` the node shape IRIs registered afterwards, so the host can check that the shape it wrote is there. Syncs run one at a time, as the system; one that takes longer than `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120000) fails and releases the queue. A source reload by itself (HMR) never syncs shapes. A failed ontology sync does not stop the shape sync; the route then answers 500 with the ontology error.
 
@@ -480,7 +481,7 @@ A host that starts the app process controls it over HTTP routes on the app's own
 - `routes`: `{<shape IRI>: <graph IRI>}` as registered. A sub-shape without a route of its own is written to its nearest routed super-shape's graph and is not listed.
 - `defaultGraphShapes`: the registered shapes that resolve to this dataset and are written to its default graph (no route of their own, no routed super-shape), sorted.
 
-`graphTargets` is the process's one graph-target setting, `{ontologyGraph, shapeGraph}` (`package`, `default` or a shared graph IRI each; see [Ontology and shape graphs](#ontology-and-shape-graphs)): where the boot syncs write, for every dataset. `graphTargetEnv` holds `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` as the process has them (unset ones left out), so a host can tell where the setting came from.
+`graphWriter` is `LINKED_GRAPH_WRITER` (`app` or `host`; see [Graph writer and graph content](#graph-writer-and-graph-content)). `graphTargets` is the process's one graph-target setting, `{ontologyGraph, shapeGraph}` (`package`, `default` or a shared graph IRI each; see [Ontology and shape graphs](#ontology-and-shape-graphs)): where the boot syncs write, for every dataset. `graphTargetEnv` holds `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` as the process has them (unset ones left out), so a host can tell where the setting came from.
 
 ```json
 {"datasets": [{"store": "FusekiStore", "default": true,
@@ -495,6 +496,48 @@ Side effects to expect:
 - **A reload briefly disposes the package's providers.** Reloading a package (on HMR, or for `sync-shapes`) runs `dispose()` on its providers and constructs new ones; a request to that package's routes or methods that arrives in between can fail. Reloads run one at a time; one that takes longer than `LINKED_SOURCE_RELOAD_TIMEOUT_MS` (default 60000) rejects and releases the queue.
 - **A restart drops in-flight requests.** `POST /admin/restart` exits the process 50 ms after answering. A host that restarts an app whose server has no `sync-shapes` route (an older `@_linked/server`) to make its boot sync the shapes drops whatever that app was serving.
 - The channel listens on the app's public port, like every other route; only the secret protects it.
+
+### Graph writer and graph content
+
+`LINKED_GRAPH_WRITER` says who writes the app's shape and ontology graphs: `app` (the default) or
+`host`. Any other value stops the boot, naming the variable. Under `host` (a host such as Create
+Now writes them) the app writes no shape or ontology graph: the boot registers the ontologies,
+loads the class hierarchy and runs the shape check but syncs nothing (it logs one line saying so),
+and `POST /admin/sync-shapes` reloads, registers and checks, then answers
+`{written: 0, skipped: 'host-writer', reloaded, shapes, shapeCheck}`.
+
+The host reads the graphs from `POST /admin/graph-content`, body `{packages?: string[], reload?:
+string[]}`. `reload` names packages to reload first, by the rule of sync-shapes' `packages` (the
+app or a direct dependency, never `@_linked/*`); the ontologies are then registered again and the
+shape check runs. `packages` limits the answer; without it every registered package with shapes or
+ontology data is answered. It writes nothing, runs in the shape sync's queue and timeout, and
+answers:
+
+```json
+{"graphTargets": {"ontologyGraph": "package", "shapeGraph": "package"},
+ "packages": [{"name": "@acme/music",
+   "shapes": {"graph": "https://linked.cm/pkg/acme-music/graph/shapes", "mediaType": "text/turtle",
+     "text": "@prefix …", "hash": "…", "sources": ["data/shapes.ttl"]},
+   "ontology": {"graph": "https://linked.cm/pkg/acme-music/graph/ontology",
+     "mediaType": "application/n-triples", "text": "<…> <…> <…> .\n", "hash": "…",
+     "sources": ["data/music.ttl"]}}],
+ "appGraph": {"graph": "https://acme.example/data/graph/shapes", "mediaType": "text/turtle",
+   "text": "…", "hash": "…", "sources": []},
+ "withoutTurtle": [], "unreadable": [], "reloaded": []}
+```
+
+Each `text` and `hash` is exactly what the `package`-mode sync writes and records as the graph's
+`core:contentHash` (a shape graph: its Turtle and `shapeGraphHash`; an ontology graph: the
+N-Triples of the package's data files and `ontologyGraphHash` of their raw texts, so the host must
+not hash the text itself), and `sources` the record's `dcterms:source`. A package's shape Turtle
+comes from where the shape sync takes it: an installed package without `shapes.ttl` has no `shapes`
+here either and is listed in `withoutTurtle`. `unreadable` lists packages whose ontology data could
+not be read. `appGraph` is `null` when the app has no single-owner shapes (drop the graph) and left
+out without `DATA_ROOT`. The route answers 409 unless both `LINKED_ONTOLOGY_GRAPH` and
+`LINKED_SHAPE_GRAPH` are `package`.
+
+`POST /admin/sync-shapes`, `LINKED_SYNC_SHAPES_ON_BOOT` and `LINKED_SYNC_ONTOLOGIES_ON_BOOT` stay
+for apps that write their own graphs.
 
 ### Ontology sync and the shape check
 

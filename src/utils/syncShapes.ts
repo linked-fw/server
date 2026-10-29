@@ -77,6 +77,15 @@ export interface ShapeGraphCore {
     turtleFor: (packageName: string) => Promise<string | undefined>;
     appShapes?: {graph: string; package?: string};
   }): Promise<RoutedSyncReport<ShapeGraphSyncResult>>;
+  /**
+   * Core's `graphContent` (`@_linked/core/shapes/syncTargets`): what the `'package'`-mode syncs
+   * would write, writing nothing. Optional so a test double can leave it out.
+   */
+  graphContent?(options: {
+    packages?: string[];
+    turtleFor: (packageName: string) => Promise<string | undefined>;
+    appShapes?: {graph: string};
+  }): Promise<GraphContents>;
   /** Every package with registered shapes (core counted for its built-ins). */
   packagesWithShapes(): string[];
   /** A package's shape graph IRI (`ShapesGraph.iriFor`). */
@@ -93,6 +102,7 @@ export async function loadShapeGraphCore(): Promise<ShapeGraphCore> {
     syncShapeGraphs: (ds, options) =>
       sync.syncShapeGraphs(ds as Parameters<typeof sync.syncShapeGraphs>[0], options),
     syncShapeGraphsRouted: (options) => targets.syncShapeGraphsRouted(options),
+    graphContent: (options) => targets.graphContent(options),
     packagesWithShapes: () => turtle.packagesWithShapes(),
     shapesGraphFor: (packageName) => graphs.ShapesGraph.iriFor(packageName),
   };
@@ -538,4 +548,54 @@ export async function materializeShapes(
       `${thunks.length} operation(s)`,
   );
   return {count: thunks.length, orphanScope};
+}
+
+/** One graph's content as the `'package'`-mode sync writes and records it (core's `GraphContentPart`). */
+export interface GraphContentPart {
+  graph: string;
+  mediaType: 'text/turtle' | 'application/n-triples';
+  text: string;
+  hash: string;
+  sources: string[];
+}
+
+/** What core's `graphContent` answers. */
+export interface GraphContents {
+  packages: Array<{name: string; shapes?: GraphContentPart; ontology?: GraphContentPart}>;
+  appGraph?: GraphContentPart | null;
+  withoutTurtle: string[];
+  unreadable: string[];
+}
+
+/**
+ * The content of the app's graphs as the `'package'`-mode syncs would write them, writing nothing
+ * (core's `graphContent`), with the server's choice of each package's Turtle
+ * ({@link shapeTurtleSources}): an installed package without `shapes.ttl` gets no shape graph here
+ * either (it is listed in `withoutTurtle`), exactly as the sync leaves it out. `packages` limits
+ * the answer; without it every registered package with shapes or ontology data. The app graph is
+ * answered when `appGraph` (`{DATA_ROOT}/graph/shapes`) is given.
+ */
+export async function graphContentOf(
+  options: Pick<ShapeGraphSyncOptions, 'core' | 'isOwn' | 'dev' | 'packageDirOf' | 'generate' | 'read' | 'warn' | 'appGraph'> & {
+    packages?: string[];
+  },
+): Promise<GraphContents> {
+  const {core, packages, appGraph} = options;
+  if (!core.graphContent) {
+    throw new Error('@_linked/core has no graphContent: this server needs the core it was built with');
+  }
+  const turtle = shapeTurtleSources(options);
+  const content = await core.graphContent({
+    ...(packages ? {packages} : {}),
+    turtleFor: turtle.turtleFor,
+    ...(appGraph ? {appShapes: {graph: appGraph}} : {}),
+  });
+  const noFile = new Set(turtle.noFile);
+  const withoutTurtle = new Set(content.withoutTurtle);
+  for (const entry of content.packages) {
+    if (!noFile.has(entry.name)) continue;
+    delete entry.shapes;
+    withoutTurtle.add(entry.name);
+  }
+  return {...content, withoutTurtle: [...withoutTurtle].sort()};
 }

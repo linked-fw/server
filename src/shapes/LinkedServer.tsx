@@ -191,6 +191,7 @@ import {
   appShapesGraph,
   bootOrphanScope,
   loadShapeGraphCore,
+  graphContentOf,
   syncRoutedShapeGraphs,
   viteShapesTurtleGenerator,
 } from '../utils/syncShapes.js';
@@ -204,10 +205,13 @@ import {
   syncOntologiesThenShapes,
   type OntologyPhaseResult,
 } from '../utils/ontologySync.js';
+import { getGraphTargets } from '@_linked/core/utils/graphTargets';
 import { applyGraphTargetsFromEnv, appWritesGraphs, GRAPH_WRITER_ENV, graphWriterFromEnv, syncTargetsLine } from '../utils/graphTargets.js';
 import {
   AdminRequestError,
   assertReloadablePackages,
+  AdminConflictError,
+  type GraphContentAnswer,
   registerAdminRoutes,
   resolveAdminSecret,
   type ShapeSyncResult,
@@ -669,29 +673,79 @@ export class LinkedServer extends Shape {
    */
   async resyncShapes({packages = []}: {packages?: string[]} = {}): Promise<ShapeSyncResult> {
     assertReloadablePackages(packages, this.reloadablePackages());
+    return this.inShapeSyncQueue('the shape sync', 'shape sync requested by the host', async () => {
+      const reloaded = await this.reloadPackages(packages);
+      const shapes = () => [...getAllShapeClasses().keys()].sort();
+      if (!appWritesGraphs(process.env)) {
+        // The host writes the graphs: reload, register and check, write nothing.
+        const { shapeCheck } = await this.runOntologyPhase(false);
+        return { written: 0, skipped: 'host-writer' as const, reloaded, shapes: shapes(), shapeCheck };
+      }
+      const result = await syncOntologiesThenShapes(
+        () => this.runOntologyPhase(shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)),
+        () => this.syncRegisteredShapes()
+      );
+      return { ...result, reloaded, shapes: shapes() };
+    });
+  }
+
+  /**
+   * What the app's `'package'`-mode syncs would write, writing nothing (`POST /admin/graph-content`):
+   * per package its shape graph's Turtle and its ontology graph's N-Triples with the hash each
+   * record gets and its sources, and the app's own shape graph (`null` when it has no single-owner
+   * shapes; left out without `DATA_ROOT`). A host that writes the app's graphs itself
+   * (`LINKED_GRAPH_WRITER=host`) reads them here. `reload` follows {@link resyncShapes}' rule for
+   * `packages` and is reloaded first (then the ontologies are registered again and the shape check
+   * runs, as a sync does); `packages` limits the answer. Each package's Turtle comes from where the
+   * shape sync takes it (an installed package without `shapes.ttl` has none: `withoutTurtle`).
+   * Refused with {@link AdminConflictError} unless both graph targets are `'package'`. Runs in the
+   * shape sync's queue, as the system, under `LINKED_SHAPE_SYNC_TIMEOUT_MS`.
+   */
+  async graphContent({packages, reload = []}: {packages?: string[]; reload?: string[]} = {}): Promise<GraphContentAnswer> {
+    assertReloadablePackages(reload, this.reloadablePackages());
+    const graphTargets = getGraphTargets();
+    for (const [setting, env] of [['ontologyGraph', 'LINKED_ONTOLOGY_GRAPH'], ['shapeGraph', 'LINKED_SHAPE_GRAPH']] as const) {
+      if (graphTargets[setting] !== 'package') {
+        throw new AdminConflictError(
+          `${setting} is ${JSON.stringify(graphTargets[setting])} (${env}); the graph content is what the 'package' mode writes, one graph per package`
+        );
+      }
+    }
+    return this.inShapeSyncQueue('the graph content', 'graph content requested by the host', async () => {
+      const reloaded = await this.reloadPackages(reload);
+      if (reloaded.length) await this.runOntologyPhase(false);
+      const appName: string | undefined = this.package?.name;
+      const generate = viteShapesTurtleGenerator((this.config.server as any)?.vite);
+      const content = await graphContentOf({
+        core: await loadShapeGraphCore(),
+        isOwn: (name) => name === appName || this.workspacePackageNames.has(name),
+        dev: !!generate,
+        generate,
+        packageDirOf: (name) => this.shapePackageDir(name),
+        appGraph: appShapesGraph(),
+        ...(packages ? { packages } : {}),
+      });
+      return { graphTargets, ...content, reloaded };
+    });
+  }
+
+  /** Reload each of `packages` from disk (dev only); the ones actually reloaded. */
+  private async reloadPackages(packages: string[]): Promise<string[]> {
+    const reloaded: string[] = [];
+    for (const pkg of packages) {
+      if (await this.reloadPackageFromDisk(pkg)) reloaded.push(pkg);
+    }
+    return reloaded;
+  }
+
+  /**
+   * Run `fn` in the shape sync's queue (one at a time), as the system, failing it after
+   * `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120 s) and releasing the queue.
+   */
+  private inShapeSyncQueue<T>(what: string, why: string, fn: () => Promise<T>): Promise<T> {
     const timeoutMs = envMs('LINKED_SHAPE_SYNC_TIMEOUT_MS', 120_000);
     const run = this.shapeSyncQueue.then(() =>
-      withTimeout(
-        runAsSystem(async () => {
-          const reloaded: string[] = [];
-          for (const pkg of packages) {
-            if (await this.reloadPackageFromDisk(pkg)) reloaded.push(pkg);
-          }
-          const shapes = () => [...getAllShapeClasses().keys()].sort();
-          if (!appWritesGraphs(process.env)) {
-            // The host writes the graphs: reload, register and check, write nothing.
-            const { shapeCheck } = await this.runOntologyPhase(false);
-            return { written: 0, skipped: 'host-writer' as const, reloaded, shapes: shapes(), shapeCheck };
-          }
-          const result = await syncOntologiesThenShapes(
-            () => this.runOntologyPhase(shapeSyncOn(process.env, (this.config as any)?.syncShapesOnBoot)),
-            () => this.syncRegisteredShapes()
-          );
-          return { ...result, reloaded, shapes: shapes() };
-        }, 'shape sync requested by the host'),
-        timeoutMs,
-        `the shape sync did not finish within ${timeoutMs} ms`
-      )
+      withTimeout(runAsSystem(fn, why), timeoutMs, `${what} did not finish within ${timeoutMs} ms`)
     );
     this.shapeSyncQueue = run.catch(() => undefined);
     return run;
@@ -986,6 +1040,7 @@ export class LinkedServer extends Shape {
       // The host's provisioner starts the app again after it exits.
       exit: () => process.exit(0),
       syncShapes: (request) => this.resyncShapes(request),
+      graphContent: (request) => this.graphContent(request),
     });
 
     // after controller
