@@ -5,8 +5,8 @@
  * 404, so a standalone app has no control channel. Every request carries the secret in
  * the `x-app-admin-secret` header (401 otherwise).
  *
- * - `GET /admin/health` → 200 `{status: 'ok'}` once the server listens (the boot
- *   shape sync has finished by then).
+ * - `GET /admin/health` → 200 `{status: 'ok'}` once the server listens (a boot sync, when
+ *   the app writes its own graphs, has finished by then).
  * - `POST /admin/restart` → 202, then the process exits; the host starts it again.
  * - `POST /admin/graph-registry-changed` `{dataset}` → the host changed the named graphs of that
  *   dataset (a graph query through its gateway): the process drops its cached graph registry, so
