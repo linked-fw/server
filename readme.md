@@ -25,6 +25,7 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Without `url`](#without-url)
   - [With `url`](#with-url)
   - [`ping`](#ping)
+  - [Store transactions](#store-transactions)
   - [Shape catalog per request](#shape-catalog-per-request)
 - [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
 - [Host control channel (`/admin/*`)](#host-control-channel-admin)
@@ -314,7 +315,7 @@ Export path `@_linked/server/shapes/quadstores/RemoteDataset` (named export `Rem
 | Answered by | this app's own backend | a remote data server, e.g. a host's gateway |
 | Sends through | `Server.call`'s package form (`/call/@_linked/server/<method>`); on a backend, `Server`'s local shortcut | `globalThis.fetch` to `{url}/call/@_linked/server/<method>`, never `Server` |
 | Authenticated by | the user's session | `Authorization: Bearer <token>` |
-| `init()` | resolves at once | posts `ping`, throws a typed error when the server cannot be used |
+| `init()` | asks the backend's `ping` for transactions only, resolves `undefined` (a failed ping leaves them off) | posts `ping`, throws a typed error when the server cannot be used |
 | Typical config | `linked.frontend.datasets.json` | `linked.backend.datasets.json` |
 
 ```typescript
@@ -387,9 +388,9 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
   `init()`, so a boot that must fail loudly awaits it itself before registering the store.
 - `init()` resolves the ping body, which the store also keeps as the readonly `info`
   (`RemoteDatasetPingInfo`, frozen; `{}` when the body is not a JSON object; `undefined` before
-  a successful ping and in the no-url form). The generic ping answers `{ok: true}`; a gateway may
-  add fields naming the dataset it serves (CN's adds `projectId`, `branchName`, `dataset`,
-  `forked`), so a boot can log where its data goes:
+  a successful ping and in the no-url form). The generic ping answers `{ok: true, supports}`; a
+  gateway may add fields naming the dataset it serves (CN's adds `projectId`, `branchName`,
+  `slot`, `dataset`, `forked`), so a boot can log where its data goes:
 
   ```ts
   const info = await store.init();
@@ -413,9 +414,42 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
 ### `ping`
 
 `POST /call/@_linked/server/ping` (a `public` method of this package's generic provider) reads
-nothing, changes nothing and answers `{ "ok": true }`. A plain linked server has no token
-concept; a host that serves the wire with tokens checks the token itself and answers 401 for a
-refused one.
+nothing, changes nothing and answers `{ "ok": true, "supports": [] }`, or `"supports":
+["transactions"]` when the server holds store transactions (below). A plain linked server has no
+token concept; a host that serves the wire with tokens checks the token itself and answers 401
+for a refused one.
+
+### Store transactions
+
+Core's store transactions (`LinkedStorage.begin()`, `LinkedStorage.transaction(fn)`) go through a
+`RemoteDataset` and this server to the stores behind it:
+
+```
+POST /call/@_linked/server/beginTransaction  {"args": []}         → "<txId>"
+POST /call/@_linked/server/commit            {"args": ["<txId>"]} → null
+POST /call/@_linked/server/rollback          {"args": ["<txId>"]} → null
+POST /call/@_linked/server/<x>Query          {"args": [<query.toJSON(), with "txId">]}
+```
+
+- **`RemoteDataset`** declares `'transactions'` in `supports` only after a `ping` that listed
+  them (both forms), so a server that does not hold them is never sent a txId; until then core
+  warns once per store and runs a transaction's queries directly. `beginTransaction()`,
+  `commit(txId)` and `rollback(txId)` post to the methods of the same names, never retried.
+- **The server** holds transactions only when every dataset `LinkedStorage` routes to declares
+  `'transactions'` (`ping` says so). It answers a txId of its own and keeps a core `Transaction`
+  for it, which opens a transaction in each store a query of it routes to (a second store gets
+  its own, with core's warning). A query carrying the txId is checked against the store rules as
+  if it were sent alone; a refused or failed one rolls the transaction back in every store. An
+  idle transaction is rolled back after 30 seconds.
+- **The caller.** A transaction needs a session (401 without one) and is bound to the session's
+  user account; a backend-to-backend call with no request behind it is `system`. Anyone else's
+  request with that txId is refused and leaves the transaction as it was.
+- **Refusals** (`{error, code}`): 501 `transactions-unsupported`, 409 `transaction-unknown` (never
+  begun, ended, failed or expired; a `rollback` of one resolves), 403 `transaction-not-yours`. A
+  query with a txId sent to `/api/*` is refused (400): transactions run over `/call` only. A
+  store's own refusal is passed back as for any failed query.
+- A forwarder of its own (a gateway) does the same: it lists `'transactions'` only when the store
+  it forwards to does, and never runs a query that carries a txId outside its transaction.
 
 ### Shape catalog per request
 
