@@ -12,6 +12,7 @@ const { RemoteDataset, RemoteDatasetUnauthorizedError, USER_TOKEN_HEADER, USER_T
 );
 const { runWithCallContext } = await import('@_linked/server-utils/utils/CallContext');
 const { packageName } = await import('../package.js');
+const { queryJson } = await import('./read-double.js');
 const { graphs } = await import('@_linked/core/ontologies/graphs');
 const { isGraphQueryError } = await import('@_linked/core/queries/graphQuery');
 const { invalidateGraphRegistry, GRAPH_REGISTRY_MAX_AGE_MS } = await import(
@@ -50,12 +51,9 @@ function jsonResponse(status: number, body: unknown): Response {
 const sent = (call: Call): any => JSON.parse(String(call.init.body));
 const methodOf = (call: Call) => call.url.slice(call.url.lastIndexOf('/') + 1);
 
-function queryJson(json: Record<string, unknown>) {
-  return { toJSON: () => json } as any;
-}
 
 /**
- * A data server with a registry: `selectQuery` of a registry record shape answers its records
+ * A data server with a registry: a select of a registry record shape answers its records
  * (and is counted), any other select answers `[]` and records the `graphs` it was sent.
  */
 function stubPlane(registry: { ontology: string[]; shapes: string[] }, dataset = 'app-data-main') {
@@ -68,11 +66,11 @@ function stubPlane(registry: { ontology: string[]; shapes: string[] }, dataset =
     const method = methodOf(call);
     if (method === 'ping') return jsonResponse(200, { ok: true, dataset });
     const query = sent(call).args?.[0];
-    if (method === 'selectQuery' && query?.shape === ONTOLOGY_SHAPE) {
+    if (method === 'readQuery' && query?.shape === ONTOLOGY_SHAPE) {
       registryReads.push('ontology');
       return jsonResponse(200, registry.ontology.map((id) => ({ id })));
     }
-    if (method === 'selectQuery' && query?.shape === SHAPES_SHAPE) {
+    if (method === 'readQuery' && query?.shape === SHAPES_SHAPE) {
       registryReads.push('shapes');
       return jsonResponse(200, registry.shapes.map((id) => ({ id })));
     }
@@ -80,7 +78,7 @@ function stubPlane(registry: { ontology: string[]; shapes: string[] }, dataset =
       return jsonResponse(200, { graph: query.graph, changed: true, contentHash: 'h' });
     }
     readGraphs.push(query?.graphs);
-    return jsonResponse(200, method === 'askQuery' ? false : []);
+    return jsonResponse(200, query?.op === 'ask' ? false : []);
   };
   return { calls, registryReads, readGraphs };
 }
@@ -162,7 +160,7 @@ describe('RemoteDataset.graphQuery', () => {
       const call = { url: String(input), init: init ?? {} };
       methods.push(methodOf(call));
       if (methodOf(call) === 'graphQuery') return jsonResponse(404, { error: 'not found' });
-      if (methodOf(call) === 'selectQuery') return jsonResponse(200, []);
+      if (methodOf(call) === 'readQuery') return jsonResponse(200, []);
       return jsonResponse(200, {});
     };
     const { linkedPackage } = await import('@_linked/core/utils/Package');
@@ -194,8 +192,8 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
   it('expands graphs.allOntologies from one registry read, sorted, and keeps other names', async () => {
     const plane = stubPlane({ ontology: [G_B, G_A], shapes: [G_S] });
     const ds = await store();
-    await ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies, 'http://e/g'] }));
-    await ds.askQuery(queryJson({ v: '1.1', graphs: [graphs.allShapes] }));
+    await ds.readQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies, 'http://e/g'] }));
+    await ds.readQuery(queryJson({ v: '1.1', op: 'ask', graphs: [graphs.allShapes] }));
     expect(plane.readGraphs).toEqual([[G_A, G_B, 'http://e/g'], [G_S]]);
     expect(plane.registryReads.sort()).toEqual(['ontology', 'shapes']);
   });
@@ -203,8 +201,8 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
   it('sends a read without graphs, or with names it does not expand, untouched and reads no registry', async () => {
     const plane = stubPlane({ ontology: [G_A], shapes: [] });
     const ds = await store();
-    await ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S' }));
-    await ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.union] }));
+    await ds.readQuery(queryJson({ v: '1.1', shape: 'http://e/S' }));
+    await ds.readQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.union] }));
     expect(plane.readGraphs).toEqual([undefined, [graphs.union]]);
     expect(plane.registryReads).toEqual([]);
   });
@@ -212,14 +210,14 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
   it('sends a name that expands to no graph as is, for the data server to answer', async () => {
     const plane = stubPlane({ ontology: [], shapes: [] });
     const ds = await store();
-    await ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
+    await ds.readQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
     expect(plane.readGraphs).toEqual([[graphs.allOntologies]]);
   });
 
   it('its own graph queries update the cache: the next read sees the change without a re-read', async () => {
     const plane = stubPlane({ ontology: [G_A], shapes: [] });
     const ds = await store();
-    const read = () => ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
+    const read = () => ds.readQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
     await read();
     await ds.graphQuery({ ...replace, kind: 'graph_create', graph: G_B });
     await read();
@@ -232,7 +230,7 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
   it('is keyed by the url and the dataset the server named: invalidating that key forces a re-read', async () => {
     const plane = stubPlane({ ontology: [G_A], shapes: [] }, 'app-data-p1-main');
     const ds = await store('app-data-p1-main');
-    const read = () => ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
+    const read = () => ds.readQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
     await read();
     await read();
     invalidateGraphRegistry('some-other-dataset');
@@ -252,7 +250,7 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
   it('re-reads an entry older than 30 seconds', async () => {
     const plane = stubPlane({ ontology: [G_A], shapes: [] });
     const ds = await store();
-    const read = () => ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
+    const read = () => ds.readQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
     const realNow = Date.now;
     const start = realNow();
     try {
@@ -281,7 +279,7 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
     };
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const ds = await store('d');
-    const read = () => ds.selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
+    const read = () => ds.readQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
     await read();
     await read();
     expect(readGraphs).toEqual([[graphs.allOntologies], [graphs.allOntologies]]);
@@ -294,7 +292,7 @@ describe('RemoteDataset: reads from graphs and the registry cache', () => {
       seen.push([config.method, json.graphs]);
       return [];
     };
-    await new RemoteDataset().selectQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
-    expect(seen).toEqual([['selectQuery', [graphs.allOntologies]]]);
+    await new RemoteDataset().readQuery(queryJson({ v: '1.1', shape: 'http://e/S', graphs: [graphs.allOntologies] }));
+    expect(seen).toEqual([['readQuery', [graphs.allOntologies]]]);
   });
 });

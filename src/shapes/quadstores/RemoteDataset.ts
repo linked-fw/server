@@ -7,6 +7,7 @@ import type { QueryFeature } from '@_linked/core/queries/queryFeatures';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
 import type { CountQuery } from '@_linked/core/queries/CountQuery';
 import type { AskQuery } from '@_linked/core/queries/AskQuery';
+import { readKindOf, type ReadQuery, type ReadResult } from '@_linked/core/queries/readQuery';
 import type { UpdateQuery } from '@_linked/core/queries/UpdateQuery';
 import type { CreateQuery } from '@_linked/core/queries/CreateQuery';
 import type {
@@ -14,7 +15,6 @@ import type {
   DeleteResponse,
 } from '@_linked/core/queries/DeleteQuery';
 import type {
-  SelectResult,
   UpdateResult,
   CreateResult,
   GraphQuery,
@@ -174,8 +174,7 @@ export type RemoteDatasetPingInfo = Readonly<Record<string, unknown>>;
 
 type Method =
   | 'ping'
-  | 'selectQuery'
-  | 'askQuery'
+  | 'readQuery'
   | 'updateQuery'
   | 'createQuery'
   | 'deleteQuery'
@@ -304,11 +303,12 @@ export class RemoteDataset implements IDataset {
   }
 
   /**
-   * `['transactions']` once the server's `ping` listed them, else none. (The query features are
-   * the server's stores' to check: they are not declared here.)
+   * `'ask'` (the server answers an ask itself), plus `'transactions'` once the server's `ping`
+   * listed them. The select features are the server's stores' to check, so they are not declared
+   * here; nor are `'triples'` and `'triplesTerms'`, which the server's `readQuery` does not answer.
    */
-  get supports(): readonly QueryFeature[] | undefined {
-    return this.serverHoldsTransactions ? ['transactions'] : undefined;
+  get supports(): readonly QueryFeature[] {
+    return this.serverHoldsTransactions ? ['ask', 'transactions'] : ['ask'];
   }
 
   /** Begin a store transaction on the server; resolves its txId. */
@@ -381,12 +381,27 @@ export class RemoteDataset implements IDataset {
   // Queries serialize to DSL-JSON for the wire: the live (closed) query can't cross a call
   // as-is, so we ship `toJSON()` and the server's generic provider rehydrates it with
   // `fromJSON()`.
-  async selectQuery(query: SelectQuery | CountQuery): Promise<SelectResult | number> {
-    return this.call('selectQuery', await this.withReadGraphs(query.toJSON()));
-  }
 
-  async askQuery(query: AskQuery): Promise<boolean> {
-    return this.call('askQuery', await this.withReadGraphs(query.toJSON()));
+  /**
+   * A select, count or ask, posted to the server's one read method, `readQuery`; the server
+   * tells the kinds apart by the DSL-JSON `op`. Triples and terms reads are not declared in
+   * {@link supports} and are refused here, unsent (the server does not answer them).
+   */
+  async readQuery<Q extends ReadQuery>(query: Q): Promise<ReadResult<Q>> {
+    const kind = readKindOf(query);
+    switch (kind) {
+      case 'select':
+      case 'count':
+      case 'ask': {
+        const live = query as SelectQuery | CountQuery | AskQuery;
+        return this.call<ReadResult<Q>>('readQuery', await this.withReadGraphs(live.toJSON()));
+      }
+      case 'triples':
+      case 'triples_terms':
+        throw new Error(
+          `RemoteDataset does not answer ${kind === 'triples' ? 'a triples' : 'a terms'} read: the data server's readQuery has none.`,
+        );
+    }
   }
 
   updateQuery(query: UpdateQuery): Promise<UpdateResult> {
