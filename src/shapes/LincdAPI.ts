@@ -10,6 +10,8 @@ import {
   authorizeRawQuery,
   resolveQueryCatalog,
   toQueryBuilder,
+  toReadQuery,
+  type ReadOperation,
 } from '../utils/queryPlane.js';
 import { getRpcExposureMode } from '../utils/rpcExposure.js';
 import { txIdOf } from '@_linked/core/queries/transactionQuery';
@@ -24,11 +26,31 @@ import { abandonTransactionOf } from '../utils/serverTransactions.js';
  */
 async function apiBuilder(query: unknown): Promise<{ builder: any }> {
   const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
+  await refuseTransactionQuery(query, builder);
+  return { builder };
+}
+
+/**
+ * The read of an `/api/select` query (a select, a count or an ask) with the access rule its kind
+ * is checked under (see `toReadQuery`); a query of a transaction is refused as in {@link apiBuilder}.
+ */
+async function apiRead(query: unknown): Promise<{ builder: any; operation: ReadOperation }> {
+  let read: { query: any; operation: ReadOperation };
+  try {
+    read = toReadQuery(query, await resolveQueryCatalog(query));
+  } catch (error) {
+    await abandonTransactionOf(query);
+    throw error;
+  }
+  await refuseTransactionQuery(query, read.query);
+  return { builder: read.query, operation: read.operation };
+}
+
+async function refuseTransactionQuery(query: unknown, builder: any): Promise<void> {
   if (txIdOf(builder)) {
     await abandonTransactionOf(query);
     throw new ServerCallError(400, 'A query of a transaction is sent to /call/@_linked/server, not /api');
   }
-  return { builder };
 }
 
 /** An error carrying an HTTP status, such as a `ServerCallError` (401/403). */
@@ -88,9 +110,9 @@ export class LincdAPI extends Shape {
   }
 
   async post_select({ query }) {
-    const { builder } = await apiBuilder(query);
-    await authorizeGenericQuery('select', query, builder, 'api/select');
-    return LinkedStorage.selectQuery(builder);
+    const { builder, operation } = await apiRead(query);
+    await authorizeGenericQuery(operation, query, builder, 'api/select');
+    return LinkedStorage.readQuery(builder);
   }
   async post_create({ query }) {
     const { builder } = await apiBuilder(query);

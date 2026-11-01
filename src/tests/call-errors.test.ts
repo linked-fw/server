@@ -65,7 +65,7 @@ describe('LinkedServer call errors', () => {
     const provider: any = Object.create(ShapeProvider.prototype);
     provider.shape = LincdAPI;
     provider.initRequest = () => {};
-    provider.selectQuery = async () => {
+    provider.readQuery = async () => {
       called = true;
       throw new Error('Cannot resolve an rdf:type for shape');
     };
@@ -73,7 +73,7 @@ describe('LinkedServer call errors', () => {
     linkedServer.shapeProviders.set('server', [provider]);
     const base = await listen(linkedServer);
 
-    const res = await post(`${base}/call/server/LincdAPI/selectQuery`, {
+    const res = await post(`${base}/call/server/LincdAPI/readQuery`, {
       shapeURI: (LincdAPI as any).shape.id,
       instanceNode: null,
       args: [{}],
@@ -121,9 +121,9 @@ describe('RemoteDataset failed calls', () => {
       throw new Error('internal server error');
     };
     const store = new RemoteDataset({ id: 'http://example.org/store' });
-    const query: any = { toJSON: () => ({}) };
+    const query: any = { __queryKind: 'select', toJSON: () => ({}) };
 
-    await expect(store.selectQuery(query)).rejects.toThrow(
+    await expect(store.readQuery(query)).rejects.toThrow(
       /internal server error/
     );
   });

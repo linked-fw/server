@@ -15,16 +15,12 @@ const { linkedPackage } = await import('@_linked/core/utils/Package');
 const { Shape } = await import('@_linked/core/shapes/Shape');
 const { LinkedServer } = await import('../shapes/LinkedServer.js');
 const { isFatalError } = await import('../utils/fatalError.js');
+const { readQueryOf } = await import('./read-double.js');
 
 /** Answers reads empty and every graph query as done; counts the graph queries it gets. */
 class Recording extends (SparqlDataset as any) {
   graphQueries = 0;
-  async selectQuery() {
-    return [];
-  }
-  async askQuery() {
-    return false;
-  }
+  readQuery = readQueryOf({ select: async () => [], ask: async () => false });
   async graphQuery(query: { graph: string; contentHash?: string }) {
     this.graphQueries++;
     return { graph: query.graph, contentHash: query.contentHash, changed: true };

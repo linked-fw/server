@@ -13,6 +13,7 @@ import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
 import LincdServerBackendProvider from '../backend.js';
+import { readQueryOf } from './read-double.js';
 import { createJsonBodyParser } from '../utils/jsonBodyParser.js';
 import {
   resetUndeclaredWarnings,
@@ -306,7 +307,7 @@ describe('mutations need a session', () => {
     expect(ds.updates()).toHaveLength(0);
     // reads stay a warning in warn mode
     const sel = Person.select((p: any) => p.name).toJSON();
-    expect((await call(base, '@_linked/server', 'selectQuery', [sel])).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'readQuery', [sel])).status).toBe(200);
   });
 });
 
@@ -317,18 +318,31 @@ describe('query kind and parsing', () => {
     LinkedStorage.setDefaultDataset(ds as any);
   });
 
-  it('refuses a mutation sent to selectQuery or askQuery', async () => {
+  it('refuses a mutation sent to readQuery', async () => {
     const base = await listen(makeLinkedServer());
     const del = (RpcSecret as any).delete('http://ex/s1').toJSON();
-    expect((await call(base, '@_linked/server', 'selectQuery', [del], ME)).status).toBe(400);
-    expect((await call(base, '@_linked/server', 'askQuery', [del], ME)).status).toBe(400);
+    expect((await call(base, '@_linked/server', 'readQuery', [del], ME)).status).toBe(400);
     expect((await post(`${base}/api/select`, { query: del }, ME)).status).toBe(400);
+    expect(ds.sparql).toHaveLength(0);
+  });
+
+  it.each([
+    ['a triples read', { kind: 'triples', subject: 'http://ex/s1' }, /does not answer triples reads/],
+    ['a terms read', { kind: 'triples_terms', subject: 'http://ex/s1', predicate: 'http://ex/p', objects: ['http://ex/o'] }, /does not answer terms reads/],
+    ['a graph query', { kind: 'graph_drop', graph: 'http://ex/g', recordClass: 'http://ex/C' }, /graphQuery/],
+    ['an unknown op', { v: '1.10', op: 'explain', shape: 'http://ex/S' }, /Unknown query op/],
+  ])('refuses %s sent to readQuery (400), on /call and /api', async (_label, body, message) => {
+    const base = await listen(makeLinkedServer());
+    const res = await call(base, '@_linked/server', 'readQuery', [body], ME);
+    expect(res.status).toBe(400);
+    expect(res.json.error).toMatch(message);
+    expect((await post(`${base}/api/select`, { query: body }, ME)).status).toBe(400);
     expect(ds.sparql).toHaveLength(0);
   });
 
   it('refuses a body that is not a query (400), on /call and /api', async () => {
     const base = await listen(makeLinkedServer());
-    expect((await call(base, '@_linked/server', 'selectQuery', [{ nonsense: true }], ME)).status).toBe(400);
+    expect((await call(base, '@_linked/server', 'readQuery', [{ nonsense: true }], ME)).status).toBe(400);
     expect((await post(`${base}/api/select`, { query: { nonsense: true } }, ME)).status).toBe(400);
     expect((await post(`${base}/api/select`, { query: { __queryKind: 'select' } }, ME)).status).toBe(400);
     expect(ds.sparql).toHaveLength(0);
@@ -338,11 +352,11 @@ describe('query kind and parsing', () => {
     const received: any[] = [];
     LinkedStorage.setDefaultDataset({
       init: async () => {},
-      selectQuery: async (q: any) => (received.push(q), []),
+      supports: ['ask'],
+      readQuery: readQueryOf({ select: async (q: any) => (received.push(q), []), ask: async () => false }),
       createQuery: async () => ({}),
       updateQuery: async () => ({}),
       deleteQuery: async () => ({}),
-      askQuery: async () => false,
     } as any);
     const base = await listen(makeLinkedServer());
     const json = (RpcPerson as any).select((p: any) => p.name).toJSON();
@@ -390,7 +404,7 @@ describe('query-context references on the generic plane', () => {
     const base = await listen(makeLinkedServer());
     const q = queries();
     const cases: [string, unknown][] = [
-      ['selectQuery', q.select],
+      ['readQuery', q.select],
       ['updateQuery', q.update],
       ['updateQuery', q.updateValue],
       ['createQuery', q.create],
@@ -426,7 +440,7 @@ describe('query-context references on the generic plane', () => {
     expect(containsContextRef(plain)).toBe(false);
     const nested = { ...plain, where: { and: [{ '@id': 'http://ex/a' }, [{ '@ctx': CTX }]] } };
     expect(containsContextRef(nested)).toBe(true);
-    expect((await call(base, '@_linked/server', 'selectQuery', [nested], ME)).status).toBe(400);
+    expect((await call(base, '@_linked/server', 'readQuery', [nested], ME)).status).toBe(400);
     expect((await post(`${base}/api/select`, { query: nested }, ME)).status).toBe(400);
     expect(ds.sparql).toHaveLength(0);
   });
@@ -434,7 +448,7 @@ describe('query-context references on the generic plane', () => {
   it('still answers the same queries by id, and a string that mentions @ctx', async () => {
     const base = await listen(makeLinkedServer());
     const byId = Person.select((p: any) => p.name).for('http://ex/p1').toJSON();
-    expect((await call(base, '@_linked/server', 'selectQuery', [byId], ME)).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'readQuery', [byId], ME)).status).toBe(200);
     const upd = Person.update({ name: '{"@ctx":"user"}' }).for('http://ex/p1').toJSON();
     expect(containsContextRef(upd)).toBe(false);
     expect((await post(`${base}/api/update`, { query: upd }, ME)).status).toBe(200);

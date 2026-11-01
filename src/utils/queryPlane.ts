@@ -1,7 +1,11 @@
 /**
  * Authorization for the generic query plane: the endpoints that run a query the
- * client built (`LincdServerBackendProvider.*Query` behind
- * `/call/@_linked/server/*Query`, and `LincdAPI` `post_*` behind `/api/*`).
+ * client built (`LincdServerBackendProvider`'s `readQuery`, `createQuery`, `updateQuery`,
+ * `deleteQuery` behind `/call/@_linked/server/<method>`, and `LincdAPI` `post_*` behind `/api/*`).
+ *
+ * Every read (select, count, ask) arrives on `readQuery`: {@link toReadQuery} tells its kind from
+ * the body before decoding it, and the kind (never the endpoint) picks the access rule the read is
+ * checked under.
  *
  * The rules are declared per store in the app's storage config
  * (`linked.backend.storage.js`) with `withAccess` from
@@ -30,6 +34,7 @@ import {
   type GraphQueryErrorCode,
 } from '@_linked/core/queries/graphQuery';
 import { lower } from '@_linked/core/queries/lower';
+import { readKindOf, readKindOfJSON, type ReadKind } from '@_linked/core/queries/readQuery';
 import type { ShapeCatalog } from '@_linked/core/utils/ShapeCatalog';
 import {
   checkQueryAccess,
@@ -159,6 +164,54 @@ export function toQueryBuilder(query: unknown, catalog?: ShapeCatalog): any {
   } catch {
     throw new ServerCallError(400, 'Invalid query');
   }
+}
+
+/** The access rule a read is checked under: a select and a count under `select`, an ask under `ask`. */
+export type ReadOperation = Extract<QueryOperation, 'select' | 'ask'>;
+
+/**
+ * The kind of a read body: `readKindOf` of a live builder (backend code), else `readKindOfJSON` of
+ * the wire form. Anything that is not a read answers 400: a write, a graph query (it goes to
+ * `graphQuery`), an unknown `op` or `kind`, a body that is not an object. So are triples and terms
+ * reads, which this server does not answer.
+ */
+function readBodyKind(json: unknown): ReadKind {
+  let kind: ReadKind;
+  try {
+    kind = isLiveBuilder(json) ? readKindOf(json as any) : readKindOfJSON(json);
+  } catch (error) {
+    throw new ServerCallError(400, error instanceof Error ? error.message : 'Invalid query');
+  }
+  if (kind === 'triples' || kind === 'triples_terms') {
+    throw new ServerCallError(
+      400,
+      `This server's readQuery does not answer ${kind === 'triples' ? 'triples' : 'terms'} reads`
+    );
+  }
+  return kind;
+}
+
+/**
+ * Decode a body posted to `readQuery` into the builder the store runs, with the access rule it is
+ * checked under. The body's kind is read before it is decoded (so a body `fromJSON` cannot decode
+ * is refused as what it is, with 400), the builder is decoded in `catalog` as
+ * {@link toQueryBuilder} does, and the decoded builder must be of the kind the body said (else
+ * 400). The rule follows that kind: a select body is never checked as an ask, nor the reverse.
+ */
+export function toReadQuery(
+  json: unknown,
+  catalog?: ShapeCatalog
+): { query: any; operation: ReadOperation } {
+  const kind = readBodyKind(json);
+  const query = toQueryBuilder(json, catalog);
+  let decoded: ReadKind | undefined;
+  try {
+    decoded = readKindOf(query);
+  } catch {
+    decoded = undefined;
+  }
+  if (decoded !== kind) throw new ServerCallError(400, 'Invalid query');
+  return { query, operation: kind === 'ask' ? 'ask' : 'select' };
 }
 
 /** The lowered IR of a query, or `undefined` when it cannot be lowered (refused). */

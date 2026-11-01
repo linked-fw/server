@@ -3,7 +3,7 @@ summary: >
   Step S1 of core master plan 111 (sub-plan 027): RemoteDataset.readQuery and the server's one
   readQuery endpoint, authorized by the decoded kind. Seeded from plan 027's S1; deleted at landing
   (report 028 takes the number).
-status: Tasks
+status: Implementation
 ---
 
 # 028 One read method (`@_linked/server`, step S1)
@@ -57,7 +57,7 @@ Dependencies: 1 → 2 → 3 (2's tests use 1's `RemoteDataset`). No parallel wor
 ## Progress
 
 - [x] Phase 1 (RemoteDataset suites and call-semantics: 77 passed)
-- [ ] Phase 2
+- [x] Phase 2 (full server suite: 38 passed, 540 tests; typecheck clean)
 - [ ] Phase 3
 
 ## Autonomous decisions

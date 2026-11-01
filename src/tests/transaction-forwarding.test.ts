@@ -121,11 +121,11 @@ describe('store transactions over /call', () => {
 
     expect((await call(base, 'createQuery', [create('Ann', txId)], ALICE)).status).toBe(200);
     expect((await call(base, 'createQuery', [create('Ben', txId)], ALICE)).status).toBe(200);
-    expect(namesOf((await call(base, 'selectQuery', [selectNames(txId)], ALICE)).json)).toEqual(['Ann', 'Ben']);
-    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual([]);
+    expect(namesOf((await call(base, 'readQuery', [selectNames(txId)], ALICE)).json)).toEqual(['Ann', 'Ben']);
+    expect(namesOf((await call(base, 'readQuery', [selectNames()], ALICE)).json)).toEqual([]);
 
     expect((await call(base, 'commit', [txId], ALICE)).status).toBe(200);
-    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual(['Ann', 'Ben']);
+    expect(namesOf((await call(base, 'readQuery', [selectNames()], ALICE)).json)).toEqual(['Ann', 'Ben']);
     // ended: a second commit and a query with it are unknown
     expect(await call(base, 'commit', [txId], ALICE)).toMatchObject({ status: 409, json: { code: 'transaction-unknown' } });
     expect((await call(base, 'createQuery', [create('Cid', txId)], ALICE)).status).toBe(409);
@@ -136,7 +136,7 @@ describe('store transactions over /call', () => {
     const txId = (await call(base, 'beginTransaction', [], ALICE)).json as string;
     expect((await call(base, 'createQuery', [create('Ann', txId)], ALICE)).status).toBe(200);
     expect((await call(base, 'rollback', [txId], ALICE)).status).toBe(200);
-    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual([]);
+    expect(namesOf((await call(base, 'readQuery', [selectNames()], ALICE)).json)).toEqual([]);
     expect((await call(base, 'rollback', [txId], ALICE)).status).toBe(200);
     expect((await call(base, 'rollback', ['never-begun'], ALICE)).status).toBe(200);
   });
@@ -147,7 +147,7 @@ describe('store transactions over /call', () => {
     expect((await call(base, 'createQuery', [create('Ann', txId)], ALICE)).status).toBe(200);
 
     expect(await call(base, 'createQuery', [create('Eve', txId)], BOB)).toMatchObject({ status: 403, json: { code: 'transaction-not-yours' } });
-    expect(await call(base, 'selectQuery', [selectNames(txId)], BOB)).toMatchObject({ status: 403 });
+    expect(await call(base, 'readQuery', [selectNames(txId)], BOB)).toMatchObject({ status: 403 });
     expect(await call(base, 'commit', [txId], BOB)).toMatchObject({ status: 403 });
     expect(await call(base, 'rollback', [txId], BOB)).toMatchObject({ status: 403 });
     // anonymous: a transaction needs a session
@@ -155,7 +155,7 @@ describe('store transactions over /call', () => {
     expect((await call(base, 'beginTransaction', [])).status).toBe(401);
 
     expect((await call(base, 'commit', [txId], ALICE)).status).toBe(200);
-    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual(['Ann']);
+    expect(namesOf((await call(base, 'readQuery', [selectNames()], ALICE)).json)).toEqual(['Ann']);
   });
 
   it('a refused query rolls the transaction back', async () => {
@@ -166,7 +166,7 @@ describe('store transactions over /call', () => {
     const chosen = inTransaction(TxPerson.create({ id: 'http://ex/chosen', name: 'Zed' } as any), txId).toJSON();
     expect((await call(base, 'createQuery', [chosen], ALICE)).status).toBe(403);
     expect(await call(base, 'commit', [txId], ALICE)).toMatchObject({ status: 409, json: { code: 'transaction-unknown' } });
-    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual([]);
+    expect(namesOf((await call(base, 'readQuery', [selectNames()], ALICE)).json)).toEqual([]);
   });
 
   it('a query with a txId on /api is refused, and rolls the transaction back', async () => {
@@ -180,21 +180,26 @@ describe('store transactions over /call', () => {
     });
     expect(res.status).toBe(400);
     expect(await call(base, 'commit', [txId], ALICE)).toMatchObject({ status: 409, json: { code: 'transaction-unknown' } });
-    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual([]);
+    expect(namesOf((await call(base, 'readQuery', [selectNames()], ALICE)).json)).toEqual([]);
   });
 
-  it('a body refused before it runs (not a query, a graph query) rolls the transaction back', async () => {
+  it('a body refused before it runs (not a query, a graph query, a read the server has not) rolls the transaction back', async () => {
     const base = await listen();
     for (const [method, body] of [
       ['createQuery', { nonsense: true }],
       ['graphQuery', { kind: 'graph_drop', graph: 'http://ex/g' }],
+      ['readQuery', { nonsense: true }],
+      ['readQuery', { kind: 'graph_drop', graph: 'http://ex/g' }],
+      ['readQuery', { kind: 'triples', subject: 'http://ex/s' }],
+      ['readQuery', { kind: 'triples_terms', subject: 'http://ex/s', predicate: 'http://ex/p', objects: ['http://ex/o'] }],
+      ['readQuery', { v: '1.10', op: 'delete', shape: 'http://ex/S', ids: ['http://ex/s'] }],
     ] as const) {
       const txId = (await call(base, 'beginTransaction', [], ALICE)).json as string;
       expect((await call(base, 'createQuery', [create('Ann', txId)], ALICE)).status).toBe(200);
       expect((await call(base, method, [{ ...body, txId }], ALICE)).status).toBe(400);
       expect((await call(base, 'commit', [txId], ALICE)).status).toBe(409);
     }
-    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual([]);
+    expect(namesOf((await call(base, 'readQuery', [selectNames()], ALICE)).json)).toEqual([]);
   });
 
   it("a stranger's refused request does not end the owner's transaction", async () => {
@@ -208,13 +213,13 @@ describe('store transactions over /call', () => {
   it('RemoteDataset declares transactions after a ping that lists them, and calls the three methods', async () => {
     const base = await listen();
     const remote = new RemoteDataset({ url: base, token: 'alice' });
-    expect(remote.supports).toBeUndefined();
+    expect(remote.supports).toEqual(['ask']);
     await remote.init();
-    expect(remote.supports).toEqual(['transactions']);
+    expect(remote.supports).toEqual(['ask', 'transactions']);
     const txId = await remote.beginTransaction();
     expect((await call(base, 'createQuery', [create('Ann', txId)], ALICE)).status).toBe(200);
     await remote.commit(txId);
-    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual(['Ann']);
+    expect(namesOf((await call(base, 'readQuery', [selectNames()], ALICE)).json)).toEqual(['Ann']);
     await remote.rollback(txId);
     await expect(remote.commit(txId)).rejects.toMatchObject({ status: 409, code: 'transaction-unknown' });
   });

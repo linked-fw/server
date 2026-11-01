@@ -21,6 +21,7 @@ const { objectProperty } = await import('@_linked/core/shapes/SHACL');
 const { ShapesGraph, OntologyGraph } = await import('@_linked/core/shapes/NamedGraph');
 const { LinkedServer } = await import('../shapes/LinkedServer.js');
 const { graphContentOf } = await import('../utils/syncShapes.js');
+const { readQueryOf } = await import('./read-double.js');
 
 const SECRET = 'graph-content-secret';
 const APP_GRAPH = 'https://gc.example/data/graph/shapes';
@@ -29,12 +30,7 @@ const NS = 'https://example.org/gcs-onto/';
 /** Keeps what each graph query wrote (body and hash); reads nothing back. */
 class Recording extends (SparqlDataset as any) {
   written = new Map<string, { text?: string; hash?: string; mediaType?: string }>();
-  async selectQuery() {
-    return [];
-  }
-  async askQuery() {
-    return false;
-  }
+  readQuery = readQueryOf({ select: async () => [], ask: async () => false });
   async graphQuery(query: { kind: string; graph: string; content?: { text: string; mediaType: string }; contentHash?: string }) {
     if (query.kind === 'graph_create' || query.kind === 'graph_replace') {
       this.written.set(query.graph, { text: query.content?.text, hash: query.contentHash, mediaType: query.content?.mediaType });

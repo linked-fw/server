@@ -11,12 +11,14 @@ import {
   resolveQueryCatalog,
   toGraphQuery,
   toQueryBuilder,
+  toReadQuery,
 } from './utils/queryPlane.js';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { txIdOf } from '@_linked/core/queries/transactionQuery';
 import { UnresolvedContextError } from '@_linked/core/queries/QueryContext';
 import { isLinkedError } from '@_linked/core/utils/linkedError';
 import type { Transaction } from '@_linked/core/utils/Transaction';
+import type { ShapeCatalog } from '@_linked/core/utils/ShapeCatalog';
 import {
   abandonTransactionOf,
   assertStoresHoldTransactions,
@@ -27,6 +29,14 @@ import {
 } from './utils/serverTransactions.js';
 import path from 'path';
 import fs from 'fs/promises';
+
+/** A write's decoder for `genericQuery`: the body as its builder, checked under the endpoint's own rule. */
+function writeOf(operation: Extract<QueryOperation, 'create' | 'update' | 'delete'>) {
+  return (json: unknown, catalog: ShapeCatalog | undefined) => ({
+    query: toQueryBuilder(json, catalog),
+    operation,
+  });
+}
 
 function assertTxId(txId: unknown): asserts txId is string {
   if (typeof txId !== 'string' || !txId) throw new ServerCallError(400, 'Expected a transaction id');
@@ -102,19 +112,21 @@ export default class LincdServerBackendProvider extends BackendProvider {
   }
 
   /**
-   * Decode, check and run one generic query. One that carries a txId runs in its transaction:
-   * the caller's own, checked against the store rules as if it were sent alone. Any refusal or
+   * Decode, check and run one generic query. `decode` turns the body into the builder the store
+   * runs and the access rule it is checked under (a write's rule is its endpoint's; a read's
+   * follows its kind, see `toReadQuery`). One that carries a txId runs in its transaction: the
+   * caller's own, checked against the store rules as if it were sent alone. Any refusal or
    * failure of it (a body that does not decode included) rolls the transaction back.
    */
   private async genericQuery<R>(
     json: any,
-    operation: QueryOperation,
+    decode: (json: unknown, catalog: ShapeCatalog | undefined) => { query: any; operation: QueryOperation },
     endpoint: string,
     inTransaction: (tx: Transaction, query: any) => Promise<R>,
     direct: (query: any) => Promise<R>
   ): Promise<R> {
     try {
-      const query = toQueryBuilder(json, await resolveQueryCatalog(json));
+      const { query, operation } = decode(json, await resolveQueryCatalog(json));
       const authorize = () => authorizeGenericQuery(operation, json, query, endpoint);
       if (!txIdOf(query)) {
         await authorize();
@@ -159,29 +171,29 @@ export default class LincdServerBackendProvider extends BackendProvider {
   // 'public' because that check, not the RPC layer, decides whether a session
   // is required.
 
+  /**
+   * Every read: a select, a count or an ask (DSL-JSON, told apart by `op`). The body's kind picks
+   * the access rule (`select` for a select or a count, `ask` for an ask; see `toReadQuery`).
+   * Triples and terms reads, graph queries and writes are refused with 400.
+   */
   @callable('public')
-  async selectQuery(json: any) {
-    return this.genericQuery(json, 'select', 'selectQuery', (tx, q) => tx.selectQuery(q), (q) => LinkedStorage.selectQuery(q));
-  }
-
-  @callable('public')
-  async askQuery(json: any) {
-    return this.genericQuery(json, 'ask', 'askQuery', (tx, q) => tx.askQuery(q), (q) => LinkedStorage.askQuery(q));
+  async readQuery(json: any) {
+    return this.genericQuery(json, toReadQuery, 'readQuery', (tx, q) => tx.readQuery(q), (q) => LinkedStorage.readQuery(q));
   }
 
   @callable('public')
   async updateQuery(json: any) {
-    return this.genericQuery(json, 'update', 'updateQuery', (tx, q) => tx.updateQuery(q), (q) => LinkedStorage.updateQuery(q));
+    return this.genericQuery(json, writeOf('update'), 'updateQuery', (tx, q) => tx.updateQuery(q), (q) => LinkedStorage.updateQuery(q));
   }
 
   @callable('public')
   async createQuery(json: any) {
-    return this.genericQuery(json, 'create', 'createQuery', (tx, q) => tx.createQuery(q), (q) => LinkedStorage.createQuery(q));
+    return this.genericQuery(json, writeOf('create'), 'createQuery', (tx, q) => tx.createQuery(q), (q) => LinkedStorage.createQuery(q));
   }
 
   @callable('public')
   async deleteQuery(json: any) {
-    return this.genericQuery(json, 'delete', 'deleteQuery', (tx, q) => tx.deleteQuery(q), (q) => LinkedStorage.deleteQuery(q));
+    return this.genericQuery(json, writeOf('delete'), 'deleteQuery', (tx, q) => tx.deleteQuery(q), (q) => LinkedStorage.deleteQuery(q));
   }
 
   /**

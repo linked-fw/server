@@ -409,15 +409,14 @@ describe('syncRoutedShapeGraphs', () => {
     const { LinkedStorage } = await import('@_linked/core/utils/LinkedStorage');
     const { linkedPackage } = await import('@_linked/core/utils/Package');
     const { Shape } = await import('@_linked/core/shapes/Shape');
+    const { readQueryOf } = await import('./read-double.js');
     /** Records the graphs its graph queries create; reads nothing back. */
     class Recording extends (SparqlDataset as any) {
       created: string[] = [];
       constructor(readonly id: string) {
         super();
       }
-      async selectQuery() {
-        return [];
-      }
+      readQuery = readQueryOf({ select: async () => [] });
       async graphQuery(query: { kind: string; graph: string; contentHash?: string }) {
         if (query.kind === 'graph_create') this.created.push(query.graph);
         return { graph: query.graph, contentHash: query.contentHash, changed: true };

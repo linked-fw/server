@@ -23,6 +23,7 @@ const { graphs } = await import('@_linked/core/ontologies/graphs');
 const { invalidateGraphRegistry } = await import('@_linked/core/utils/graphRegistryCache');
 const { OntologyGraph, DraftGraph } = await import('@_linked/core/shapes/NamedGraph');
 const { graphQueryCallError } = await import('../utils/queryPlane.js');
+const { readQueryOf, queryJson } = await import('./read-double.js');
 
 const G = 'https://linked.cm/pkg/a/graph/ontology';
 const ONTOLOGY_CLASS = OntologyGraph.targetClass.id;
@@ -56,18 +57,19 @@ function fakeStore(registry: string[] = [G]) {
       ran.push(q);
       return { graph: q.graph, changed: true, contentHash: 'h', modified: '2026-10-23T00:00:00.000Z' };
     },
-    async selectQuery(q: any) {
-      const json = q.toJSON();
-      if (json.shape === ONTOLOGY_SHAPE) {
-        registryReads.push(1);
-        return registry.map((id) => ({ id }));
-      }
-      reads.push(json.graphs);
-      return [];
-    },
-    async askQuery() {
-      return false;
-    },
+    supports: ['ask'],
+    readQuery: readQueryOf({
+      select: async (q: any) => {
+        const json = q.toJSON();
+        if (json.shape === ONTOLOGY_SHAPE) {
+          registryReads.push(1);
+          return registry.map((id) => ({ id }));
+        }
+        reads.push(json.graphs);
+        return [];
+      },
+      ask: async () => false,
+    }),
     async createQuery() {
       return {};
     },
@@ -192,7 +194,7 @@ describe('the generic plane: graphQuery', () => {
     expect((await graphCall(base, { kind: 'graph_replace', graph: G, recordClass: ONTOLOGY_CLASS }, ME)).status).toBe(400);
     expect((await graphCall(base, { kind: 'graph_drop', graph: 'relative', recordClass: ONTOLOGY_CLASS }, ME)).status).toBe(400);
     expect((await graphCall(base, { v: '1.1', shape: ONTOLOGY_SHAPE }, ME)).status).toBe(400);
-    for (const method of ['selectQuery', 'updateQuery', 'createQuery', 'deleteQuery', 'askQuery']) {
+    for (const method of ['readQuery', 'updateQuery', 'createQuery', 'deleteQuery', 'readQuery']) {
       const res = await post(`${base}/call/@_linked/server/${method}`, { args: [queries.graph_drop] }, { 'x-test-user': ME });
       expect(res.status).toBe(400);
     }
@@ -309,7 +311,7 @@ describe('POST /admin/graph-registry-changed', () => {
     const remote = new RemoteDataset({ url: base });
     await remote.init();
     const read = () =>
-      remote.selectQuery({ toJSON: () => ({ v: '1.1', shape: ONTOLOGY_SHAPE.replace('OntologyGraph', 'NamedGraph'), graphs: [graphs.allOntologies] }) } as any);
+      remote.readQuery(queryJson({ v: '1.1', shape: ONTOLOGY_SHAPE.replace('OntologyGraph', 'NamedGraph'), graphs: [graphs.allOntologies] }));
     await read();
     await read();
     expect(store.registryReads).toHaveLength(1);
