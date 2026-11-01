@@ -12,6 +12,21 @@ import {
   toQueryBuilder,
 } from '../utils/queryPlane.js';
 import { getRpcExposureMode } from '../utils/rpcExposure.js';
+import { txIdOf } from '@_linked/core/queries/transactionQuery';
+import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
+
+/**
+ * The builder of an `/api/*` query, wrapped (a query builder is a thenable: resolving an async
+ * function with one would run it). A query of a store transaction (a `txId`) is refused (400):
+ * transactions run over `/call/@_linked/server`, which holds them; here it would run outside.
+ */
+async function apiBuilder(query: unknown): Promise<{ builder: any }> {
+  const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
+  if (txIdOf(builder)) {
+    throw new ServerCallError(400, 'A query of a transaction is sent to /call/@_linked/server, not /api');
+  }
+  return { builder };
+}
 
 /** An error carrying an HTTP status, such as a `ServerCallError` (401/403). */
 function isStatusError(error: any): error is { status: number; message: string } {
@@ -70,22 +85,22 @@ export class LincdAPI extends Shape {
   }
 
   async post_select({ query }) {
-    const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
+    const { builder } = await apiBuilder(query);
     await authorizeGenericQuery('select', query, builder, 'api/select');
     return LinkedStorage.selectQuery(builder);
   }
   async post_create({ query }) {
-    const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
+    const { builder } = await apiBuilder(query);
     await authorizeGenericQuery('create', query, builder, 'api/create');
     return LinkedStorage.createQuery(builder);
   }
   async post_update({ query }) {
-    const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
+    const { builder } = await apiBuilder(query);
     await authorizeGenericQuery('update', query, builder, 'api/update');
     return LinkedStorage.updateQuery(builder);
   }
   async post_delete({ query }) {
-    const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
+    const { builder } = await apiBuilder(query);
     await authorizeGenericQuery('delete', query, builder, 'api/delete');
     return LinkedStorage.deleteQuery(builder);
   }

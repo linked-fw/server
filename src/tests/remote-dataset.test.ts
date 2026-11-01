@@ -116,10 +116,22 @@ describe('RemoteDataset config', () => {
     }
   });
 
-  it('without a url, init() resolves at once and fetches nothing', async () => {
-    const calls = stubFetch(() => jsonResponse(200, { ok: true }));
-    await expect(new RemoteDataset({ token: TOKEN }).init()).resolves.toBeUndefined();
-    expect(calls).toHaveLength(0);
+  it("without a url, init() asks the backend's ping only for transactions, without the token", async () => {
+    const calls = stubFetch(() => jsonResponse(200, { ok: true, supports: ['transactions'] }));
+    const store = new RemoteDataset({ token: TOKEN });
+    await expect(store.init()).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toMatch(/\/call\/@_linked\/server\/ping$/);
+    expect(JSON.stringify(calls[0].init.headers)).not.toContain(TOKEN);
+    expect(store.supports).toEqual(['transactions']);
+    expect(store.info).toBeUndefined();
+  });
+
+  it('without a url, a failed ping leaves transactions off and init() resolves', async () => {
+    stubFetch(() => jsonResponse(500, { error: 'boom' }));
+    const store = new RemoteDataset({});
+    await expect(store.init()).resolves.toBeUndefined();
+    expect(store.supports).toBeUndefined();
   });
 
   it('without a url, queries go through Server.call and ignore the token', async () => {
@@ -522,10 +534,10 @@ describe('ping over the call routes', () => {
       body: JSON.stringify({ args: [] }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, supports: [] });
   });
 
   it('lets a RemoteDataset pointed at the server init()', async () => {
-    await expect(new RemoteDataset({ url: `${base}/` }).init()).resolves.toEqual({ ok: true });
+    await expect(new RemoteDataset({ url: `${base}/` }).init()).resolves.toEqual({ ok: true, supports: [] });
   });
 });

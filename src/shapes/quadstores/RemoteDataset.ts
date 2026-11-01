@@ -3,6 +3,7 @@ import { brandLinkedError } from '@_linked/core/utils/linkedError';
 import { Server } from '@_linked/server-utils/utils/Server';
 import type { CallContext } from '@_linked/server-utils/utils/CallContext';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
+import type { QueryFeature } from '@_linked/core/queries/queryFeatures';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
 import type { CountQuery } from '@_linked/core/queries/CountQuery';
 import type { AskQuery } from '@_linked/core/queries/AskQuery';
@@ -178,7 +179,10 @@ type Method =
   | 'updateQuery'
   | 'createQuery'
   | 'deleteQuery'
-  | 'graphQuery';
+  | 'graphQuery'
+  | 'beginTransaction'
+  | 'commit'
+  | 'rollback';
 
 /** The refusal codes a data server sends back for a graph query (`{error, code}`). */
 const GRAPH_REFUSAL_CODES: ReadonlySet<string> = new Set<GraphQueryErrorCode>([
@@ -241,6 +245,14 @@ const PING_UNREACHABLE_STATUSES = new Set([404, 501, 502, 503, 504]);
  * `LinkedStorage.setDefaultDataset` calls `init()` without awaiting it, so a boot that must
  * fail loudly awaits `init()` itself first; a successful `init()` is memoized, and resolves
  * the ping body (also readable as `info`), so a boot can log which dataset the server serves.
+ *
+ * **Store transactions** (core's `LinkedStorage.begin()`): the store declares `'transactions'`
+ * in `supports` only once the server's `ping` listed it (`supports: ['transactions']`), so a
+ * server that does not hold them is never sent a txId; until then a transaction warns once and
+ * runs its queries directly. `beginTransaction()`, `commit(txId)` and `rollback(txId)` post to
+ * the methods of the same names, never retried; a query's txId rides inside its `toJSON()`. In
+ * the no-url form `init()` asks the backend's `ping` for this alone (a failed one leaves
+ * transactions off, and `init()` still resolves undefined).
  */
 export class RemoteDataset implements IDataset {
   /**
@@ -255,6 +267,8 @@ export class RemoteDataset implements IDataset {
   readonly forwardUserToken: boolean = true;
   private initialized?: Promise<RemoteDatasetPingInfo | undefined>;
   private pingInfo?: RemoteDatasetPingInfo;
+  /** Whether the server's last `ping` listed `'transactions'` in its `supports`. */
+  private serverHoldsTransactions = false;
   private readonly instanceRegistryKey = `remote-dataset:${nextRegistryKey++}`;
   private warnedRegistryRead = false;
 
@@ -290,15 +304,62 @@ export class RemoteDataset implements IDataset {
   }
 
   /**
+   * `['transactions']` once the server's `ping` listed them, else none. (The query features are
+   * the server's stores' to check: they are not declared here.)
+   */
+  get supports(): readonly QueryFeature[] | undefined {
+    return this.serverHoldsTransactions ? ['transactions'] : undefined;
+  }
+
+  /** Begin a store transaction on the server; resolves its txId. */
+  async beginTransaction(): Promise<string> {
+    const txId = await this.callMethod<unknown>('beginTransaction', []);
+    if (typeof txId !== 'string' || !txId) {
+      throw new RemoteDatasetError(
+        `RemoteDataset: the data server${this.url ? ` at ${this.url}` : ''} answered beginTransaction without a transaction id`,
+        this.url ?? '',
+        200,
+      );
+    }
+    return txId;
+  }
+
+  /** Commit the transaction `txId` on the server. */
+  async commit(txId: string): Promise<void> {
+    await this.callMethod('commit', [txId]);
+  }
+
+  /** Roll back the transaction `txId` on the server (an unknown one is a no-op there). */
+  async rollback(txId: string): Promise<void> {
+    await this.callMethod('rollback', [txId]);
+  }
+
+  /** Note what a `ping` body says of transactions. */
+  private notePing(body: unknown): void {
+    const supports = body && typeof body === 'object' ? (body as { supports?: unknown }).supports : undefined;
+    this.serverHoldsTransactions = Array.isArray(supports) && supports.includes('transactions');
+  }
+
+  /**
    * In the url form, asks the server's `ping` and resolves its body (also kept as
    * {@link info}); resolves undefined in the no-url form.
    */
   init(): Promise<RemoteDatasetPingInfo | undefined> {
-    // No initialization needed when queries are routed to the app's own backend.
-    if (this.url === undefined) return Promise.resolve(undefined);
+    if (this.url === undefined) {
+      // Queries go to the app's own backend; its ping only says whether it holds transactions.
+      this.initialized ??= this.callBackend<unknown>('ping').then(
+        (body) => {
+          this.notePing(body);
+          return undefined;
+        },
+        () => undefined,
+      );
+      return this.initialized;
+    }
     if (!this.initialized) {
       this.initialized = this.post('ping', []).then(
         (body) => {
+          this.notePing(body);
           const info: RemoteDatasetPingInfo = Object.freeze(
             body && typeof body === 'object' && !Array.isArray(body)
               ? { ...(body as Record<string, unknown>) }
@@ -442,8 +503,12 @@ export class RemoteDataset implements IDataset {
   }
 
   private call<T>(method: Method, json: unknown): Promise<T> {
-    if (this.url === undefined) return this.callBackend(method, json);
-    return this.post(method, [json]) as Promise<T>;
+    return this.callMethod<T>(method, [json]);
+  }
+
+  private callMethod<T>(method: Method, args: unknown[]): Promise<T> {
+    if (this.url === undefined) return this.callBackend(method, ...args);
+    return this.post(method, args) as Promise<T>;
   }
 
   /**
@@ -452,12 +517,12 @@ export class RemoteDataset implements IDataset {
    * status and the server's message instead of reading as an empty result.
    * Whatever a successful call returns, `undefined` included, resolves as is.
    */
-  private callBackend<T>(method: string, json: unknown): Promise<T> {
+  private callBackend<T>(method: string, ...args: unknown[]): Promise<T> {
     // The PACKAGE form, not the shape form. It posts to
     // `/call/<packageName>/<method>` with a body of `{args}` only — no `shapeURI`,
     // no `instanceNode` — and the backend answers from this package's generic
     // provider without resolving or instantiating any Shape.
-    return Server.call(packageName, { method, rejectOnError: true }, json);
+    return Server.call(packageName, { method, rejectOnError: true }, ...args);
   }
 
   /**
