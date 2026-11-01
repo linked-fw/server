@@ -3,7 +3,7 @@ summary: >
   Sub-plan of core's master plan 111 (one read method): RemoteDataset answers every read with one
   readQuery, sent to one /call endpoint, readQuery, which replaces the selectQuery and askQuery
   callables (graphQuery stays, a write); authorization by the decoded kind. Step S1, report 028.
-status: Plan
+status: Done
 ---
 
 # 027 One read method (`@_linked/server`)
@@ -148,4 +148,4 @@ runs select, count and ask in the transaction and refuses triples and terms read
 
 ## Progress
 
-- [ ] S1 — report 028
+- [x] S1 — report 028 (`docs/reports/028-one-read-method.md`)
