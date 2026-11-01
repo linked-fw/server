@@ -14,6 +14,8 @@ import {
 } from './utils/queryPlane.js';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { txIdOf } from '@_linked/core/queries/transactionQuery';
+import { UnresolvedContextError } from '@_linked/core/queries/QueryContext';
+import { isLinkedError } from '@_linked/core/utils/linkedError';
 import type { Transaction } from '@_linked/core/utils/Transaction';
 import {
   abandonTransactionOf,
@@ -129,7 +131,8 @@ export default class LincdServerBackendProvider extends BackendProvider {
         inTransaction
       );
     } catch (err) {
-      await abandonTransactionOf(json);
+      // A select whose query context is not ready did not run: it fails nothing (as in core).
+      if (!isLinkedError(err, UnresolvedContextError)) await abandonTransactionOf(json);
       throw transactionCallError(err);
     }
   }
