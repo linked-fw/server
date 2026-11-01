@@ -350,10 +350,16 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
 ```
 
 - Each method posts `{"args": [<query.toJSON()>]}` to `{url}/call/@_linked/server/<method>`
-  (`selectQuery`, which also carries counts, `askQuery`, `updateQuery`, `createQuery`,
-  `deleteQuery`) with `Content-Type` and `Accept` set to `application/json` and, when `token` is
-  non-empty, `Authorization: Bearer <token>`. It resolves the parsed body; `null` is a valid
-  result. Nothing is retried, so a write is never applied twice.
+  (`readQuery` for every read: a select, a count or an ask, told apart by the DSL-JSON `op`;
+  `updateQuery`, `createQuery`, `deleteQuery`; `graphQuery` for a graph query) with
+  `Content-Type` and `Accept` set to `application/json` and, when `token` is non-empty,
+  `Authorization: Bearer <token>`. It resolves the parsed body; `null` is a valid result. Nothing
+  is retried, so a write is never applied twice. The store declares `supports: ['ask']` (plus
+  `'transactions'`, below); a triples or terms read is refused without being sent, as the
+  server's `readQuery` answers neither.
+- The server's `readQuery` checks a read under the access rule of its kind, read from the body
+  before it is decoded: a select and a count under `select`, an ask under `ask`. A triples or terms
+  read, a graph query and a write posted to it answer 400.
 - **The user's token.** When the query is made while a signed-in user's HTTP request is being
   answered (the call context is `http`), the post asks the hook on
   `globalThis[Symbol.for('@_linked/auth:userTokenHeaders')]` (exported as

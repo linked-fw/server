@@ -58,7 +58,7 @@ Dependencies: 1 → 2 → 3 (2's tests use 1's `RemoteDataset`). No parallel wor
 
 - [x] Phase 1 (RemoteDataset suites and call-semantics: 77 passed)
 - [x] Phase 2 (full server suite: 38 passed, 540 tests; typecheck clean)
-- [ ] Phase 3
+- [x] Phase 3 (build, npm test 540 passed, typecheck clean, grep clean)
 
 ## Autonomous decisions
 
