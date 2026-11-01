@@ -304,8 +304,9 @@ export class RemoteDataset implements IDataset {
 
   /**
    * `'ask'` (the server answers an ask itself), plus `'transactions'` once the server's `ping`
-   * listed them. The select features are the server's stores' to check, so they are not declared
-   * here; nor are `'triples'` and `'triplesTerms'`, which the server's `readQuery` does not answer.
+   * listed them. The select features (grouping, min/max) are not declared, so core refuses such a
+   * select before it is sent; nor are `'triples'` and `'triplesTerms'`, which the server's
+   * `readQuery` does not answer.
    */
   get supports(): readonly QueryFeature[] {
     return this.serverHoldsTransactions ? ['ask', 'transactions'] : ['ask'];

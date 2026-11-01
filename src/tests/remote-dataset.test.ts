@@ -171,6 +171,14 @@ describe('RemoteDataset url form: query methods', () => {
 
     await expect(store().readQuery(query)).resolves.toBe(false);
     expectWire(calls[0], 'readQuery', [query.toJSON()]);
+    expect(sentBody(calls[0]).args[0].op).toBe('ask');
+  });
+
+  it("an ask run through core's dispatch goes out as an ask, not a select LIMIT 1", async () => {
+    const calls = stubFetch(() => jsonResponse(200, true));
+    await expect(AskBuilder.forNode(IRI).exec(store())).resolves.toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(sentBody(calls[0]).args[0].op).toBe('ask');
   });
 
   it.each([

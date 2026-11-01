@@ -180,7 +180,9 @@ function readBodyKind(json: unknown): ReadKind {
   try {
     kind = isLiveBuilder(json) ? readKindOf(json as any) : readKindOfJSON(json);
   } catch (error) {
-    throw new ServerCallError(400, error instanceof Error ? error.message : 'Invalid query');
+    // Core's message quotes the client's `op` or `kind`: capped, so a body is never echoed whole.
+    const message = error instanceof Error ? error.message : 'Invalid query';
+    throw new ServerCallError(400, message.length > 200 ? `${message.slice(0, 200)}…` : message);
   }
   if (kind === 'triples' || kind === 'triples_terms') {
     throw new ServerCallError(

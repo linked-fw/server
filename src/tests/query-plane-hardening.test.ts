@@ -331,11 +331,14 @@ describe('query kind and parsing', () => {
     ['a terms read', { kind: 'triples_terms', subject: 'http://ex/s1', predicate: 'http://ex/p', objects: ['http://ex/o'] }, /does not answer terms reads/],
     ['a graph query', { kind: 'graph_drop', graph: 'http://ex/g', recordClass: 'http://ex/C' }, /graphQuery/],
     ['an unknown op', { v: '1.10', op: 'explain', shape: 'http://ex/S' }, /Unknown query op/],
+    ['an ask envelope that also names a triples kind', { v: '1.10', op: 'ask', kind: 'triples', subject: 'http://ex/s1' }, /does not answer triples reads/],
+    ['an unknown op of any length, echoed capped', { v: '1.10', op: 'x'.repeat(5000), shape: 'http://ex/S' }, /^Unknown query op "x{100,}…$/],
   ])('refuses %s sent to readQuery (400), on /call and /api', async (_label, body, message) => {
     const base = await listen(makeLinkedServer());
     const res = await call(base, '@_linked/server', 'readQuery', [body], ME);
     expect(res.status).toBe(400);
     expect(res.json.error).toMatch(message);
+    expect(res.json.error.length).toBeLessThanOrEqual(201);
     expect((await post(`${base}/api/select`, { query: body }, ME)).status).toBe(400);
     expect(ds.sparql).toHaveLength(0);
   });
