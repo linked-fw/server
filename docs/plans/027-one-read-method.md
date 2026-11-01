@@ -54,13 +54,14 @@ refused); without `triples`/`triplesTerms` those reads are refused. Routers forw
 
 ### C-4 Terms read kind
 
-`TriplesTermsQuery {kind: 'triples_terms'; objects?; predicates?; graphs?; recordClass?}`, parsed by
+`TriplesTermsQuery {kind: 'triples_terms'; subject?; predicate?; object?; objects?; predicates?; graphs?}`
+(the fixed positions as in 109; no `limit`, no `recordClass`: contract change, C1), parsed by
 `parseTriplesTermsQuery`; `TriplesQuery` loses `objects`/`predicates`.
 
 ### C-5 Dispatch
 
 `QueryDispatch.readQuery` (its `graphQuery?` stays); `resolveRead(target, query)` and
-`dispatchRead(query, target?)` replace `resolveExistence`, `resolveCount`, `resolveTriples`,
+`dispatchRead(query, target?)` and `assertReadSupported(target, query)` (contract addition, C1) replace `resolveExistence`, `resolveCount`, `resolveTriples`,
 `resolveTriplesTerms`, `dispatchTriplesQuery`, `dispatchTriplesTermsQuery` (removed).
 `resolveGraphQuery`, `dispatchGraphQuery` and `assertQuerySupported` stay.
 
