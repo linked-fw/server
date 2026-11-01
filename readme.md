@@ -446,8 +446,9 @@ POST /call/@_linked/server/<x>Query          {"args": [<query.toJSON(), with "tx
   request with that txId is refused and leaves the transaction as it was.
 - **Refusals** (`{error, code}`): 501 `transactions-unsupported`, 409 `transaction-unknown` (never
   begun, ended, failed or expired; a `rollback` of one resolves), 403 `transaction-not-yours`. A
-  query with a txId sent to `/api/*` is refused (400): transactions run over `/call` only. A
-  store's own refusal is passed back as for any failed query.
+  query with a txId sent to `/api/*`, and a graph query with one, are refused (400). Any refusal
+  of a request that names the caller's own transaction (a body that does not decode included)
+  rolls that transaction back. A store's own refusal is passed back as for any failed query.
 - A forwarder of its own (a gateway) does the same: it lists `'transactions'` only when the store
   it forwards to does, and never runs a query that carries a txId outside its transaction.
 

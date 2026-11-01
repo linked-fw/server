@@ -3,6 +3,7 @@ import { callable } from '@_linked/server-utils/utils/callable';
 import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
 import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { LocalFileStore } from './shapes/filestores/LocalFileStore.js';
+import type { QueryOperation } from '@_linked/server-utils/utils/QueryAccess';
 import {
   authorizeGenericQuery,
   authorizeGraphQuery,
@@ -12,71 +13,18 @@ import {
   toQueryBuilder,
 } from './utils/queryPlane.js';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
-import { getCallContext } from '@_linked/server-utils/utils/CallContext';
 import { txIdOf } from '@_linked/core/queries/transactionQuery';
-import { supportsTransactions, type Transaction } from '@_linked/core/utils/Transaction';
-import { isLinkedError } from '@_linked/core/utils/linkedError';
+import type { Transaction } from '@_linked/core/utils/Transaction';
 import {
-  ForwardedTransactions,
-  TransactionNotYoursError,
-  TransactionUnknownError,
-  TransactionUnsupportedError,
-} from './utils/forwardedTransactions.js';
+  abandonTransactionOf,
+  assertStoresHoldTransactions,
+  storesHoldTransactions,
+  transactionCallError,
+  transactionCaller,
+  transactions,
+} from './utils/serverTransactions.js';
 import path from 'path';
 import fs from 'fs/promises';
-
-/** The transactions this server holds for its callers (see `utils/forwardedTransactions`). */
-const transactions = new ForwardedTransactions();
-
-/**
- * Whether every dataset `LinkedStorage` routes to holds store transactions: only then does this
- * server begin one, so no query of a transaction can reach a store that would run it outside.
- */
-function storesHoldTransactions(): boolean {
-  const datasets = [...LinkedStorage.getDatasets()];
-  if (!datasets.length) return false;
-  return datasets.every((dataset) => {
-    try {
-      return supportsTransactions(dataset);
-    } catch {
-      return false;
-    }
-  });
-}
-
-function assertStoresHoldTransactions(): void {
-  if (storesHoldTransactions()) return;
-  throw new TransactionUnsupportedError(
-    "The stores of this server do not all declare 'transactions' in `supports`, so it holds no " +
-      'transactions; a query of one is refused rather than run outside it.'
-  );
-}
-
-/**
- * Who a transaction is bound to: the session's user account in an HTTP call (a session is
- * required, as for a write without an access rule), `system` for work with no request behind it.
- */
-function transactionCaller(): string {
-  const ctx = getCallContext();
-  if (!ctx || ctx.kind !== 'http') return 'system';
-  const id = ctx.request?.linkedAuth?.userAccount?.id;
-  if (typeof id !== 'string' || !id) throw new ServerCallError(401, 'Authentication required');
-  return `user:${id}`;
-}
-
-/** A transaction refusal as the answer the caller gets (`{error, code}`); anything else as is. */
-function transactionCallError(err: unknown): unknown {
-  const status = isLinkedError(err, TransactionUnsupportedError)
-    ? 501
-    : isLinkedError(err, TransactionUnknownError)
-      ? 409
-      : isLinkedError(err, TransactionNotYoursError)
-        ? 403
-        : undefined;
-  if (status === undefined) return err;
-  const error = err as Error & { code: string };
-  return Object.assign(new ServerCallError(status, error.message, { cause: err }), { code: error.code });
-}
 
 function assertTxId(txId: unknown): asserts txId is string {
   if (typeof txId !== 'string' || !txId) throw new ServerCallError(400, 'Expected a transaction id');
@@ -152,15 +100,25 @@ export default class LincdServerBackendProvider extends BackendProvider {
   }
 
   /**
-   * Run a query that carries a txId in its transaction: the caller's own, checked against the
-   * store rules as if it were sent alone. A refusal or a failure rolls the transaction back.
+   * Decode, check and run one generic query. One that carries a txId runs in its transaction:
+   * the caller's own, checked against the store rules as if it were sent alone. Any refusal or
+   * failure of it (a body that does not decode included) rolls the transaction back.
    */
-  private async inTransaction<R>(
-    query: object,
-    authorize: () => Promise<void>,
-    run: (tx: Transaction, query: any) => Promise<R>
+  private async genericQuery<R>(
+    json: any,
+    operation: QueryOperation,
+    endpoint: string,
+    inTransaction: (tx: Transaction, query: any) => Promise<R>,
+    direct: (query: any) => Promise<R>
   ): Promise<R> {
     try {
+      const query = toQueryBuilder(json, await resolveQueryCatalog(json));
+      const authorize = () => authorizeGenericQuery(operation, json, query, endpoint);
+      if (!txIdOf(query)) {
+        await authorize();
+        return await direct(query);
+      }
+      assertStoresHoldTransactions();
       return await transactions.query(
         query,
         transactionCaller(),
@@ -168,9 +126,10 @@ export default class LincdServerBackendProvider extends BackendProvider {
           assertStoresHoldTransactions();
           await authorize();
         },
-        run
+        inTransaction
       );
     } catch (err) {
+      await abandonTransactionOf(json);
       throw transactionCallError(err);
     }
   }
@@ -199,47 +158,27 @@ export default class LincdServerBackendProvider extends BackendProvider {
 
   @callable('public')
   async selectQuery(json: any) {
-    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
-    const authorize = () => authorizeGenericQuery('select', json, query, 'selectQuery');
-    if (txIdOf(query)) return this.inTransaction(query, authorize, (tx, q) => tx.selectQuery(q));
-    await authorize();
-    return LinkedStorage.selectQuery(query);
+    return this.genericQuery(json, 'select', 'selectQuery', (tx, q) => tx.selectQuery(q), (q) => LinkedStorage.selectQuery(q));
   }
 
   @callable('public')
   async askQuery(json: any) {
-    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
-    const authorize = () => authorizeGenericQuery('ask', json, query, 'askQuery');
-    if (txIdOf(query)) return this.inTransaction(query, authorize, (tx, q) => tx.askQuery(q));
-    await authorize();
-    return LinkedStorage.askQuery(query);
+    return this.genericQuery(json, 'ask', 'askQuery', (tx, q) => tx.askQuery(q), (q) => LinkedStorage.askQuery(q));
   }
 
   @callable('public')
   async updateQuery(json: any) {
-    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
-    const authorize = () => authorizeGenericQuery('update', json, query, 'updateQuery');
-    if (txIdOf(query)) return this.inTransaction(query, authorize, (tx, q) => tx.updateQuery(q));
-    await authorize();
-    return LinkedStorage.updateQuery(query);
+    return this.genericQuery(json, 'update', 'updateQuery', (tx, q) => tx.updateQuery(q), (q) => LinkedStorage.updateQuery(q));
   }
 
   @callable('public')
   async createQuery(json: any) {
-    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
-    const authorize = () => authorizeGenericQuery('create', json, query, 'createQuery');
-    if (txIdOf(query)) return this.inTransaction(query, authorize, (tx, q) => tx.createQuery(q));
-    await authorize();
-    return LinkedStorage.createQuery(query);
+    return this.genericQuery(json, 'create', 'createQuery', (tx, q) => tx.createQuery(q), (q) => LinkedStorage.createQuery(q));
   }
 
   @callable('public')
   async deleteQuery(json: any) {
-    const query = toQueryBuilder(json, await resolveQueryCatalog(json));
-    const authorize = () => authorizeGenericQuery('delete', json, query, 'deleteQuery');
-    if (txIdOf(query)) return this.inTransaction(query, authorize, (tx, q) => tx.deleteQuery(q));
-    await authorize();
-    return LinkedStorage.deleteQuery(query);
+    return this.genericQuery(json, 'delete', 'deleteQuery', (tx, q) => tx.deleteQuery(q), (q) => LinkedStorage.deleteQuery(q));
   }
 
   /**
@@ -252,6 +191,10 @@ export default class LincdServerBackendProvider extends BackendProvider {
    */
   @callable('public')
   async graphQuery(json: any) {
+    if (json && typeof json === 'object' && 'txId' in json) {
+      await abandonTransactionOf(json);
+      throw new ServerCallError(400, 'A graph query does not run in a transaction');
+    }
     const query = toGraphQuery(json);
     await authorizeGraphQuery(json, query, 'graphQuery');
     if (!query) throw new ServerCallError(400, 'Invalid graph query');

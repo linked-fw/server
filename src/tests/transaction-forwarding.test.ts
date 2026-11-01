@@ -169,16 +169,40 @@ describe('store transactions over /call', () => {
     expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual([]);
   });
 
-  it('a query with a txId on /api is refused', async () => {
+  it('a query with a txId on /api is refused, and rolls the transaction back', async () => {
     const base = await listen();
     const txId = (await call(base, 'beginTransaction', [], ALICE)).json as string;
+    expect((await call(base, 'createQuery', [create('Ann', txId)], ALICE)).status).toBe(200);
     const res = await fetch(`${base}/api/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-test-user': ALICE },
-      body: JSON.stringify({ query: create('Ann', txId) }),
+      body: JSON.stringify({ query: create('Ben', txId) }),
     });
     expect(res.status).toBe(400);
-    expect(namesOf((await call(base, 'selectQuery', [selectNames(txId)], ALICE)).json)).toEqual([]);
+    expect(await call(base, 'commit', [txId], ALICE)).toMatchObject({ status: 409, json: { code: 'transaction-unknown' } });
+    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual([]);
+  });
+
+  it('a body refused before it runs (not a query, a graph query) rolls the transaction back', async () => {
+    const base = await listen();
+    for (const [method, body] of [
+      ['createQuery', { nonsense: true }],
+      ['graphQuery', { kind: 'graph_drop', graph: 'http://ex/g' }],
+    ] as const) {
+      const txId = (await call(base, 'beginTransaction', [], ALICE)).json as string;
+      expect((await call(base, 'createQuery', [create('Ann', txId)], ALICE)).status).toBe(200);
+      expect((await call(base, method, [{ ...body, txId }], ALICE)).status).toBe(400);
+      expect((await call(base, 'commit', [txId], ALICE)).status).toBe(409);
+    }
+    expect(namesOf((await call(base, 'selectQuery', [selectNames()], ALICE)).json)).toEqual([]);
+  });
+
+  it("a stranger's refused request does not end the owner's transaction", async () => {
+    const base = await listen();
+    const txId = (await call(base, 'beginTransaction', [], ALICE)).json as string;
+    expect((await call(base, 'createQuery', [{ nonsense: true, txId }], BOB)).status).toBe(400);
+    expect((await call(base, 'createQuery', [create('Ann', txId)], ALICE)).status).toBe(200);
+    expect((await call(base, 'commit', [txId], ALICE)).status).toBe(200);
   });
 
   it('RemoteDataset declares transactions after a ping that lists them, and calls the three methods', async () => {

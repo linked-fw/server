@@ -8,14 +8,17 @@
  * that began it: anyone else presenting it is refused, and the transaction is left as it was.
  *
  * - A query that fails, or that a check refuses, fails the transaction: it is rolled back in
- *   every store and forgotten, so a later `commit` rejects as unknown and `rollback` resolves.
- * - An idle transaction (no query, commit or rollback for `timeoutMs`, default 30 s) is rolled
- *   back and forgotten.
+ *   every store and forgotten, so a later `commit` rejects as unknown and `rollback` resolves
+ *   (a select whose query context is not ready, core's `UnresolvedContextError`, did not run and
+ *   fails nothing). A forwarder that refuses a query before it gets here calls `rollback` itself.
+ * - An idle transaction (no query running, and none, no commit or rollback for `timeoutMs`,
+ *   default 30 s) is rolled back and forgotten.
  * - A forwarder holds transactions only when every store it routes to does; it checks that
  *   itself (see `supportsTransactions` in core) before it begins one or runs a query in one.
  */
 import { randomUUID } from 'node:crypto';
-import { brandLinkedError } from '@_linked/core/utils/linkedError';
+import { brandLinkedError, isLinkedError } from '@_linked/core/utils/linkedError';
+import { UnresolvedContextError } from '@_linked/core/queries/QueryContext';
 import type { Transaction } from '@_linked/core/utils/Transaction';
 import { txIdOf } from '@_linked/core/queries/transactionQuery';
 
@@ -60,6 +63,8 @@ interface Held {
   tx: Transaction;
   caller: string;
   timer?: ReturnType<typeof setTimeout>;
+  /** Queries of it running now: it does not expire meanwhile. */
+  running: number;
 }
 
 export interface ForwardedTransactionsOptions {
@@ -83,7 +88,7 @@ export class ForwardedTransactions {
   /** Hold `tx` for `caller`; answers its id. */
   begin(caller: string, tx: Transaction): string {
     const txId = randomUUID();
-    const held: Held = { tx, caller };
+    const held: Held = { tx, caller, running: 0 };
     this.held.set(txId, held);
     this.touch(txId, held);
     return txId;
@@ -92,24 +97,29 @@ export class ForwardedTransactions {
   /**
    * Run `query` (which carries a txId) in its transaction: the caller must be the one that began
    * it; then `check` (the rights of the query, as if it were sent alone) and `run` with the query
-   * outside its view. A refusal by `check` and a failure of `run` roll the transaction back.
+   * outside its view. A refusal by `check` and a failure of `run` roll the transaction back. The
+   * transaction does not expire while the query runs.
    */
   async query<R>(
     query: object,
     caller: string,
-    check: () => Promise<void> | void,
+    check: (tx: Transaction) => Promise<void> | void,
     run: (tx: Transaction, query: any) => Promise<R>,
   ): Promise<R> {
     const txId = txIdOf(query);
     if (txId === undefined) throw new Error('ForwardedTransactions.query: the query carries no txId');
     const held = this.own(txId, caller);
-    this.touch(txId, held);
+    if (held.timer) clearTimeout(held.timer);
+    held.running++;
     try {
-      await check();
+      await check(held.tx);
       return await run(held.tx, withoutTxId(query));
     } catch (err) {
-      await this.drop(txId, held, true);
+      if (!isLinkedError(err, UnresolvedContextError)) await this.drop(txId, held, true);
       throw err;
+    } finally {
+      held.running--;
+      if (this.held.get(txId) === held && held.running === 0) this.touch(txId, held);
     }
   }
 
@@ -128,11 +138,6 @@ export class ForwardedTransactions {
     await this.drop(txId, held, true);
   }
 
-  /** Roll back and forget every transaction (a forwarder that shuts down). */
-  async rollbackAll(): Promise<void> {
-    await Promise.all([...this.held].map(([txId, held]) => this.drop(txId, held, true)));
-  }
-
   private own(txId: string, caller: string): Held {
     const held = typeof txId === 'string' ? this.held.get(txId) : undefined;
     if (!held) throw new TransactionUnknownError(String(txId));
@@ -143,7 +148,7 @@ export class ForwardedTransactions {
   private touch(txId: string, held: Held): void {
     if (held.timer) clearTimeout(held.timer);
     held.timer = setTimeout(() => {
-      void this.drop(txId, held, true);
+      if (!held.running) void this.drop(txId, held, true);
     }, this.timeoutMs);
     held.timer.unref?.();
   }

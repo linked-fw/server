@@ -14,15 +14,18 @@ import {
 import { getRpcExposureMode } from '../utils/rpcExposure.js';
 import { txIdOf } from '@_linked/core/queries/transactionQuery';
 import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
+import { abandonTransactionOf } from '../utils/serverTransactions.js';
 
 /**
  * The builder of an `/api/*` query, wrapped (a query builder is a thenable: resolving an async
  * function with one would run it). A query of a store transaction (a `txId`) is refused (400):
  * transactions run over `/call/@_linked/server`, which holds them; here it would run outside.
+ * The caller's transaction it names is rolled back, as for any refused query of it.
  */
 async function apiBuilder(query: unknown): Promise<{ builder: any }> {
   const builder = toQueryBuilder(query, await resolveQueryCatalog(query));
   if (txIdOf(builder)) {
+    await abandonTransactionOf(query);
     throw new ServerCallError(400, 'A query of a transaction is sent to /call/@_linked/server, not /api');
   }
   return { builder };
