@@ -102,7 +102,7 @@ there do not see what the syncs wrote.
 Switching modes needs clearing first: the syncs never copy data from one mode's place to another's,
 and a sync that finds another mode's data logs one warning and leaves it. The modes, the rule that a
 package's Turtle is the source of its terms, and how to clear are in `@_linked/core`'s README
-("Ontology and shape graphs"). Apps that Create Now manages must run `package` for both.
+("Ontology and shape graphs"). An app whose host reads its package graphs must run `package` for both.
 
 
 ### Where asset URLs come from
@@ -378,7 +378,7 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
   > **Warning: on by default.** Every query of a signed-in user's request sends that user's access
   > token to the data server at `url`. Each proof is for one method and URL and the server cannot
   > make new ones (the key stays with the app), but it learns who the user is. Point `url` only at
-  > a server you trust with your users' identities (for an app CN hosts, CN's gateway). To send
+  > a server you trust with your users' identities (for a hosted app, the host's gateway). To send
   > none, set it off in the dataset's config:
   >
   > ```json
@@ -395,7 +395,7 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
 - `init()` resolves the ping body, which the store also keeps as the readonly `info`
   (`RemoteDatasetPingInfo`, frozen; `{}` when the body is not a JSON object; `undefined` before
   a successful ping and in the no-url form). The generic ping answers `{ok: true, supports}`; a
-  gateway may add fields naming the dataset it serves (CN's adds `projectId`, `branchName`,
+  gateway may add fields naming the dataset it serves (a host's may add `projectId`, `branchName`,
   `slot`, `dataset`, `forked`), so a boot can log where its data goes:
 
   ```ts
@@ -583,7 +583,7 @@ out without `DATA_ROOT`. The route answers 409 unless both `LINKED_ONTOLOGY_GRAP
 
 Before its shape sync at boot, the server:
 
-1. **Registers the installed packages' ontologies** (core `registerInstalledOntologies`): it imports `lib/esm/ontologies/*.register.js` of every linked package it discovered in the app's dependency tree, so a package the app only deep-imports shape files from (`@_linked/schema/shapes/Person`) is synced and checked too, and of every workspace package of the app (`linkedPackage: true` under its `workspaces`), which no package may import (a Create Now clone's `packages/<slug>-ont`). In dev, a package without a built `lib/` registers from `src/ontologies/*.register.ts` through Vite's `ssrLoadModule`; a built app skips it. A register module that fails is logged and the rest go on.
+1. **Registers the installed packages' ontologies** (core `registerInstalledOntologies`): it imports `lib/esm/ontologies/*.register.js` of every linked package it discovered in the app's dependency tree, so a package the app only deep-imports shape files from (`@_linked/schema/shapes/Person`) is synced and checked too, and of every workspace package of the app (`linkedPackage: true` under its `workspaces`), which no package may import (e.g. a host app clone's `packages/<slug>-ont`). In dev, a package without a built `lib/` registers from `src/ontologies/*.register.ts` through Vite's `ssrLoadModule`; a built app skips it. A register module that fails is logged and the rest go on.
 2. **Syncs the ontologies** (core `syncOntologiesRouted`): every registered package's ontology data is written into each dataset the storage routing needs it in (see [Which datasets the syncs write to](#which-datasets-the-syncs-write-to)), where `LINKED_ONTOLOGY_GRAPH` says (one graph per package by default; see [Ontology and shape graphs](#ontology-and-shape-graphs)), so the store's RDFS view infers the class hierarchy. The log line names a shared graph or the default graph when the sync wrote there. A package whose stored hash matches is skipped, so an unchanged sync writes nothing. The log line names the packages written and skipped (a package whose data cannot be read is skipped with core's warning). Sync nodes of packages no longer registered are pruned only with `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true`, the shape sync's orphan policy.
 3. **Checks the shapes** against that hierarchy (core `checkShapeHierarchy`, with every package's `dependencies` and `peerDependencies`). A running app is never stopped by it: each finding is logged, with a count by severity.
 

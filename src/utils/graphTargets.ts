@@ -40,7 +40,7 @@ export const GRAPH_WRITER_ENV = 'LINKED_GRAPH_WRITER';
 
 /**
  * Who writes the app's shape and ontology graphs: `'app'` (the default) the app itself, at boot;
- * `'host'` a host that runs it (Create Now), which reads the
+ * `'host'` a host that runs it, which reads the
  * content through `POST /admin/graph-content` and writes it itself, so the app writes none.
  */
 export type GraphWriter = 'app' | 'host';

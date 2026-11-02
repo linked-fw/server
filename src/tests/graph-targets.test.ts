@@ -124,12 +124,12 @@ describe('the sync targets line', () => {
   it('names a store without an id by the dataset of its endpoint', () => {
     const appData = new (Store as any)();
     const shapes = new (Other as any)();
-    shapes.dataset = 'cn-main';
+    shapes.dataset = 'my-app';
     const before = LinkedStorage.getDefaultDataset();
     LinkedStorage.setDefaultDataset(appData);
     try {
       LinkedStorage.setDatasetForShapes(shapes, NodeShape);
-      expect(line(BOTH)).toContain('Other "cn-main" (every package)');
+      expect(line(BOTH)).toContain('Other "my-app" (every package)');
     } finally {
       LinkedStorage.unsetDatasetForShape?.(NodeShape);
       if (before) LinkedStorage.setDefaultDataset(before);

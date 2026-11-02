@@ -8,7 +8,7 @@ packages: [server, core]
 
 # 001 — Ontology phase: review lows
 
-Source: CN plan 070, independent review of `store-inference` (reports 010-012). The third low (a
+Source: independent review of `store-inference` (reports 010-012). The third low (a
 thrown shape check answered `POST /admin/sync-shapes` with 500) is fixed: report 021.
 
 ## 1. The hierarchy is parsed twice per boot

@@ -9,7 +9,7 @@ packages: [server, core]
 
 # 003 — Shape graph pruning while a package has no `shapes.ttl`
 
-Source: CN plan 071, server report 014.
+Source: server report 014.
 
 ## The gap
 

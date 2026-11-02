@@ -9,7 +9,7 @@ import {
 const ROOT = '/app';
 
 /**
- * A module graph shaped like CN's dev SSR graph: App statically imports a
+ * A module graph shaped like a host app's dev SSR graph: App statically imports a
  * layout, its global stylesheet and the routes module; the routes module
  * imports every page dynamically; the Tailwind stylesheet lists every scanned
  * source file as a dependency.
