@@ -12,8 +12,8 @@
  * - an installed package: its built `lib/esm/data/shapes.ttl` (written by `linked build`); a
  *   package without that file gets no shape graph, and nothing is generated for it;
  * - the app's own packages (the app and its workspace packages): in dev, generated in process
- *   from their source shapes, through Vite's loader, so the core the SSR graph registered the
- *   shapes on writes them (the same bytes as `packageShapesTurtle`, which `linked build` writes);
+ *   from their source shapes, with the copy of core the app's own imports get (through
+ *   `linked start`'s module loader, see utils/packageModules), the one the shapes registered on (the same bytes as `packageShapesTurtle`, which `linked build` writes);
  *   in a built app, their `lib/esm/data/shapes.ttl` when there is one, else generated in process.
  *
  * Kept apart from `LinkedServer` so the choices and the log can be tested without booting a
@@ -21,6 +21,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import {loadPackageModule, type SsrModuleLoader} from './packageModules.js';
 
 /** The orphan policies a booting server may run with. */
 export type BootOrphanScope = 'all' | 'none';
@@ -168,17 +169,17 @@ export function appShapesGraph(
 }
 
 /**
- * In dev, the generator for the app's own packages: core's `packageShapesTurtle` imported through
- * Vite's `ssrLoadModule`, the core the SSR graph registered the source shapes on. Undefined
- * without Vite.
+ * In dev, the generator for the app's own packages: core's `packageShapesTurtle`, from the copy of
+ * core the app's own imports get (see utils/packageModules: through `linked start`'s module
+ * loader, so an installed core is not loaded a second time by Vite). The source shapes the SSR
+ * graph registers are on that copy. Undefined without Vite.
  */
 export function viteShapesTurtleGenerator(
-  vite: {ssrLoadModule?: (url: string) => Promise<unknown>} | undefined | null,
+  vite: SsrModuleLoader,
 ): ((packageName: string) => Promise<string | undefined>) | undefined {
-  const ssrLoadModule = vite?.ssrLoadModule;
-  if (typeof ssrLoadModule !== 'function') return undefined;
+  if (typeof vite?.ssrLoadModule !== 'function') return undefined;
   return async (packageName) => {
-    const mod = (await ssrLoadModule.call(vite, '@_linked/core/shapes/shapesToTurtle')) as {
+    const mod = (await loadPackageModule('@_linked/core/shapes/shapesToTurtle', vite)) as {
       packageShapesTurtle?: (name: string) => string | undefined;
     };
     if (typeof mod?.packageShapesTurtle !== 'function') {
