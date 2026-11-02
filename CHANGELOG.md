@@ -1,5 +1,38 @@
 # @\_linked/server
 
+## 3.14.0
+
+### Minor Changes
+
+- [#223](https://github.com/linked-fw/server/pull/223) [`47f7d72`](https://github.com/linked-fw/server/commit/47f7d7294ef433e46c1098576286a5311ad55fb5) Thanks [@flyon](https://github.com/flyon)! - `POST /admin/sync-shapes` is removed from the admin channel. A host that changed an app's shape
+  code asks `POST /admin/graph-content {reload: [packages]}`: it reloads those packages (in dev),
+  registers the ontologies again, runs the shape check and answers the content of the app's graphs,
+  writing nothing; the host writes them (`LINKED_GRAPH_WRITER=host`). The route answers 404, and
+  `ShapeSyncResult`, `parseSyncShapesBody`, the `syncShapes` admin handler and
+  `syncOntologiesThenShapes` are gone.
+
+  The env boot flags `LINKED_SYNC_SHAPES_ON_BOOT` and `LINKED_SYNC_ONTOLOGIES_ON_BOOT` are removed.
+  The boot syncs the shapes and the ontologies when the app writes its own graphs
+  (`LINKED_GRAPH_WRITER` unset or `app`) and `linked.config` does not set `syncShapesOnBoot: false`,
+  the one switch for both. `shapeSyncOn(configFlag)` takes the config switch only;
+  `bootSyncsOntologies` is gone.
+
+- [#223](https://github.com/linked-fw/server/pull/223) [`c7e09cc`](https://github.com/linked-fw/server/commit/c7e09cc4e8c1d04d418e5d730890e517f1406c62) Thanks [@flyon](https://github.com/flyon)! - The boot's ontology and shape syncs follow the app's storage
+  routing through core's routed syncs: each package's graphs go into every dataset the routing needs
+  them in, a graph routing no longer sends to the default dataset is dropped there, and one left in
+  another dataset is reported. With pins the boot logs one line naming the target datasets; the
+  earlier warning that the syncs write into the default dataset only is gone.
+
+  New `LINKED_GRAPH_WRITER=app|host`: under `host` the app writes no shape or ontology graph, and
+  `GET /admin/routes` reports `graphWriter`. New `POST /admin/graph-content {packages?, reload?}` on
+  the admin channel answers, writing nothing, each package's shape and ontology graph and the app's
+  own shape graph as `{graph, mediaType, text, hash, sources}`: the exact bytes and hash the
+  `'package'`-mode sync writes.
+
+- [#223](https://github.com/linked-fw/server/pull/223) [`34ac38d`](https://github.com/linked-fw/server/commit/34ac38d7f5f7a8c695504598bd4b7b82dca77485) Thanks [@flyon](https://github.com/flyon)! - One read method, for `@_linked/core`'s `IDataset.readQuery` (core 2.46, DSL-JSON 1.10; the `@_linked/core` range is raised to `^2.46.0`). The generic provider's `selectQuery` and `askQuery` endpoints are replaced by one, `POST /call/@_linked/server/readQuery` (`@callable('public')`), which answers a select, a count or an ask: the body's kind is read before it is decoded (`readKindOfJSON`) and picks the access rule (`select` for a select or a count, `ask` for an ask), and the decoded query must be of that kind. A triples or terms read, a graph query and a write posted to it answer 400 (and roll back the caller's transaction they name). `/api/select` checks its read by kind the same way (an ask posted there is now answered, under the ask rule, where it was refused with 400; a body naming a transaction that does not decode now rolls it back). A store's function `read` rule sees `operation: 'ask'` for an ask, as it did from `askQuery`. `RemoteDataset` implements `readQuery` (select, count and ask go to the `readQuery` endpoint; triples and terms reads are refused without being sent) and declares `supports: ['ask']`, plus `'transactions'` after a ping that lists them. `graphQuery` and the write endpoints are unchanged. A client on an older `@_linked/server` gets `501 No provider` for its reads from this server.
+
+- [#223](https://github.com/linked-fw/server/pull/223) [`6538642`](https://github.com/linked-fw/server/commit/653864235823695adbc1a1a21739226bace334bc) Thanks [@flyon](https://github.com/flyon)! - Store transactions over `/call`: `beginTransaction`, `commit(txId)` and `rollback(txId)` on the generic provider, and queries that carry a `txId` run in the caller's transaction (checked against the store rules as if sent alone; a refusal rolls it back). The server holds transactions only when every dataset `LinkedStorage` routes to declares `'transactions'`, and its `ping` then answers `supports: ['transactions']`. A txId is bound to the session's user; another caller's is refused. `RemoteDataset` declares `'transactions'` after such a ping (the no-url form now pings its backend for this), and gains `beginTransaction`, `commit` and `rollback`. A query with a txId on `/api/*`, and a graph query with one, are refused; any refusal of a request naming the caller's own transaction rolls it back.
+
 ## 3.13.0
 
 ### Minor Changes
