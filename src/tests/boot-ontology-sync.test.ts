@@ -3,14 +3,12 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  bootSyncsOntologies,
   loadOntologyCore,
   graphsWrittenAndDropped,
   ontologyPackageDirs,
   runOntologyPhase,
   sourceModuleImporter,
   shapeSyncOn,
-  syncOntologiesThenShapes,
   type OntologyCore,
 } from '../utils/ontologySync.js';
 import { readDependencyLists } from '../utils/linkedDependencies.js';
@@ -88,20 +86,10 @@ function fakeCore({
 const quiet = { log: () => {}, warn: () => {} };
 
 describe('the boot switch', () => {
-  it('follows the shape sync switch', () => {
-    expect(shapeSyncOn({}, undefined)).toBe(true);
-    expect(shapeSyncOn({}, false)).toBe(false);
-    expect(shapeSyncOn({ LINKED_SYNC_SHAPES_ON_BOOT: 'false' }, true)).toBe(false);
-    expect(bootSyncsOntologies({})).toBe(true);
-    expect(bootSyncsOntologies({}, false)).toBe(false);
-    expect(bootSyncsOntologies({ LINKED_SYNC_SHAPES_ON_BOOT: 'false' })).toBe(false);
-  });
-
-  it('has its own opt-out, LINKED_SYNC_ONTOLOGIES_ON_BOOT=false, which leaves shape sync on', () => {
-    const env = { LINKED_SYNC_ONTOLOGIES_ON_BOOT: 'false' };
-    expect(bootSyncsOntologies(env)).toBe(false);
-    expect(shapeSyncOn(env, undefined)).toBe(true);
-    expect(bootSyncsOntologies({ LINKED_SYNC_ONTOLOGIES_ON_BOOT: 'true' })).toBe(true);
+  it("is linked.config's syncShapesOnBoot, one switch for the shape and the ontology sync: off only when false", () => {
+    expect(shapeSyncOn(undefined)).toBe(true);
+    expect(shapeSyncOn(true)).toBe(true);
+    expect(shapeSyncOn(false)).toBe(false);
   });
 });
 
@@ -305,60 +293,6 @@ describe('runOntologyPhase: where the sync wrote', () => {
   });
 });
 
-describe('syncOntologiesThenShapes (the host re-sync)', () => {
-  it('runs the ontology phase, then the shape sync, and merges their results', async () => {
-    const order: string[] = [];
-    const result = await syncOntologiesThenShapes(
-      async () => {
-        order.push('ontologies');
-        return { ontologies: { written: ['@x/a'], skipped: [] }, shapeCheck: { errors: 0, warnings: 1 } };
-      },
-      async () => {
-        order.push('shapes');
-        return { written: 2, orphanScope: 'none' as const };
-      }
-    );
-    expect(order).toEqual(['ontologies', 'shapes']);
-    expect(result).toEqual({
-      written: 2,
-      orphanScope: 'none',
-      ontologies: { written: ['@x/a'], skipped: [] },
-      shapeCheck: { errors: 0, warnings: 1 },
-    });
-  });
-
-  it('runs the shape sync after a failed ontology sync, then fails with the ontology error', async () => {
-    let shapesRan = false;
-    await expect(
-      syncOntologiesThenShapes(
-        async () => ({
-          ontologies: { written: [], skipped: [] },
-          shapeCheck: { errors: 0, warnings: 0 },
-          failure: new Error('store unreachable'),
-        }),
-        async () => {
-          shapesRan = true;
-          return { written: 0 };
-        }
-      )
-    ).rejects.toThrow('store unreachable');
-    expect(shapesRan).toBe(true);
-  });
-
-  it('answers with a shape check that threw instead of failing, when both syncs succeeded', async () => {
-    const { core } = fakeCore({ checkFails: true });
-    const result = await syncOntologiesThenShapes(
-      () => runOntologyPhase({}, { core, sync: true, orphanScope: 'none', ...quiet }),
-      async () => ({ written: 1 })
-    );
-    expect(result).toEqual({
-      written: 1,
-      ontologies: { written: ['@x/a'], skipped: ['@x/b'], graphs: [GA], droppedGraphs: [] },
-      shapeCheck: { errors: 0, warnings: 0, failed: 'check bug' },
-    });
-  });
-});
-
 describe('readDependencyLists', () => {
   it('reads dependencies and peerDependencies of the app and of every package', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deplists-'));
@@ -506,5 +440,80 @@ describe('runOntologyPhase: the graphs the sync wrote', () => {
     stop();
     await dispatchGraphQuery(q('http://e/g3'), ds);
     expect(seenGraphs).toEqual(['http://e/g1']);
+  });
+});
+
+describe('runOntologyPhase, routed', () => {
+  const GB = 'https://linked.cm/pkg/x-b/graph/ontology';
+
+  /** A core whose routed sync wrote x-a into "main" and x-b into both datasets. */
+  function routedCore(failed: Array<{ dataset: string; error: string }> = []) {
+    const listeners: Array<{ ds: unknown; on: (q: { kind: string; graph: string }, s: Promise<unknown>) => void }> = [];
+    const main = { id: 'main' };
+    const two = { id: 'two' };
+    const calls: string[] = [];
+    const core: OntologyCore = {
+      syncOntologies: async () => {
+        throw new Error('not called');
+      },
+      routedDatasets: () => [main, two],
+      observeGraphQueries: (ds, on) => {
+        const entry = { ds, on };
+        listeners.push(entry);
+        return () => listeners.splice(listeners.indexOf(entry), 1);
+      },
+      syncOntologiesRouted: async (options) => {
+        calls.push(`routed ${options.orphanScope}`);
+        const emit = (ds: unknown, graph: string) =>
+          listeners.filter((l) => l.ds === ds).forEach((l) => l.on({ kind: 'graph_create', graph }, Promise.resolve()));
+        emit(main, GA);
+        emit(main, GB);
+        emit(two, GB);
+        return {
+          targets: [
+            { dataset: 'Store "main"', result: { written: ['x-a', 'x-b'], skipped: [], pruned: [], target: 'package' } },
+            { dataset: 'Store "two"', result: { written: ['x-b'], skipped: [], pruned: [], target: 'package' } },
+          ],
+          pruned: [],
+          leftovers: [],
+          failed,
+        };
+      },
+      checkShapeHierarchy: async () => {
+        calls.push('check');
+        return [];
+      },
+      loadOntologyHierarchy: async () => {
+        calls.push('hierarchy');
+      },
+    };
+    return { core, calls, listeners };
+  }
+
+  it('a pinned package is written into both datasets; one line names them; every dataset is observed', async () => {
+    const { core, calls, listeners } = routedCore();
+    const lines: string[] = [];
+    const result = await runOntologyPhase({ id: 'main' }, { core, sync: true, routed: true, orphanScope: 'none', log: (m) => lines.push(m), warn: () => {} });
+    expect(calls).toEqual(['routed none', 'check']);
+    expect(listeners).toEqual([]);
+    expect(result.ontologies).toEqual({
+      written: ['x-a', 'x-b'],
+      skipped: [],
+      graphs: [GA, GB],
+      droppedGraphs: [],
+      datasets: ['Store "main"', 'Store "two"'],
+      prunedGraphs: [],
+      leftovers: [],
+    });
+    expect(lines).toEqual([
+      `[LinkedServer] ontology sync: written x-a, x-b; graphs written ${GA}, ${GB}; datasets Store "main", Store "two"`,
+    ]);
+  });
+
+  it('a failed dataset is the phase failure; the hierarchy is set and the check runs', async () => {
+    const { core, calls } = routedCore([{ dataset: 'Store "two"', error: 'down' }]);
+    const result = await runOntologyPhase({ id: 'main' }, { core, sync: true, routed: true, orphanScope: 'none', log: () => {}, warn: () => {} });
+    expect(result.failure?.message).toBe('the ontology sync failed in Store "two": down');
+    expect(calls).toEqual(['routed none', 'check']);
   });
 });

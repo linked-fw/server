@@ -39,7 +39,6 @@ async function serve(secret: string | undefined): Promise<string> {
   app.use(express.json());
   registerAdminRoutes(app, secret, {
     exit: () => {},
-    syncShapes: async () => ({ written: 0 }),
   });
   const server = await new Promise<any>((resolve) => {
     const s = app.listen(0, () => resolve(s));

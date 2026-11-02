@@ -79,10 +79,10 @@ class RecordingSparql extends (SparqlDataset as any) {
   constructor() {
     super({} as any);
   }
-  selectQuery(q: any) {
+  readQuery(q: any) {
     this.builders.push(q);
     this.calledIn.push(getActiveShapeCatalog());
-    return super.selectQuery(q);
+    return super.readQuery(q);
   }
   createQuery(q: any) {
     this.builders.push(q);
@@ -169,7 +169,7 @@ describe('query-plane catalog resolver', () => {
     const base = await listen();
     const json = selectJson();
 
-    const res = await call(base, 'selectQuery', json);
+    const res = await call(base, 'readQuery', json);
     expect(res.status).toBe(200);
     expect(seen).toEqual([json]);
     expect(ds.builders).toHaveLength(1);
@@ -198,10 +198,10 @@ describe('query-plane catalog resolver', () => {
     setQueryCatalogResolver(() => undefined);
     const base = await listen();
     const json = (GlobalNote as any).select((n: any) => n.text).toJSON();
-    expect((await call(base, 'selectQuery', json)).status).toBe(200);
+    expect((await call(base, 'readQuery', json)).status).toBe(200);
     expect(catalogOf(ds.builders[0])).toBeUndefined();
     // a catalog-only shape is unknown there
-    expect((await call(base, 'selectQuery', selectJson())).status).toBe(400);
+    expect((await call(base, 'readQuery', selectJson())).status).toBe(400);
   });
 });
 
@@ -209,10 +209,10 @@ describe('without a resolver', () => {
   it('behaves as before: global shapes answer, a catalog-only shape is an invalid query', async () => {
     const base = await listen();
     const json = (GlobalNote as any).select((n: any) => n.text).toJSON();
-    expect((await call(base, 'selectQuery', json)).status).toBe(200);
+    expect((await call(base, 'readQuery', json)).status).toBe(200);
     expect((await api(base, 'select', json)).status).toBe(200);
     expect(catalogOf(ds.builders[0])).toBeUndefined();
-    const unknown = await call(base, 'selectQuery', selectJson());
+    const unknown = await call(base, 'readQuery', selectJson());
     expect(unknown).toEqual({ status: 400, json: { error: 'Invalid query' } });
     expect((await api(base, 'select', selectJson())).status).toBe(400);
     await expect(resolveQueryCatalog(json)).resolves.toBeUndefined();
@@ -229,7 +229,7 @@ describe('a live builder from backend code', () => {
     expect(toQueryBuilder(builder)).toBe(builder);
     await expect(resolveQueryCatalog(builder)).resolves.toBeUndefined();
     const provider = new LincdServerBackendProvider({} as any, {} as any);
-    await provider.selectQuery(builder);
+    await provider.readQuery(builder);
     expect(resolver).not.toHaveBeenCalled();
     expect(ds.builders).toEqual([builder]);
     expect(ds.sparql[0]).toContain(NAME_PATH);
@@ -242,7 +242,7 @@ describe('a resolver that throws', () => {
       throw new Error('store down');
     });
     const base = await listen();
-    expect(await call(base, 'selectQuery', selectJson())).toEqual({
+    expect(await call(base, 'readQuery', selectJson())).toEqual({
       status: 500,
       json: { error: 'Shape catalog unavailable' },
     });
@@ -259,7 +259,7 @@ describe('a resolver that throws', () => {
       throw new ServerCallError(404, 'No such branch');
     });
     const base = await listen();
-    expect(await call(base, 'selectQuery', selectJson())).toEqual({
+    expect(await call(base, 'readQuery', selectJson())).toEqual({
       status: 404,
       json: { error: 'No such branch' },
     });
@@ -279,10 +279,10 @@ describe('the access check', () => {
     });
     setQueryCatalogResolver(() => catalog);
     const base = await listen();
-    expect((await call(base, 'selectQuery', selectJson('secret'))).status).toBe(403);
+    expect((await call(base, 'readQuery', selectJson('secret'))).status).toBe(403);
     expect((await api(base, 'select', selectJson('secret'))).status).toBe(403);
     expect(ds.sparql).toHaveLength(0);
-    expect((await call(base, 'selectQuery', selectJson('name'))).status).toBe(200);
+    expect((await call(base, 'readQuery', selectJson('name'))).status).toBe(200);
     expect(seenShapes.every((s) => s.includes(PROJECT_PERSON))).toBe(true);
     expect(ds.sparql).toHaveLength(1);
   });

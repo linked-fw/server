@@ -5,15 +5,13 @@ import type { AddressInfo } from 'net';
 // [fuseki] The ontology phase of an app whose store is a `RemoteDataset` pointed at a linked
 // server's generic plane, which runs graph queries on an inferring Fuseki (image `6.2.0-2`,
 // which builds its hierarchy from the graph registry). The first run writes one graph per
-// registered package, with its record; the second, through the control channel's
-// `POST /admin/sync-shapes`, skips them all. Runs only when FUSEKI_BASE_URL names a store;
+// registered package, with its record; the second (a second boot) skips them all. Runs only when FUSEKI_BASE_URL names a store;
 // it creates its own dataset there and deletes it afterwards.
 
 const FUSEKI = process.env.FUSEKI_BASE_URL;
 const describeLive = FUSEKI ? describe : describe.skip;
 const ADMIN = `Basic ${Buffer.from(`admin:${process.env.FUSEKI_ADMIN_PASSWORD || 'admin'}`).toString('base64')}`;
 const DATASET = `server-graph-sync-${process.pid}-${Date.now()}`;
-const SECRET = 'live-admin-secret';
 
 process.env.SITE_ROOT ??= 'http://app.test:4000';
 const { LinkedStorage } = await import('@_linked/core/utils/LinkedStorage');
@@ -26,8 +24,7 @@ const { LinkedServer, registerCallRoutes } = await import('../shapes/LinkedServe
 const { default: LincdServerBackendProvider } = await import('../backend.js');
 const { createJsonBodyParser } = await import('../utils/jsonBodyParser.js');
 const { RemoteDataset } = await import('../shapes/quadstores/RemoteDataset.js');
-const { registerAdminRoutes } = await import('../utils/adminChannel.js');
-const { loadOntologyCore, runOntologyPhase, syncOntologiesThenShapes } = await import('../utils/ontologySync.js');
+const { loadOntologyCore, runOntologyPhase } = await import('../utils/ontologySync.js');
 
 /** A Fuseki dataset over plain HTTP. */
 class LiveFuseki extends (SparqlDataset as any) {
@@ -135,27 +132,9 @@ describeLive('[fuseki] the ontology phase through RemoteDataset and the generic 
     await store.executeSparqlUpdate(`INSERT DATA { <${EX}rex> a <${EX}a/Dog> }`);
     expect(await ask(`ASK { <${EX}rex> a <${EX}a/Animal> }`)).toBe(true);
 
-    const app = express();
-    app.use(express.json());
-    registerAdminRoutes(app, SECRET, {
-      exit: () => {},
-      syncShapes: () =>
-        syncOntologiesThenShapes(
-          () => runOntologyPhase(remote, { core, sync: true, orphanScope: 'none', log, warn: () => {} }),
-          async () => ({ written: 0 }),
-        ),
-    });
-    const s = await new Promise<any>((resolve) => {
-      const srv = app.listen(0, () => resolve(srv));
-    });
-    servers.push(s);
-    const res = await fetch(`http://127.0.0.1:${(s.address() as AddressInfo).port}/admin/sync-shapes`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-app-admin-secret': SECRET },
-      body: '{}',
-    });
-    expect(res.status).toBe(200);
-    const second = await res.json();
+    // A second boot: every package's graph is unchanged, so nothing is written.
+    const second = await runOntologyPhase(remote, { core, sync: true, orphanScope: 'none', log, warn: () => {} });
+    expect(second.failure).toBeUndefined();
     expect(second.ontologies.written).toEqual([]);
     expect(second.ontologies.graphs).toEqual([]);
     expect(second.ontologies.skipped).toEqual(expect.arrayContaining(PACKAGES));

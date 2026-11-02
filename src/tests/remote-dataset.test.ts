@@ -26,6 +26,7 @@ const { runWithCallContext, runAsSystem } = await import('@_linked/server-utils/
 const { LinkedServer, registerCallRoutes } = await import('../shapes/LinkedServer.js');
 const { default: LincdServerBackendProvider } = await import('../backend.js');
 const { packageName } = await import('../package.js');
+const { queryJson } = await import('./read-double.js');
 
 const URL_BASE = 'http://cn.test:4040/gateway';
 const TOKEN = 'b'.repeat(64);
@@ -33,12 +34,9 @@ const IRI = 'http://example.org/shape-1';
 
 type Call = { url: string; init: RequestInit };
 
-// The store reads nothing from a query but `toJSON()`. The mutation builders and the count
-// envelope refuse to serialize without a registered shape, which no test here boots, so those
-// use a stand-in that returns the DSL-JSON a real builder would.
-function queryJson(json: Record<string, unknown>) {
-  return { toJSON: () => json } as any;
-}
+// The store reads nothing from a query but its kind and `toJSON()`. The mutation builders and
+// the count envelope refuse to serialize without a registered shape, which no test here boots,
+// so those use a stand-in (`queryJson`) that returns the DSL-JSON a real builder would.
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(body === undefined ? null : JSON.stringify(body), {
@@ -116,10 +114,22 @@ describe('RemoteDataset config', () => {
     }
   });
 
-  it('without a url, init() resolves at once and fetches nothing', async () => {
-    const calls = stubFetch(() => jsonResponse(200, { ok: true }));
-    await expect(new RemoteDataset({ token: TOKEN }).init()).resolves.toBeUndefined();
-    expect(calls).toHaveLength(0);
+  it("without a url, init() asks the backend's ping only for transactions, without the token", async () => {
+    const calls = stubFetch(() => jsonResponse(200, { ok: true, supports: ['transactions'] }));
+    const store = new RemoteDataset({ token: TOKEN });
+    await expect(store.init()).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toMatch(/\/call\/@_linked\/server\/ping$/);
+    expect(JSON.stringify(calls[0].init.headers)).not.toContain(TOKEN);
+    expect(store.supports).toEqual(['ask', 'transactions']);
+    expect(store.info).toBeUndefined();
+  });
+
+  it('without a url, a failed ping leaves transactions off and init() resolves', async () => {
+    stubFetch(() => jsonResponse(500, { error: 'boom' }));
+    const store = new RemoteDataset({});
+    await expect(store.init()).resolves.toBeUndefined();
+    expect(store.supports).toEqual(['ask']);
   });
 
   it('without a url, queries go through Server.call and ignore the token', async () => {
@@ -130,37 +140,54 @@ describe('RemoteDataset config', () => {
       return true;
     };
     const query = AskBuilder.forNode(IRI);
-    await expect(new RemoteDataset({ token: TOKEN }).askQuery(query)).resolves.toBe(true);
+    await expect(new RemoteDataset({ token: TOKEN }).readQuery(query)).resolves.toBe(true);
     expect(calls).toHaveLength(0);
-    expect(serverCalls).toEqual([[packageName, { method: 'askQuery', rejectOnError: true }, query.toJSON()]]);
+    expect(serverCalls).toEqual([[packageName, { method: 'readQuery', rejectOnError: true }, query.toJSON()]]);
   });
 });
 
 describe('RemoteDataset url form: query methods', () => {
-  it('selectQuery posts {args: [json]} with the bearer token and resolves the body', async () => {
+  it('a select posts {args: [json]} to readQuery with the bearer token and resolves the body', async () => {
     const rows = [{ id: IRI, label: 'one' }];
     const calls = stubFetch(() => jsonResponse(200, rows));
     const query = SelectBuilder.from(NodeShape).for(IRI);
 
-    await expect(store().selectQuery(query as any)).resolves.toEqual(rows);
+    await expect(store().readQuery(query as any)).resolves.toEqual(rows);
     expect(calls).toHaveLength(1);
-    expectWire(calls[0], 'selectQuery', [query.toJSON()]);
+    expectWire(calls[0], 'readQuery', [query.toJSON()]);
   });
 
-  it('a count goes through selectQuery and resolves to the number', async () => {
+  it('a count goes to readQuery and resolves to the number', async () => {
     const calls = stubFetch(() => jsonResponse(200, 7));
     const count = queryJson({ v: '1.1', op: 'count', shape: IRI });
 
-    await expect(store().selectQuery(count)).resolves.toBe(7);
-    expectWire(calls[0], 'selectQuery', [count.toJSON()]);
+    await expect(store().readQuery(count)).resolves.toBe(7);
+    expectWire(calls[0], 'readQuery', [count.toJSON()]);
   });
 
-  it('askQuery posts to askQuery and resolves the boolean', async () => {
+  it('an ask goes to readQuery and resolves the boolean', async () => {
     const calls = stubFetch(() => jsonResponse(200, false));
     const query = AskBuilder.forNode(IRI);
 
-    await expect(store().askQuery(query)).resolves.toBe(false);
-    expectWire(calls[0], 'askQuery', [query.toJSON()]);
+    await expect(store().readQuery(query)).resolves.toBe(false);
+    expectWire(calls[0], 'readQuery', [query.toJSON()]);
+    expect(sentBody(calls[0]).args[0].op).toBe('ask');
+  });
+
+  it("an ask run through core's dispatch goes out as an ask, not a select LIMIT 1", async () => {
+    const calls = stubFetch(() => jsonResponse(200, true));
+    await expect(AskBuilder.forNode(IRI).exec(store())).resolves.toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(sentBody(calls[0]).args[0].op).toBe('ask');
+  });
+
+  it.each([
+    ['triples', { kind: 'triples', subject: IRI }],
+    ['terms', { kind: 'triples_terms', subject: IRI, predicate: IRI, objects: [IRI] }],
+  ] as const)('a %s read is refused, unsent', async (_label, query) => {
+    const calls = stubFetch(() => jsonResponse(200, []));
+    await expect(store().readQuery(query as any)).rejects.toThrow(/does not answer/);
+    expect(calls).toHaveLength(0);
   });
 
   it.each([
@@ -182,8 +209,8 @@ describe('RemoteDataset url form: query methods', () => {
 
   it('sends no Authorization header without a token', async () => {
     const calls = stubFetch(() => jsonResponse(200, []));
-    await store({ token: '' }).selectQuery(queryJson({ op: 'select' }));
-    await new RemoteDataset({ url: URL_BASE }).selectQuery(queryJson({ op: 'select' }));
+    await store({ token: '' }).readQuery(queryJson({ op: 'select' }));
+    await new RemoteDataset({ url: URL_BASE }).readQuery(queryJson({ op: 'select' }));
     for (const call of calls) {
       expect((call.init.headers as Record<string, string>).Authorization).toBeUndefined();
     }
@@ -197,7 +224,7 @@ describe('RemoteDataset url form: query methods', () => {
     (Server as any).call = serverCall;
     try {
       const calls = stubFetch(() => jsonResponse(200, ['remote']));
-      await expect(store().selectQuery(queryJson({ op: 'select' }))).resolves.toEqual(['remote']);
+      await expect(store().readQuery(queryJson({ op: 'select' }))).resolves.toEqual(['remote']);
       await store().init();
       expect(calls).toHaveLength(2);
       expect(localServer.callBackendMethod).not.toHaveBeenCalled();
@@ -303,7 +330,7 @@ describe('RemoteDataset url form: init()', () => {
     expect(onPing.status).toBe(status);
     expect(onPing.code).toBe('invalid-credential');
 
-    const onQuery = await caught(store().selectQuery(queryJson({ op: 'select' })));
+    const onQuery = await caught(store().readQuery(queryJson({ op: 'select' })));
     expect(onQuery).toBeInstanceOf(RemoteDatasetUnauthorizedError);
   });
 });
@@ -324,7 +351,7 @@ describe('RemoteDataset url form: other errors', () => {
 
   it('a 404 on a query is a plain RemoteDatasetError without a code', async () => {
     stubFetch(() => jsonResponse(404, { error: 'not found' }));
-    const err = await caught(store().selectQuery(queryJson({ op: 'select' })));
+    const err = await caught(store().readQuery(queryJson({ op: 'select' })));
     expect(err.constructor).toBe(RemoteDatasetError);
     expect(err.code).toBeUndefined();
   });
@@ -340,7 +367,7 @@ describe('RemoteDataset url form: other errors', () => {
     expect(onInit).toBeInstanceOf(RemoteDatasetUnreachableError);
     expect(onInit.url).toBe('');
     expect(onInit.status).toBe(0);
-    const onQuery = await caught(s.selectQuery(queryJson({ op: 'select' })));
+    const onQuery = await caught(s.readQuery(queryJson({ op: 'select' })));
     expect(onQuery).toBeInstanceOf(RemoteDatasetUnreachableError);
     expect(onQuery.url).toBe('');
     expect(calls).toHaveLength(0);
@@ -400,15 +427,15 @@ describe('RemoteDataset url form: the user token', () => {
     const calls = stubFetch(() => jsonResponse(200, true));
     const query = AskBuilder.forNode(IRI);
     await runWithCallContext(signedIn(SID), async () => {
-      await store().askQuery(query);
-      await store().askQuery(query);
+      await store().readQuery(query);
+      await store().readQuery(query);
     });
     expect(sentHeaders(calls[0])[USER_TOKEN_HEADER]).toBe('user-at');
     expect(sentHeaders(calls[0]).DPoP).toBe('proof-' + (proofs - 1));
     expect(sentHeaders(calls[1]).DPoP).toBe('proof-' + proofs);
     expect(sentHeaders(calls[0]).Authorization).toBe(`Bearer ${TOKEN}`);
     expect(seen[0].request.linkedAuth.sid).toBe(SID);
-    expect(seen[0].target).toEqual({ method: 'POST', url: `${URL_BASE}/call/@_linked/server/askQuery` });
+    expect(seen[0].target).toEqual({ method: 'POST', url: `${URL_BASE}/call/@_linked/server/readQuery` });
   });
 
   it('sends neither in a system context, for an anonymous request, outside any call, or without the hook', async () => {
@@ -416,13 +443,13 @@ describe('RemoteDataset url form: the user token', () => {
     const calls = stubFetch(() => jsonResponse(200, true));
     const query = AskBuilder.forNode(IRI);
     // A system context opened from inside a signed-in request still has no user.
-    await runWithCallContext(signedIn(SID), () => runAsSystem(() => store().askQuery(query), 'job'));
-    await runWithCallContext(signedIn(undefined), () => store().askQuery(query));
-    await store().askQuery(query);
+    await runWithCallContext(signedIn(SID), () => runAsSystem(() => store().readQuery(query), 'job'));
+    await runWithCallContext(signedIn(undefined), () => store().readQuery(query));
+    await store().readQuery(query);
     delete hooks[USER_TOKEN_HEADERS_HOOK];
-    await runWithCallContext(signedIn(SID), () => store().askQuery(query));
+    await runWithCallContext(signedIn(SID), () => store().readQuery(query));
     expect(calls).toHaveLength(4);
-    for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
+    for (const call of calls) expectWire(call, 'readQuery', [query.toJSON()]);
   });
 
   it('a hook that throws or answers something else sends neither; the query still goes, one warning', async () => {
@@ -440,10 +467,10 @@ describe('RemoteDataset url form: the user token', () => {
     ];
     for (const answer of answers) {
       installHook(answer);
-      await runWithCallContext(signedIn(SID), () => store().askQuery(query));
+      await runWithCallContext(signedIn(SID), () => store().readQuery(query));
     }
     expect(calls).toHaveLength(answers.length);
-    for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
+    for (const call of calls) expectWire(call, 'readQuery', [query.toJSON()]);
     expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
     for (const call of warn.mock.calls) expect(String(call[0])).not.toContain('user-at');
   });
@@ -461,18 +488,18 @@ describe('RemoteDataset url form: the user token', () => {
     const query = AskBuilder.forNode(IRI);
     expect(store().forwardUserToken).toBe(true);
     await runWithCallContext(signedIn(SID), async () => {
-      await store({ forwardUserToken: false }).askQuery(query);
-      await store({ forwardUserToken: 'false' }).askQuery(query);
+      await store({ forwardUserToken: false }).readQuery(query);
+      await store({ forwardUserToken: 'false' }).readQuery(query);
     });
     expect(calls).toHaveLength(2);
-    for (const call of calls) expectWire(call, 'askQuery', [query.toJSON()]);
+    for (const call of calls) expectWire(call, 'readQuery', [query.toJSON()]);
     expect(seen).toHaveLength(0);
   });
 
   it('never follows a redirect: the 3xx is the answer, an error', async () => {
     installHook();
     const calls = stubFetch(() => new Response(null, { status: 307, headers: { location: 'https://elsewhere.test/q' } }));
-    const err = await runWithCallContext(signedIn(SID), () => caught(store().askQuery(AskBuilder.forNode(IRI))));
+    const err = await runWithCallContext(signedIn(SID), () => caught(store().readQuery(AskBuilder.forNode(IRI))));
     expect(calls).toHaveLength(1);
     expect(calls[0].init.redirect).toBe('manual');
     expect(err).toBeInstanceOf(RemoteDatasetError);
@@ -482,7 +509,7 @@ describe('RemoteDataset url form: the user token', () => {
   it('no error message contains the user token or the proof', async () => {
     installHook();
     stubFetch(() => jsonResponse(401, { error: 'invalid user token', code: 'invalid-user-token' }));
-    const err = await runWithCallContext(signedIn(SID), () => caught(store().askQuery(AskBuilder.forNode(IRI))));
+    const err = await runWithCallContext(signedIn(SID), () => caught(store().readQuery(AskBuilder.forNode(IRI))));
     expect(err).toBeInstanceOf(RemoteDatasetError);
     expect(err.message).not.toContain('user-at');
     expect(err.message).not.toContain('proof-');
@@ -522,10 +549,10 @@ describe('ping over the call routes', () => {
       body: JSON.stringify({ args: [] }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, supports: [] });
   });
 
   it('lets a RemoteDataset pointed at the server init()', async () => {
-    await expect(new RemoteDataset({ url: `${base}/` }).init()).resolves.toEqual({ ok: true });
+    await expect(new RemoteDataset({ url: `${base}/` }).init()).resolves.toEqual({ ok: true, supports: [] });
   });
 });

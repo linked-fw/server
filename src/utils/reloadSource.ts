@@ -3,7 +3,7 @@
  * `ssrLoadModule` of the package reads them from disk again.
  *
  * Vite's watcher does this too when a file changes, but asynchronously: a host
- * that has just written a file and asks the app to re-sync its shapes cannot rely
+ * that has just written a file and asks the app for its graph content cannot rely
  * on the watcher having seen it. Invalidating a module also invalidates its
  * importers, so a changed shapes barrel reaches the package entry that imports it,
  * and a new shape module the barrel now imports is loaded with it.

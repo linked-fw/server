@@ -25,6 +25,7 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Without `url`](#without-url)
   - [With `url`](#with-url)
   - [`ping`](#ping)
+  - [Store transactions](#store-transactions)
   - [Shape catalog per request](#shape-catalog-per-request)
 - [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
 - [Host control channel (`/admin/*`)](#host-control-channel-admin)
@@ -314,7 +315,7 @@ Export path `@_linked/server/shapes/quadstores/RemoteDataset` (named export `Rem
 | Answered by | this app's own backend | a remote data server, e.g. a host's gateway |
 | Sends through | `Server.call`'s package form (`/call/@_linked/server/<method>`); on a backend, `Server`'s local shortcut | `globalThis.fetch` to `{url}/call/@_linked/server/<method>`, never `Server` |
 | Authenticated by | the user's session | `Authorization: Bearer <token>` |
-| `init()` | resolves at once | posts `ping`, throws a typed error when the server cannot be used |
+| `init()` | asks the backend's `ping` for transactions only, resolves `undefined` (a failed ping leaves them off) | posts `ping`, throws a typed error when the server cannot be used |
 | Typical config | `linked.frontend.datasets.json` | `linked.backend.datasets.json` |
 
 ```typescript
@@ -349,10 +350,16 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
 ```
 
 - Each method posts `{"args": [<query.toJSON()>]}` to `{url}/call/@_linked/server/<method>`
-  (`selectQuery`, which also carries counts, `askQuery`, `updateQuery`, `createQuery`,
-  `deleteQuery`) with `Content-Type` and `Accept` set to `application/json` and, when `token` is
-  non-empty, `Authorization: Bearer <token>`. It resolves the parsed body; `null` is a valid
-  result. Nothing is retried, so a write is never applied twice.
+  (`readQuery` for every read: a select, a count or an ask, told apart by the DSL-JSON `op`;
+  `updateQuery`, `createQuery`, `deleteQuery`; `graphQuery` for a graph query) with
+  `Content-Type` and `Accept` set to `application/json` and, when `token` is non-empty,
+  `Authorization: Bearer <token>`. It resolves the parsed body; `null` is a valid result. Nothing
+  is retried, so a write is never applied twice. The store declares `supports: ['ask']` (plus
+  `'transactions'`, below); a triples or terms read is refused without being sent, as the
+  server's `readQuery` answers neither.
+- The server's `readQuery` checks a read under the access rule of its kind, read from the body
+  before it is decoded: a select and a count under `select`, an ask under `ask`. A triples or terms
+  read, a graph query and a write posted to it answer 400.
 - **The user's token.** When the query is made while a signed-in user's HTTP request is being
   answered (the call context is `http`), the post asks the hook on
   `globalThis[Symbol.for('@_linked/auth:userTokenHeaders')]` (exported as
@@ -387,9 +394,9 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
   `init()`, so a boot that must fail loudly awaits it itself before registering the store.
 - `init()` resolves the ping body, which the store also keeps as the readonly `info`
   (`RemoteDatasetPingInfo`, frozen; `{}` when the body is not a JSON object; `undefined` before
-  a successful ping and in the no-url form). The generic ping answers `{ok: true}`; a gateway may
-  add fields naming the dataset it serves (CN's adds `projectId`, `branchName`, `dataset`,
-  `forked`), so a boot can log where its data goes:
+  a successful ping and in the no-url form). The generic ping answers `{ok: true, supports}`; a
+  gateway may add fields naming the dataset it serves (CN's adds `projectId`, `branchName`,
+  `slot`, `dataset`, `forked`), so a boot can log where its data goes:
 
   ```ts
   const info = await store.init();
@@ -413,9 +420,43 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
 ### `ping`
 
 `POST /call/@_linked/server/ping` (a `public` method of this package's generic provider) reads
-nothing, changes nothing and answers `{ "ok": true }`. A plain linked server has no token
-concept; a host that serves the wire with tokens checks the token itself and answers 401 for a
-refused one.
+nothing, changes nothing and answers `{ "ok": true, "supports": [] }`, or `"supports":
+["transactions"]` when the server holds store transactions (below). A plain linked server has no
+token concept; a host that serves the wire with tokens checks the token itself and answers 401
+for a refused one.
+
+### Store transactions
+
+Core's store transactions (`LinkedStorage.begin()`, `LinkedStorage.transaction(fn)`) go through a
+`RemoteDataset` and this server to the stores behind it:
+
+```
+POST /call/@_linked/server/beginTransaction  {"args": []}         → "<txId>"
+POST /call/@_linked/server/commit            {"args": ["<txId>"]} → null
+POST /call/@_linked/server/rollback          {"args": ["<txId>"]} → null
+POST /call/@_linked/server/<x>Query          {"args": [<query.toJSON(), with "txId">]}
+```
+
+- **`RemoteDataset`** declares `'transactions'` in `supports` only after a `ping` that listed
+  them (both forms), so a server that does not hold them is never sent a txId; until then core
+  warns once per store and runs a transaction's queries directly. `beginTransaction()`,
+  `commit(txId)` and `rollback(txId)` post to the methods of the same names, never retried.
+- **The server** holds transactions only when every dataset `LinkedStorage` routes to declares
+  `'transactions'` (`ping` says so). It answers a txId of its own and keeps a core `Transaction`
+  for it, which opens a transaction in each store a query of it routes to (a second store gets
+  its own, with core's warning). A query carrying the txId is checked against the store rules as
+  if it were sent alone; a refused or failed one rolls the transaction back in every store. An
+  idle transaction is rolled back after 30 seconds.
+- **The caller.** A transaction needs a session (401 without one) and is bound to the session's
+  user account; a backend-to-backend call with no request behind it is `system`. Anyone else's
+  request with that txId is refused and leaves the transaction as it was.
+- **Refusals** (`{error, code}`): 501 `transactions-unsupported`, 409 `transaction-unknown` (never
+  begun, ended, failed or expired; a `rollback` of one resolves), 403 `transaction-not-yours`. A
+  query with a txId sent to `/api/*`, and a graph query with one, are refused (400). Any refusal
+  of a request that names the caller's own transaction (a body that does not decode included)
+  rolls that transaction back. A store's own refusal is passed back as for any failed query.
+- A forwarder of its own (a gateway) does the same: it lists `'transactions'` only when the store
+  it forwards to does, and never runs a query that carries a txId outside its transaction.
 
 ### Shape catalog per request
 
@@ -468,10 +509,8 @@ A host that starts the app process controls it over HTTP routes on the app's own
 | `GET /admin/health` | 200 `{status: 'ok'}` once the server listens (the boot ontology sync, shape check and shape sync have finished by then) |
 | `POST /admin/restart` | 202, then the process exits; the host starts it again |
 | `POST /admin/graph-registry-changed` | body `{dataset}`: the host changed that dataset's named graphs; the process drops its cached graph registry and answers 200 `{invalidated: dataset}`; 400 without a dataset name |
-| `GET /admin/routes` | 200 `{datasets: [{store, id?, default, routes, defaultGraphShapes}], graphTargets, graphTargetEnv}`: the effective graph routes and graph targets (see below) |
-| `POST /admin/sync-shapes` | 200 `{written, orphanScope, shapeGraphs, reloaded, shapes, ontologies: {written, skipped, graphs, droppedGraphs}, shapeCheck: {errors, warnings}}` (or `{written: 0, skipped, …}` when shape sync is off); 400 `{error}` for a malformed body or a package it may not reload; 500 `{error}` when the sync fails or times out |
-
-`POST /admin/sync-shapes` runs the ontology sync and the shape check (see [Ontology sync and the shape check](#ontology-sync-and-the-shape-check)), then re-syncs the registered shapes into the app's data exactly as the boot does (see [Shape graphs](#shape-graphs): only graphs whose stored content hash differs are written, with the boot's orphan policy and `syncShapesOnBoot` / `LINKED_SYNC_SHAPES_ON_BOOT` switches). `written` counts the shape graphs written, and `shapeGraphs` reports them. The optional body `{packages: [...]}` names packages whose source the host changed; each must be a valid npm package name and the app itself or one of its direct dependencies, never an `@_linked/*` package; the list only says what to reload, it never filters the syncs. In dev their modules are invalidated in Vite and their backends reloaded before the sync, so a shape file written a moment ago is registered; a built app reloads nothing. `reloaded` lists the packages actually reloaded and `shapes` the node shape IRIs registered afterwards, so the host can check that the shape it wrote is there. Syncs run one at a time, as the system; one that takes longer than `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120000) fails and releases the queue. A source reload by itself (HMR) never syncs shapes. A failed ontology sync does not stop the shape sync; the route then answers 500 with the ontology error.
+| `GET /admin/routes` | 200 `{datasets: [{store, id?, default, routes, defaultGraphShapes}], graphTargets, graphTargetEnv, graphWriter}`: the effective graph routes, graph targets and graph writer (see below) |
+| `POST /admin/graph-content` | body `{packages?, reload?}`: 200 `{graphTargets, packages: [{name, shapes?, ontology?}], appGraph?, withoutTurtle, unreadable, reloaded}`, what the syncs would write, writing nothing, after reloading the packages named in `reload` (see [Graph writer and graph content](#graph-writer-and-graph-content)); 400 `{error}` for a malformed body or a package it may not reload; 409 `{error}` when a graph target is not `package`; 500 `{error}` when it fails or times out |
 
 `GET /admin/routes` reports the graph routes the process runs with, as core's routing holds them once the app's storage file (`linked.backend.storage`) has run. Routes are written only there (`LinkedStorage.setDatasetForShapes(dataset, shapes, {graph})`); the app never pushes them anywhere, and this route lets a host check what actually runs. One entry per dataset the router knows, the default dataset first, then in the order they were pinned:
 
@@ -480,7 +519,7 @@ A host that starts the app process controls it over HTTP routes on the app's own
 - `routes`: `{<shape IRI>: <graph IRI>}` as registered. A sub-shape without a route of its own is written to its nearest routed super-shape's graph and is not listed.
 - `defaultGraphShapes`: the registered shapes that resolve to this dataset and are written to its default graph (no route of their own, no routed super-shape), sorted.
 
-`graphTargets` is the process's one graph-target setting, `{ontologyGraph, shapeGraph}` (`package`, `default` or a shared graph IRI each; see [Ontology and shape graphs](#ontology-and-shape-graphs)): where the boot syncs write, for every dataset. `graphTargetEnv` holds `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` as the process has them (unset ones left out), so a host can tell where the setting came from.
+`graphWriter` is `LINKED_GRAPH_WRITER` (`app` or `host`; see [Graph writer and graph content](#graph-writer-and-graph-content)). `graphTargets` is the process's one graph-target setting, `{ontologyGraph, shapeGraph}` (`package`, `default` or a shared graph IRI each; see [Ontology and shape graphs](#ontology-and-shape-graphs)): where the boot syncs write, for every dataset. `graphTargetEnv` holds `LINKED_ONTOLOGY_GRAPH` / `LINKED_SHAPE_GRAPH` as the process has them (unset ones left out), so a host can tell where the setting came from.
 
 ```json
 {"datasets": [{"store": "FusekiStore", "default": true,
@@ -492,23 +531,67 @@ A host that starts the app process controls it over HTTP routes on the app's own
 
 Side effects to expect:
 
-- **A reload briefly disposes the package's providers.** Reloading a package (on HMR, or for `sync-shapes`) runs `dispose()` on its providers and constructs new ones; a request to that package's routes or methods that arrives in between can fail. Reloads run one at a time; one that takes longer than `LINKED_SOURCE_RELOAD_TIMEOUT_MS` (default 60000) rejects and releases the queue.
-- **A restart drops in-flight requests.** `POST /admin/restart` exits the process 50 ms after answering. A host that restarts an app whose server has no `sync-shapes` route (an older `@_linked/server`) to make its boot sync the shapes drops whatever that app was serving.
+- **A reload briefly disposes the package's providers.** Reloading a package (on HMR, or for `graph-content`'s `reload`) runs `dispose()` on its providers and constructs new ones; a request to that package's routes or methods that arrives in between can fail. Reloads run one at a time; one that takes longer than `LINKED_SOURCE_RELOAD_TIMEOUT_MS` (default 60000) rejects and releases the queue.
+- **A restart drops in-flight requests.** `POST /admin/restart` exits the process 50 ms after answering.
 - The channel listens on the app's public port, like every other route; only the secret protects it.
+
+### Graph writer and graph content
+
+`LINKED_GRAPH_WRITER` says who writes the app's shape and ontology graphs: `app` (the default) or
+`host`. Any other value stops the boot, naming the variable. Under `host` (a host such as Create
+Now writes them) the app writes no shape or ontology graph: the boot registers the ontologies,
+loads the class hierarchy and runs the shape check but syncs nothing (it logs one line saying the
+host writes the graphs). Under `app` the boot syncs them (see [Ontology sync and the shape
+check](#ontology-sync-and-the-shape-check) and [Shape graphs](#shape-graphs)) unless `linked.config`
+sets `syncShapesOnBoot: false`.
+
+The host reads the graphs from `POST /admin/graph-content`, body `{packages?: string[], reload?:
+string[]}`. `reload` names packages whose source the host changed; each must be a valid npm
+package name and the app itself or one of its direct dependencies (its `linked.unpublishedPackages`
+among them), never an `@_linked/*` package. In dev their modules are invalidated in Vite and their
+backends reloaded first, then the ontologies are registered again and the shape check runs, so a
+shape file written a moment ago is in the answer; a built app reloads nothing. `reloaded` lists the
+packages actually reloaded. `packages` limits the answer; without it every registered package with
+shapes or ontology data is answered. It writes nothing. Requests run one at a time, as the system;
+one that takes longer than `LINKED_SHAPE_SYNC_TIMEOUT_MS` (default 120000) fails with 500 and
+releases the queue. It answers:
+
+```json
+{"graphTargets": {"ontologyGraph": "package", "shapeGraph": "package"},
+ "packages": [{"name": "@acme/music",
+   "shapes": {"graph": "https://linked.cm/pkg/acme-music/graph/shapes", "mediaType": "text/turtle",
+     "text": "@prefix …", "hash": "…", "sources": ["data/shapes.ttl"]},
+   "ontology": {"graph": "https://linked.cm/pkg/acme-music/graph/ontology",
+     "mediaType": "application/n-triples", "text": "<…> <…> <…> .\n", "hash": "…",
+     "sources": ["data/music.ttl"]}}],
+ "appGraph": {"graph": "https://acme.example/data/graph/shapes", "mediaType": "text/turtle",
+   "text": "…", "hash": "…", "sources": []},
+ "withoutTurtle": [], "unreadable": [], "reloaded": []}
+```
+
+Each `text` and `hash` is exactly what the `package`-mode sync writes and records as the graph's
+`core:contentHash` (a shape graph: its Turtle and `shapeGraphHash`; an ontology graph: the
+N-Triples of the package's data files and `ontologyGraphHash` of their raw texts, so the host must
+not hash the text itself), and `sources` the record's `dcterms:source`. A package's shape Turtle
+comes from where the shape sync takes it: an installed package without `shapes.ttl` has no `shapes`
+here either and is listed in `withoutTurtle`. `unreadable` lists packages whose ontology data could
+not be read. `appGraph` is `null` when the app has no single-owner shapes (drop the graph) and left
+out without `DATA_ROOT`. The route answers 409 unless both `LINKED_ONTOLOGY_GRAPH` and
+`LINKED_SHAPE_GRAPH` are `package`.
 
 ### Ontology sync and the shape check
 
-Before its shape sync, at boot and on `POST /admin/sync-shapes`, the server:
+Before its shape sync at boot, the server:
 
 1. **Registers the installed packages' ontologies** (core `registerInstalledOntologies`): it imports `lib/esm/ontologies/*.register.js` of every linked package it discovered in the app's dependency tree, so a package the app only deep-imports shape files from (`@_linked/schema/shapes/Person`) is synced and checked too, and of every workspace package of the app (`linkedPackage: true` under its `workspaces`), which no package may import (a Create Now clone's `packages/<slug>-ont`). In dev, a package without a built `lib/` registers from `src/ontologies/*.register.ts` through Vite's `ssrLoadModule`; a built app skips it. A register module that fails is logged and the rest go on.
-2. **Syncs the ontologies** (core `syncOntologies`): every registered package's ontology data is written into the app's default dataset, where `LINKED_ONTOLOGY_GRAPH` says (one graph per package by default; see [Ontology and shape graphs](#ontology-and-shape-graphs)), so the store's RDFS view infers the class hierarchy. The log line names a shared graph or the default graph when the sync wrote there. A package whose stored hash matches is skipped, so an unchanged sync writes nothing. `ontologies.written` and `ontologies.skipped` name the packages (a package whose data cannot be read is skipped with core's warning). Sync nodes of packages no longer registered are pruned only with `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true`, the shape sync's orphan policy.
-3. **Checks the shapes** against that hierarchy (core `checkShapeHierarchy`, with every package's `dependencies` and `peerDependencies`). A running app is never stopped by it: each finding is logged, and `shapeCheck` counts them by severity.
+2. **Syncs the ontologies** (core `syncOntologiesRouted`): every registered package's ontology data is written into each dataset the storage routing needs it in (see [Which datasets the syncs write to](#which-datasets-the-syncs-write-to)), where `LINKED_ONTOLOGY_GRAPH` says (one graph per package by default; see [Ontology and shape graphs](#ontology-and-shape-graphs)), so the store's RDFS view infers the class hierarchy. The log line names a shared graph or the default graph when the sync wrote there. A package whose stored hash matches is skipped, so an unchanged sync writes nothing. The log line names the packages written and skipped (a package whose data cannot be read is skipped with core's warning). Sync nodes of packages no longer registered are pruned only with `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true`, the shape sync's orphan policy.
+3. **Checks the shapes** against that hierarchy (core `checkShapeHierarchy`, with every package's `dependencies` and `peerDependencies`). A running app is never stopped by it: each finding is logged, with a count by severity.
 
-The ontology sync follows the shape sync's switches (`syncShapesOnBoot`, `LINKED_SYNC_SHAPES_ON_BOOT`), at boot and on `POST /admin/sync-shapes` alike: with shape sync off, the route syncs neither ontologies nor shapes (it still registers the packages' ontologies and runs the shape check). `LINKED_SYNC_ONTOLOGIES_ON_BOOT=false` turns off only the boot's ontology sync. The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded at boot either way. A failed ontology sync at boot is logged and the boot goes on.
+The ontology sync and the shape sync have one switch: both run when the app writes its own graphs (`LINKED_GRAPH_WRITER` unset or `app`; see [Graph writer and graph content](#graph-writer-and-graph-content)) and `linked.config` does not set `syncShapesOnBoot: false`. With the sync off the boot still registers the packages' ontologies and runs the shape check, and `POST /admin/graph-content` with `reload` registers and checks again. The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded at boot either way. A failed ontology sync at boot is logged and the boot goes on.
 
 ### Shape graphs
 
-After the ontology sync and the shape check, at boot and on `POST /admin/sync-shapes`, the server syncs the registered shapes into the app's default dataset with core's `syncShapeGraphs`. This section describes the default, `LINKED_SHAPE_GRAPH=package`; with a shared graph IRI every package's shapes and the app's generated ones go into that one graph (`graphs` lists it, `appGraph.graph` is it), and with `default` the shapes go into the default graph (`defaultGraph` counts the writes). See [Ontology and shape graphs](#ontology-and-shape-graphs).
+After the ontology sync and the shape check, at boot, the server syncs the registered shapes with core's `syncShapeGraphsRouted`, into each dataset the storage routing needs them in (see [Which datasets the syncs write to](#which-datasets-the-syncs-write-to)). This section describes the default, `LINKED_SHAPE_GRAPH=package`; with a shared graph IRI every package's shapes and the app's generated ones go into that one graph (`graphs` lists it, `appGraph.graph` is it), and with `default` the shapes go into the default graph (`defaultGraph` counts the writes). See [Ontology and shape graphs](#ontology-and-shape-graphs).
 
 - **One graph per package.** Each package's shapes go in `{package IRI}/graph/shapes`, with a `ShapesGraph` record in the graph registry (never a hierarchy source). A graph whose stored content hash matches is not written, so an unchanged sync writes nothing; a changed one is replaced whole.
 - **Where the Turtle comes from.** An installed package's built `lib/esm/data/shapes.ttl`, which `linked build` writes. An installed package without that file gets no shape graph: nothing is generated for it (a package with no shapes has none). The app's own packages (the app and its workspace packages) are generated in process: in dev through Vite's `ssrLoadModule` (core's `packageShapesTurtle` on the core the source shapes registered on, the same bytes `linked build` writes); in a built app from their `lib/esm/data/shapes.ttl` when they have one.
@@ -522,7 +605,34 @@ The boot logs one line, for example:
 [LinkedServer] shape graph sync: written @acme/shop; skipped @_linked/schema; app graph written; graphs written https://linked.cm/pkg/acme-shop/graph/shapes, https://acme.example/data/graph/shapes; no shapes.ttl (no shape graph): @acme/legacy
 ```
 
-`POST /admin/sync-shapes` answers the same as `shapeGraphs`: `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned, target}` (plus `defaultGraph`, the default-graph sync's writes, under `LINKED_SHAPE_GRAPH=default` or on a store without graph queries). `target` is the process's `shapeGraph` setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)); with `fallback` set the store had no graph queries and the shapes went into the default graph instead. In a shared graph the rebuild covers the packages with Turtle: a package without it is left out (and logged), where the package mode keeps its old graph.
+The sync runs under the switch of [Ontology sync and the shape check](#ontology-sync-and-the-shape-check): the app writes its own graphs and `syncShapesOnBoot` is not `false`. Its report, `{written, skipped, pruned, graphs, appGraph: {graph, status}, withoutTurtle, cleaned, target}` (plus `defaultGraph`, the default-graph sync's writes, under `LINKED_SHAPE_GRAPH=default` or on a store without graph queries), is what the log line shows. `target` is the process's `shapeGraph` setting (see [Ontology and shape graphs](#ontology-and-shape-graphs)); with `fallback` set the store had no graph queries and the shapes went into the default graph instead. In a shared graph the rebuild covers the packages with Turtle: a package without it is left out (and logged), where the package mode keeps its old graph.
+
+### Which datasets the syncs write to
+
+The boot syncs follow the app's storage routing (`linked.backend.storage`), through core's
+`@_linked/core/shapes/syncTargets` (its README's "Which datasets the syncs write to" has the rule):
+
+- a package's **shape graph** goes to every dataset one of its shapes routes to, and to the
+  dataset(s) the `sh:NodeShape` / `sh:PropertyShape` shapes route to;
+- a package's **ontology graph** goes to every dataset one of its shapes routes to, wherever a
+  shape targeting one of its classes routes, and to the dataset(s) of the ontology term shapes
+  (`rdfs:Class`, `owl:Class`, `rdf:Property`, …), so the hierarchy is where the instances are;
+- the app's **own shape graph** goes to every dataset a shape it constrains routes to (the shapes
+  declaring `contains` properties and their sub-shapes), and those of the shape shapes.
+
+An app without pins writes everything into its default dataset. With pins the boot logs
+one line naming the datasets per graph kind, for example:
+
+```
+[LinkedServer] The boot syncs follow the routing: shape graphs → FusekiStore "app" (every package), FusekiStore "music" (@acme/music); app shape graph → FusekiStore "app"; ontology graphs → FusekiStore "app" (every package), FusekiStore "music" (@acme/music, @_linked/schema).
+```
+
+Each sync then logs one line per dataset (` in FusekiStore "music"`), and its report adds
+`datasets` (each dataset's own report). When a pin moves, a package graph routing no longer sends
+to the **default** dataset is dropped there (`prunedGraphs`, one log line each); one left in
+another dataset stays and is reported (`leftovers`, one warning), since a store several apps share
+may hold another app's copy. A dataset that cannot be read or written fails alone: the others are
+synced, then the sync fails naming it (the boot logs a warning and goes on).
 
 ## Provider lifecycle and HMR
 

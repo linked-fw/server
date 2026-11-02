@@ -14,6 +14,7 @@ import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { LinkedServer, registerCallRoutes } from '../shapes/LinkedServer.js';
 import { LincdAPI } from '../shapes/LincdAPI.js';
 import LincdServerBackendProvider from '../backend.js';
+import { readQueryOf } from './read-double.js';
 import { createJsonBodyParser } from '../utils/jsonBodyParser.js';
 import {
   resetUndeclaredWarnings,
@@ -463,19 +464,19 @@ describe('internal methods', () => {
   it('can be declared from outside on an imported provider class', async () => {
     const key = Symbol.for('@_linked/server-utils:internal');
     const base = await listen(makeLinkedServer());
-    const before = await call(base, '@_linked/server', 'selectQuery', [{}]);
+    const before = await call(base, '@_linked/server', 'readQuery', [{}]);
     expect(before.status).not.toBe(501);
-    declareInternal(LincdServerBackendProvider, ['selectQuery']);
+    declareInternal(LincdServerBackendProvider, ['readQuery']);
     try {
       // wins over the class's own @callable('public'), with a warning
-      expect((await call(base, '@_linked/server', 'selectQuery', [{}])).status).toBe(501);
+      expect((await call(base, '@_linked/server', 'readQuery', [{}])).status).toBe(501);
       expect(
-        warn.mock.calls.some((c: any[]) => /selectQuery is declared both callable and internal/.test(String(c[0])))
+        warn.mock.calls.some((c: any[]) => /readQuery is declared both callable and internal/.test(String(c[0])))
       ).toBe(true);
     } finally {
       delete (LincdServerBackendProvider as any)[key];
     }
-    expect((await call(base, '@_linked/server', 'selectQuery', [{}])).status).not.toBe(501);
+    expect((await call(base, '@_linked/server', 'readQuery', [{}])).status).not.toBe(501);
   });
 });
 
@@ -536,11 +537,11 @@ describe('generic query plane', () => {
     received.length = 0;
     LinkedStorage.setDefaultDataset({
       init: async () => {},
-      selectQuery: async (q: any) => (received.push(q), []),
+      supports: ['ask'],
+      readQuery: readQueryOf({ select: async (q: any) => (received.push(q), []), ask: async (q: any) => (received.push(q), false) }),
       createQuery: async (q: any) => (received.push(q), {}),
       updateQuery: async (q: any) => (received.push(q), {}),
       deleteQuery: async (q: any) => (received.push(q), {}),
-      askQuery: async (q: any) => (received.push(q), false),
       rawQuery: async () => ({ head: {}, results: { bindings: [] } }),
     } as any);
   });
@@ -553,17 +554,17 @@ describe('generic query plane', () => {
 
   it('lets a signed-in user query unprotected shapes', async () => {
     const base = await listen(makeLinkedServer());
-    const res = await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/u');
+    const res = await call(base, '@_linked/server', 'readQuery', [plain()], 'http://ex/u');
     expect(res.status).toBe(200);
     expect(received).toHaveLength(1);
   });
 
   it('warns about, but still answers, an anonymous query in warn mode; 401 in enforce', async () => {
     const base = await listen(makeLinkedServer());
-    expect((await call(base, '@_linked/server', 'selectQuery', [plain()])).status).toBe(200);
-    expect(warn.mock.calls.some((c: any[]) => String(c[0]).includes('anonymous selectQuery'))).toBe(true);
+    expect((await call(base, '@_linked/server', 'readQuery', [plain()])).status).toBe(200);
+    expect(warn.mock.calls.some((c: any[]) => String(c[0]).includes('anonymous readQuery'))).toBe(true);
     setRpcExposureMode('enforce');
-    expect((await call(base, '@_linked/server', 'selectQuery', [plain()])).status).toBe(401);
+    expect((await call(base, '@_linked/server', 'readQuery', [plain()])).status).toBe(401);
   });
 
   // A store that records what reaches it, with an access rule.
@@ -571,11 +572,11 @@ describe('generic query plane', () => {
     withAccess(
       {
         init: async () => {},
-        selectQuery: async (q: any) => (received.push(q), []),
+        supports: ['ask'],
+        readQuery: readQueryOf({ select: async (q: any) => (received.push(q), q.__queryKind === 'count' ? 0 : []), ask: async (q: any) => (received.push(q), false) }),
         createQuery: async (q: any) => (received.push(q), {}),
         updateQuery: async (q: any) => (received.push(q), {}),
         deleteQuery: async (q: any) => (received.push(q), {}),
-        askQuery: async (q: any) => (received.push(q), false),
       } as any,
       access
     );
@@ -587,10 +588,10 @@ describe('generic query plane', () => {
   ])("answers 403 for %s of a shape in a read:'none' store", async (_label, query) => {
     LinkedStorage.setDatasetForShapes(store({ read: 'none', write: 'none' }), RpcSecret);
     const base = await listen(makeLinkedServer());
-    const res = await call(base, '@_linked/server', 'selectQuery', [query()], 'http://ex/u');
+    const res = await call(base, '@_linked/server', 'readQuery', [query()], 'http://ex/u');
     expect(res.status).toBe(403);
     // and anonymously, in warn mode
-    expect((await call(base, '@_linked/server', 'selectQuery', [query()])).status).toBe(403);
+    expect((await call(base, '@_linked/server', 'readQuery', [query()])).status).toBe(403);
     expect(received).toHaveLength(0);
   });
 
@@ -601,7 +602,7 @@ describe('generic query plane', () => {
     const upd = Person.update({ name: 'x' }).for('http://ex/p1').toJSON();
     expect((await call(base, '@_linked/server', 'deleteQuery', [del], 'http://ex/u')).status).toBe(403);
     expect((await call(base, '@_linked/server', 'updateQuery', [upd], 'http://ex/u')).status).toBe(403);
-    expect((await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/u')).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'readQuery', [plain()], 'http://ex/u')).status).toBe(200);
   });
 
   it('lets a function rule decide, with the caller and the query', async () => {
@@ -614,9 +615,9 @@ describe('generic query plane', () => {
       RpcPerson
     );
     const base = await listen(makeLinkedServer());
-    expect((await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/alice')).status).toBe(200);
-    expect((await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/bob')).status).toBe(403);
-    expect((await call(base, '@_linked/server', 'selectQuery', [plain()])).status).toBe(401);
+    expect((await call(base, '@_linked/server', 'readQuery', [plain()], 'http://ex/alice')).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'readQuery', [plain()], 'http://ex/bob')).status).toBe(403);
+    expect((await call(base, '@_linked/server', 'readQuery', [plain()])).status).toBe(401);
     const upd = Person.update({ name: 'x' }).for('http://ex/p1').toJSON();
     expect((await call(base, '@_linked/server', 'updateQuery', [upd], 'http://ex/alice')).status).toBe(403);
     expect(seen[0].operation).toBe('select');
@@ -624,13 +625,34 @@ describe('generic query plane', () => {
     expect(received).toHaveLength(1);
   });
 
+  it('checks a read under the rule of its kind: a select and a count under select, an ask under ask', async () => {
+    const seen: string[] = [];
+    LinkedStorage.setDatasetForShapes(
+      store({ read: (ctx: any) => (seen.push(ctx.operation), ctx.operation === 'select'), write: 'none' }),
+      RpcPerson
+    );
+    const base = await listen(makeLinkedServer());
+    const count = Person.select((p: any) => p.name).toCount().toJSON();
+    const ask = { v: plain().v, op: 'ask', shape: (RpcPerson as any).shape.id, subject: 'http://ex/p1' };
+    expect(count.op).toBe('count');
+    expect((await call(base, '@_linked/server', 'readQuery', [plain()], 'http://ex/u')).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'readQuery', [count], 'http://ex/u')).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'readQuery', [ask], 'http://ex/u')).status).toBe(403);
+    expect(seen).toEqual(['select', 'select', 'ask']);
+    expect(received.map((q: any) => q.__queryKind)).toEqual(['select', 'count']);
+    // /api/select checks by the kind too
+    expect((await post(`${base}/api/select`, { query: ask }, 'http://ex/u')).status).toBe(403);
+    expect((await post(`${base}/api/select`, { query: count }, 'http://ex/u')).status).toBe(200);
+    expect(seen.slice(3)).toEqual(['ask', 'select']);
+  });
+
   it('needs every store a query maps to to allow it', async () => {
     LinkedStorage.setDatasetForShapes(store({ read: 'session' }), RpcPerson);
     LinkedStorage.setDatasetForShapes(store({ read: () => false }), RpcSecret);
     const base = await listen(makeLinkedServer());
-    expect((await call(base, '@_linked/server', 'selectQuery', [plain()], 'http://ex/u')).status).toBe(200);
-    expect((await call(base, '@_linked/server', 'selectQuery', [nested()], 'http://ex/u')).status).toBe(403);
-    expect((await call(base, '@_linked/server', 'selectQuery', [cast()], 'http://ex/u')).status).toBe(403);
+    expect((await call(base, '@_linked/server', 'readQuery', [plain()], 'http://ex/u')).status).toBe(200);
+    expect((await call(base, '@_linked/server', 'readQuery', [nested()], 'http://ex/u')).status).toBe(403);
+    expect((await call(base, '@_linked/server', 'readQuery', [cast()], 'http://ex/u')).status).toBe(403);
     expect(received).toHaveLength(1);
   });
 
@@ -662,7 +684,7 @@ describe('generic query plane', () => {
   it('runs local queries outside a request without checks', async () => {
     LinkedStorage.setDatasetForShapes(store({ read: 'none' }), RpcSecret);
     const server = makeLinkedServer();
-    await expect(server.callBackendMethod('@_linked/server', 'selectQuery', [direct()])).resolves.toEqual([]);
+    await expect(server.callBackendMethod('@_linked/server', 'readQuery', [direct()])).resolves.toEqual([]);
   });
 });
 
@@ -696,8 +718,15 @@ describe('server-side rendering', () => {
 describe('@_linked/server default provider', () => {
   it('exposes the query methods publicly', () => {
     const provider = new LincdServerBackendProvider({}, makeLinkedServer());
-    for (const m of ['selectQuery', 'askQuery', 'createQuery', 'updateQuery', 'deleteQuery']) {
+    for (const m of ['readQuery', 'graphQuery', 'createQuery', 'updateQuery', 'deleteQuery']) {
       expect(resolveCallable(provider, m)).toMatchObject({ status: 'callable', level: 'public' });
+    }
+  });
+
+  it('has no selectQuery or askQuery: every read goes to readQuery', () => {
+    const provider = new LincdServerBackendProvider({}, makeLinkedServer());
+    for (const m of ['selectQuery', 'askQuery', 'triplesQuery', 'triplesTermsQuery']) {
+      expect(resolveCallable(provider, m)).not.toMatchObject({ status: 'callable' });
     }
   });
 });

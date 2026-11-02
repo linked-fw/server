@@ -95,10 +95,10 @@ describe('LinkedServer unmatched calls', () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     const base = await listenCalls(linkedServer);
 
-    const res = await storeShapeCall(base, 'selectQuery');
+    const res = await storeShapeCall(base, 'readQuery');
 
     expect(res.status).toBe(501);
-    expect(res.json).toEqual({ error: 'No provider for server/selectQuery' });
+    expect(res.json).toEqual({ error: 'No provider for server/readQuery' });
   });
 
   it('answers 501 when the shape provider lacks the method', async () => {
@@ -173,8 +173,8 @@ describe('RemoteDataset call results', () => {
       return null;
     };
     const store = new RemoteDataset({ id: 'http://example.org/store' });
-    await store.selectQuery({ toJSON: () => ({}) } as any);
-    expect(calls[0][1]).toEqual({ method: 'selectQuery', rejectOnError: true });
+    await store.readQuery({ __queryKind: 'select', toJSON: () => ({}) } as any);
+    expect(calls[0][1]).toEqual({ method: 'readQuery', rejectOnError: true });
   });
 
   it('resolves an undefined result', async () => {
@@ -190,7 +190,7 @@ describe('RemoteDataset call results', () => {
     const linkedServer = makeLinkedServer();
     linkedServer.shapeProviders.set(storePkg, [
       storeProvider({
-        selectQuery: async () => {
+        readQuery: async () => {
           throw new Error('Cannot resolve an rdf:type for shape');
         },
       }),
@@ -201,7 +201,7 @@ describe('RemoteDataset call results', () => {
     const store = new RemoteDataset({ id: 'http://example.org/store' });
 
     const err: any = await store
-      .selectQuery({ toJSON: () => ({}) } as any)
+      .readQuery({ __queryKind: 'select', toJSON: () => ({}) } as any)
       .catch((e: any) => e);
 
     expect(ServerCallError.is(err)).toBe(true);
@@ -222,10 +222,10 @@ describe('RemoteDataset call results', () => {
     const store = new RemoteDataset({ id: 'http://example.org/store' });
 
     await expect(
-      store.askQuery({ toJSON: () => ({}) } as any)
+      store.readQuery({ __queryKind: 'select', toJSON: () => ({}) } as any)
     ).rejects.toMatchObject({
       status: 501,
-      message: `No provider for ${storePkg}/askQuery`,
+      message: `No provider for ${storePkg}/readQuery`,
     });
   });
 });
