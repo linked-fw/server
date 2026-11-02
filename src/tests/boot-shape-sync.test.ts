@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it } from '@jest/globals';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -102,7 +102,38 @@ describe('appShapesGraph', () => {
 });
 
 describe('viteShapesTurtleGenerator', () => {
-  it("imports core's packageShapesTurtle through ssrLoadModule, bound to Vite", async () => {
+  const LOADER = Symbol.for('@_linked/core:importModule');
+  const globals = globalThis as Record<symbol, unknown>;
+  afterEach(() => {
+    delete globals[LOADER];
+  });
+
+  it("with linked start's module loader, imports core's shapesToTurtle through it, never ssrLoadModule", async () => {
+    const loaded: string[] = [];
+    globals[LOADER] = async (specifier: string) => {
+      loaded.push(specifier);
+      return { packageShapesTurtle: (name: string) => `TTL of ${name}` };
+    };
+    const vite = {
+      ssrLoadModule: () => {
+        throw new Error('ssrLoadModule must not load core: it would be a second copy');
+      },
+    };
+    const generate = viteShapesTurtleGenerator(vite)!;
+    expect(await generate('app')).toBe('TTL of app');
+    expect(loaded).toEqual(['@_linked/core/shapes/shapesToTurtle']);
+  });
+
+  it("with a loader that loads like the app's own import, uses the app's copy of core: one shape registry", async () => {
+    const { getShapeRegistryInstanceCount } = await import('@_linked/core/utils/ShapeClass');
+    const own = await import('@_linked/core/shapes/shapesToTurtle');
+    globals[LOADER] = (specifier: string) => import(specifier);
+    const generate = viteShapesTurtleGenerator({ ssrLoadModule: async () => ({}) })!;
+    expect(await generate('@example/nothing-registered')).toBe(own.packageShapesTurtle('@example/nothing-registered'));
+    expect(getShapeRegistryInstanceCount()).toBe(1);
+  });
+
+  it("without a module loader, imports core's packageShapesTurtle through ssrLoadModule, bound to Vite", async () => {
     const loaded: string[] = [];
     const vite = {
       marker: 'vite',

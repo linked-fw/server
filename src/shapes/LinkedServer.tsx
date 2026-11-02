@@ -186,6 +186,7 @@ import {
   ssrCssInlineUrls,
   ssrCssScope,
 } from '../utils/ssrCss.js';
+import { loadPackageModule } from '../utils/packageModules.js';
 import {
   appShapesGraph,
   bootOrphanScope,
@@ -1682,21 +1683,13 @@ export class LinkedServer extends Shape {
       //@ts-ignore
       //   await import.meta.resolve(pkg)
       // );
-      // plan-011 §P6 — prefer Vite's SSR loader so workspace packages register
-      // on the SINGLE @_linked/core instance the rest of the SSR graph uses.
-      // The bare Node `import()` fallback resolves `default`→lib, evaluating a
-      // SECOND core copy (benign post-§P1, but a needless second instance).
-      // Node import stays as the fallback when Vite isn't active (production /
-      // Node-only CLI commands). Mirrors indexPackageBackendProviders.
-      const vite: any = (this.config.server as any)?.vite;
-      if (vite && typeof vite.ssrLoadModule === 'function') {
-        await vite.ssrLoadModule(pkg);
-      } else {
-        // @vite-ignore — dynamic specifier is intentional: this checks
-        // whether `pkg` is resolvable at runtime, then catches the error.
-        // eslint-disable-next-line no-unsanitized/method
-        await import(/* @vite-ignore */ pkg);
-      }
+      // Loaded the way the app's own import of it is (utils/packageModules):
+      // in dev through `linked start`'s module loader, so a package the SSR
+      // runner bundles comes from the runner and an external one from Node,
+      // never a second Vite copy of an external package. Node's `import()`
+      // without a host (production, Node-only CLI commands). A failure to
+      // resolve `pkg` is caught below.
+      await loadPackageModule(pkg, (this.config.server as any)?.vite);
       // console.log(`✅ Successfully loaded: ${pkg}`);
     } catch (e) {
       if (isFatalError(e)) {
