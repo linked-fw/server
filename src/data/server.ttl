@@ -6,12 +6,15 @@
 @prefix dcterms: <http://purl.org/dc/terms/> .
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix schema: <http://schema.org/> .
+@prefix vann: <http://purl.org/vocab/vann/> .
 
 server:
     a owl:Ontology ;
     dcterms:description "Terms of the Linked Node.js server: the server, the web app it serves and its data API."@en ;
     dcterms:title "Linked server"@en ;
-    owl:versionInfo "3.7.0" .
+    owl:versionInfo "3.7.0" ;
+    vann:preferredNamespacePrefix "server" ;
+    vann:preferredNamespaceUri "https://linked.cm/ont/server/" .
 
 server:BackendAPIStore
     a owl:Class ;
