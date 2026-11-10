@@ -7,8 +7,8 @@ summary: The generic query plane decodes each request's DSL-JSON in a shape cata
 
 # 004 — Query-plane catalog hook
 
-Consumer: Create Now plan 068, which resolves each project branch's shapes against its
-own `ShapeCatalog` (core report 037) instead of re-registering them process-wide. CN supplies
+Consumer: the host app's plan, which resolves each project branch's shapes against its
+own `ShapeCatalog` (core report 037) instead of re-registering them process-wide. The host app supplies
 the catalog of the admitted (project, branch) and none for its own pinned shapes.
 
 ## Problem

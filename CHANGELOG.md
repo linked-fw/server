@@ -43,7 +43,7 @@
 
   - The ontology and shape graph sync lines list the packages written and count the unchanged ones (`shape graph sync: written dep; 3 unchanged; app graph unchanged`), instead of listing every skipped package.
   - `shape check: …` is logged only when the check has findings.
-  - The routing-pin warning is logged only for a boot sync that runs: `syncPinWarning` takes `{shapeSync, ontologySync}` and watches only the shapes those syncs write, so a boot with `syncShapesOnBoot: false` does not warn. A store without an `id` is named by its endpoint's dataset (`FusekiStore "cn-main"`).
+  - The routing-pin warning is logged only for a boot sync that runs: `syncPinWarning` takes `{shapeSync, ontologySync}` and watches only the shapes those syncs write, so a boot with `syncShapesOnBoot: false` does not warn. A store without an `id` is named by its endpoint's dataset (`FusekiStore "app-main"`).
 
 - [#219](https://github.com/linked-fw/server/pull/219) [`4580aa7`](https://github.com/linked-fw/server/commit/4580aa76c72e980a902c897a5df9e891cf498556) Thanks [@flyon](https://github.com/flyon)! - The packages an app lists in `linked.unpublishedPackages` (and, transitively, the lists of those packages) are its direct dependencies: boot loading finds them by npm name (npm's workspace link into `packages-local/`, else the checkout there), the shape sync's reload check accepts them, and the shape check reads each list as dependencies. Lists are read with `@_linked/cli/installed-packages`' `unpublishedPackages`, so a malformed list is an error.
 
@@ -229,7 +229,7 @@
 
 - [#202](https://github.com/linked-fw/server/pull/202) [`49a02be`](https://github.com/linked-fw/server/commit/49a02bea25b9526bf732a01db20cd1a33b9560e0) Thanks [@flyon](https://github.com/flyon)! - The ontology registration before the sync and the shape check also covers the app's own workspace
   packages (`linkedPackage: true` under its `workspaces`), which the dependency walk misses when no
-  package imports them (a Create Now clone's `packages/<slug>-ont`). In dev, a package without a
+  package imports them (a host app clone's `packages/<slug>-ont`). In dev, a package without a
   built `lib/` registers from `src/ontologies/*.register.ts` through Vite's `ssrLoadModule` (core
   `registerInstalledOntologies`' `importModule`); a built app skips it.
 
@@ -533,8 +533,8 @@
   `LinkedServer` materializes the app's registered shapes into its app-data on every boot. It called
   core `syncShapes(appData)` with no options, so on the cores where `orphanScope` defaults to `'all'`
   it also deleted every NodeShape in the dataset that the process had not registered. An app whose
-  backend imports no shapes — the Create Now app template — therefore deleted every NodeShape in its
-  app-data on boot, including shapes Create Now put there with `bindShape` / `enableCapability`; one
+  backend imports no shapes — a host app's app template — therefore deleted every NodeShape in its
+  app-data on boot, including shapes the host app put there with `bindShape` / `enableCapability`; one
   that deep-imported a single shape file deleted the rest of that package.
 
   Boot sync now passes `{orphanScope: 'none'}` explicitly, so it is additive whatever core version the
@@ -554,9 +554,9 @@
 
 - [#104](https://github.com/linked-fw/server/pull/104) [`cf1b14d`](https://github.com/linked-fw/server/commit/cf1b14dfa9c834c2503f7ad4689e66e5f5f24a58) Thanks [@flyon](https://github.com/flyon)! - Dev SSR inlines only the CSS the rendered page needs. The dev server preloads every page into
   Vite's module graph, so `<style id="ssr-css">` carried every page's stylesheets on every page
-  (2.3 MB in Create Now). It now holds what the app module and the matched routes' pages import
+  (2.3 MB in the host app). It now holds what the app module and the matched routes' pages import
   statically — what a production build puts in the entry CSS plus the route's CSS (0.78–1.1 MB in
-  Create Now, most of it Tailwind's output). Falls back to the whole graph when the page cannot be
+  the host app, most of it Tailwind's output). Falls back to the whole graph when the page cannot be
   determined, such as a route rendered through a `render` function.
 
 ## 2.14.1
@@ -591,7 +591,7 @@
   The declared range was wide enough that the resolved core depended on whatever the
   consumer — or this repo's own CI, via `package-lock.json` — happened to install. Core
   decides how a shape's IRI is minted, so a stale core made this package emit legacy
-  `data.lincd.org` IRIs instead of the arch-02 `linked.cm` scheme. Which IRIs a published
+  `data.lincd.org` IRIs instead of the `linked.cm` naming scheme. Which IRIs a published
   package produces should not be a function of the installer's dependency tree.
 
   Minor rather than patch: this raises the minimum core a consumer must resolve, so it
@@ -1267,7 +1267,7 @@ stored by LinkedFileStorage` above it is an unfixed SSRF and is arguably a
   `.shape` — so the loop aborted on its first iteration and the index was left
   completely empty rather than partial. Everything reading it (LincdAPI
   `get_all_shapes` / `get_shape_details`, and the shape-catalog fallback and
-  shape-sync in create-now-js) silently saw nothing.
+  shape-sync in the host app) silently saw nothing.
 
   Nothing surfaced because the async call was not awaited at either call site
   (`initOnly`, `start`): the failure escaped as an unhandled rejection and boot
@@ -1319,7 +1319,7 @@ stored by LinkedFileStorage` above it is an unfixed SSRF and is arguably a
   new name; see its own release notes) as a direct dep if they actually
   use it.
 
-  Context: see create-now plan-011 report (docs/reports/009-legacy-lincd-eradication.md).
+  Context: the host app's legacy-package removal.
 
 ## 2.0.3
 

@@ -1,10 +1,10 @@
 ---
 summary: >
-  Step HS of CN master plan 282, server half: `POST /admin/sync-shapes` and the env boot flags
-  `LINKED_SYNC_SHAPES_ON_BOOT`/`LINKED_SYNC_ONTOLOGIES_ON_BOOT` are removed; a host (Create Now,
+  Step HS of the host app's master plan, server half: `POST /admin/sync-shapes` and the env boot flags
+  `LINKED_SYNC_SHAPES_ON_BOOT`/`LINKED_SYNC_ONTOLOGIES_ON_BOOT` are removed; a host app (with
   `LINKED_GRAPH_WRITER=host`) reads an app's graphs through `POST /admin/graph-content` (with
   `reload`) and writes them itself; an open-source app's routed boot sync is switched by
-  `linked.config` `syncShapesOnBoot` alone. CN half and the decision ledger: CN report 289.
+  `linked.config` `syncShapesOnBoot` alone. The host app's half and the decision ledger: the host app's report.
 ---
 
 # 024 — Graph content replaces sync-shapes
@@ -19,8 +19,8 @@ reload?}`, which reloads the named packages first (dev) and answers each graph's
 hash without writing. The boot sync no longer reads `LINKED_SYNC_SHAPES_ON_BOOT` or
 `LINKED_SYNC_ONTOLOGIES_ON_BOOT`: it runs when the app writes its own graphs
 (`LINKED_GRAPH_WRITER=app`, the default) and `linked.config` does not set `syncShapesOnBoot:
-false`; the ontology sync follows the same switch. Create Now switches to the new route in the same
-landing (CN report 289).
+false`; the ontology sync follows the same switch. The host app switches to the new route in the same
+landing (the host app's report).
 
 ### Changes
 
@@ -51,7 +51,7 @@ landing (CN report 289).
   graph-content: its hashes equal what the boot recorded); `graph-sync-live` (the second run is a
   second boot); `admin-routes`, `graph-query-plane` (handler stub dropped).
 - `docs/backlog/005-unknown-shape-answers-invalid-query.md`: a query naming a shape outside the
-  request's catalog answers 400 `Invalid query` (found by CN's spec for backlog 279).
+  request's catalog answers 400 `Invalid query` (found by the host app's spec for backlog 279).
 
 ### Verification
 
@@ -80,7 +80,7 @@ From `packages-local/_linked-server` of the step worktree, against the master's 
 
 - `reload` stays a list of package names (as SY built it), not `reload: true` as plan 001 §HS
   wrote it: the list carries the allow-list check and says what to reload.
-- graph-content answers no `shapes` IRI list and no `shapeCheck` (sync-shapes did); CN reads the
+- graph-content answers no `shapes` IRI list and no `shapeCheck` (sync-shapes did); the host app reads the
   node shapes out of the graph text it writes, and the shape check stays in the app's log.
 
 ### Follow-ups
@@ -90,4 +90,4 @@ From `packages-local/_linked-server` of the step worktree, against the master's 
 
 ## Details
 
-The decision ledger of the whole step is in CN report 289 (`## Details`); rows 1–5 are this half's.
+The decision ledger of the whole step is in the host app's report (`## Details`); rows 1–5 are this half's.

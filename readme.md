@@ -538,8 +538,8 @@ Side effects to expect:
 ### Graph writer and graph content
 
 `LINKED_GRAPH_WRITER` says who writes the app's shape and ontology graphs: `app` (the default) or
-`host`. Any other value stops the boot, naming the variable. Under `host` (a host such as Create
-Now writes them) the app writes no shape or ontology graph: the boot registers the ontologies,
+`host`. Any other value stops the boot, naming the variable. Under `host` (a host app that
+writes them) the app writes no shape or ontology graph: the boot registers the ontologies,
 loads the class hierarchy and runs the shape check but syncs nothing (it logs one line saying the
 host writes the graphs). Under `app` the boot syncs them (see [Ontology sync and the shape
 check](#ontology-sync-and-the-shape-check) and [Shape graphs](#shape-graphs)) unless `linked.config`

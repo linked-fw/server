@@ -16,7 +16,7 @@ their exports are gone; there is no alias.
 
 ## Why one class
 
-A host that runs an app (Create Now) wants the app's queries to go through the host's gateway so
+A host that runs an app wants the app's queries to go through the host's gateway so
 that branch forks, authorization and audit apply. `GatewayStore` did that with its own wire
 (`POST {endpoint}/query`, `GET {endpoint}/health`) and a mode only the host could switch on. With
 the url form, the gateway is an ordinary data server that speaks the server's own `/call` wire,
@@ -69,7 +69,7 @@ The no-url form also runs in the browser, so the module must not import anything
 `RemoteDataset` reads the call context from the store `@_linked/server-utils/utils/CallContext`
 shares on `globalThis` (`Symbol.for('@_linked/server-utils:callContext')`) and imports that
 module for its type only. Importing it at runtime (3.4.0) pulled in `node:async_hooks` and broke
-hydration of every frontend that loads the store (Create Now's sign-in page stuck on "Loading
+hydration of every frontend that loads the store (the host app's sign-in page stuck on "Loading
 saved profiles"); 3.4.1 fixed it. In a browser the key is unset, so no header is sent. The error
 classes are branded (`brandLinkedError`, report [005](005-shared-state-across-copies.md)).
 
@@ -125,8 +125,8 @@ and `call-semantics.test.ts` cover the no-url form, unchanged.
 
 ## Follow-ups
 
-- Create Now's gateway reads `x-linked-end-user` and adds `forked` to its ping body: Create Now
-  backlog 117 (CN repo).
+- The host app's gateway reads `x-linked-end-user` and adds `forked` to its ping body: a
+  backlog item in its repo.
 - None open in this repo.
 
 ## PRs

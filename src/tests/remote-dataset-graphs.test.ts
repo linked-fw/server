@@ -21,7 +21,7 @@ const { invalidateGraphRegistry, GRAPH_REGISTRY_MAX_AGE_MS } = await import(
 const { OntologyGraph, ShapesGraph } = await import('@_linked/core/shapes/NamedGraph');
 const { syncOntologies } = await import('@_linked/core/ontology/syncOntologies');
 
-const URL_BASE = 'http://cn.test:4040/gateway';
+const URL_BASE = 'http://app.test:4040/gateway';
 const TOKEN = 'c'.repeat(64);
 const G_A = 'https://linked.cm/pkg/a/graph/ontology';
 const G_B = 'https://linked.cm/pkg/b/graph/ontology';

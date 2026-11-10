@@ -96,8 +96,8 @@ describe('LINKED_GRAPH_WRITER', () => {
     expect(graphWriterFromEnv({ LINKED_GRAPH_WRITER: '' })).toBe('app');
     expect(graphWriterFromEnv({ LINKED_GRAPH_WRITER: 'app' })).toBe('app');
     expect(graphWriterFromEnv({ LINKED_GRAPH_WRITER: 'host' })).toBe('host');
-    expect(() => graphWriterFromEnv({ LINKED_GRAPH_WRITER: 'cn' })).toThrow(
-      `LINKED_GRAPH_WRITER must be 'app' or 'host' (who writes the app's shape and ontology graphs), not "cn"`,
+    expect(() => graphWriterFromEnv({ LINKED_GRAPH_WRITER: 'other' })).toThrow(
+      `LINKED_GRAPH_WRITER must be 'app' or 'host' (who writes the app's shape and ontology graphs), not "other"`,
     );
     expect(appWritesGraphs({ LINKED_GRAPH_WRITER: 'host' })).toBe(false);
     expect(appWritesGraphs({})).toBe(true);

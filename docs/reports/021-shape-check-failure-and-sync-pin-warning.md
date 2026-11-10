@@ -3,10 +3,10 @@ date: 2026-10-27
 summary: >
   `POST /admin/sync-shapes` no longer answers 500 when only the shape check threw: the phase
   reports it as `shapeCheck.failed` and the route answers 200 when both syncs succeeded.
-  `syncPinWarning` counts a sub-shape under the target class it declares itself (CN's
+  `syncPinWarning` counts a sub-shape under the target class it declares itself (the host app's
   `CatalogNodeShape` is no longer reported as `sh:NodeShape`); `owl:Restriction` is watched. The
   double hierarchy parse at boot needs a core change and stays in backlog 001. Patch. Step F of
-  CN master plan 181.
+  The host app's master plan.
 ---
 
 # 021 — A thrown shape check, and the sync-pin warning's own target classes
@@ -21,8 +21,8 @@ summary: >
   `shapeCheck.failed` (its message) and is logged as before; `failure` is the ontology sync's
   alone, which still fails the route (after the shape sync ran).
 - **Sync-pin false positive (backlog 005).** `watchedClassOf` returned the first watched target
-  class anywhere up the class chain, so a sub-shape with its own `targetClass` (CN's
-  `CatalogNodeShape ⊑ NodeShape`, class `createNow:CatalogNodeShape`) was reported as
+  class anywhere up the class chain, so a sub-shape with its own `targetClass` (the host app's
+  `CatalogNodeShape ⊑ NodeShape`, class `app:CatalogNodeShape`) was reported as
   `sh:NodeShape`. The walk now stops at the first class that declares `targetClass` itself; a
   sub-shape without one still counts under its parent's. `owl:Restriction` joins
   `ONTOLOGY_TERM_CLASSES`, so an `owl:Restriction` shape pinned elsewhere keeps being reported,
@@ -55,8 +55,8 @@ $ npx linked build
 ✔ Build successful
 ```
 
-CN on the worktree (`PORT=4067 APP_ADMIN_SECRET=… npm run start:local`), boot log
-`[cn-main] ontology sync: 19 unchanged`, `[cn-main] shape graph sync: 4 unchanged`, no
+The host app on the worktree (`PORT=4067 APP_ADMIN_SECRET=… npm run start:local`), boot log
+`[app-main] ontology sync: 19 unchanged`, `[app-main] shape graph sync: 4 unchanged`, no
 `Routing pins` line; then:
 
 ```
@@ -65,7 +65,7 @@ $ curl -X POST -H 'x-app-admin-secret: …' localhost:4067/admin/sync-shapes
 HTTP 200
 ```
 
-(`shapes` left out of the quote.) `npm run test:regular` in the CN worktree: PASS, 342 passed / 14 skipped, 297 s (`## Details`).
+(`shapes` left out of the quote.) `npm run test:regular` in the host app worktree: PASS, 342 passed / 14 skipped, 297 s (`## Details`).
 
 ### Deviations
 
@@ -84,14 +84,14 @@ HTTP 200
 
 ## Details
 
-The route's shape check counts are what the shape check found in CN at the time: none. The
-admin re-sync in CN reports `skipped: 'disabled'` because CN runs its own per-dataset syncs with
+The route's shape check counts are what the shape check found in the host app at the time: none. The
+admin re-sync in the host app reports `skipped: 'disabled'` because the host app runs its own per-dataset syncs with
 the server's boot shape sync off; the ontology phase (and so the shape check) still runs there.
 
 
-### CN regular set
+### Host app regular set
 
-`CN_TEST_PORT=4167 npm run test:regular` in the CN worktree (both packages linked from the step's
+`npm run test:regular` in the host app worktree (both packages linked from the step's
 worktrees), under the shared lock, 297 s wall clock:
 
 ```

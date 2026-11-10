@@ -28,7 +28,7 @@ const { default: LincdServerBackendProvider } = await import('../backend.js');
 const { packageName } = await import('../package.js');
 const { queryJson } = await import('./read-double.js');
 
-const URL_BASE = 'http://cn.test:4040/gateway';
+const URL_BASE = 'http://app.test:4040/gateway';
 const TOKEN = 'b'.repeat(64);
 const IRI = 'http://example.org/shape-1';
 

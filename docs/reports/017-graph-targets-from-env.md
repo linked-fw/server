@@ -68,4 +68,4 @@ restores `LinkedStorage`'s default dataset.
 
 ### Follow-ups
 
-- None in this repo. CN reads the new routes fields (CN report on graph modes).
+- None in this repo. The host app reads the new routes fields (its report on graph modes).

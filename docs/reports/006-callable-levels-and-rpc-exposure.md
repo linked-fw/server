@@ -57,7 +57,7 @@ inherits it. `src/tests/query-plane-hardening.test.ts` updated to the reported l
 ## Follow-ups
 
 Consumers move their declarations from `'user'` to `'signed-in'` (auth, schema, translation,
-webid-email, Create Now): tracked in those repos, none here.
+webid-email, the host app): tracked in those repos, none here.
 
 ## PRs
 

@@ -3,14 +3,13 @@ summary: >
   RemoteDataset's url form sends the signed-in user's own Solid-OIDC access token
   (`x-linked-user-token`) with a fresh DPoP proof per request, from @_linked/auth's headers hook,
   instead of the unsigned `x-linked-end-user` WebID; `forwardUserToken` replaces
-  `forwardEndUser`. Create Now plan 080 step R2b. Minor (small breaking change).
+  `forwardEndUser`. Step R2b of the host app's datasets plan. Minor (small breaking change).
 packages: [server]
 ---
 
 # 019 — The user's own token to the data server
 
-Create Now plan 080 step R2b (CN report 151, `docs/reports/151-user-token-at-the-gateway.md` in
-the Create Now repo), with `@_linked/auth` report 021 and webid.email report 023. Landed on the
+Step R2b of the host app's datasets plan (and its report), with `@_linked/auth` report 021 and webid.email report 023. Landed on the
 integration branch `dev` together with them.
 
 ## PR
@@ -19,7 +18,7 @@ integration branch `dev` together with them.
 
 A query an app's `RemoteDataset` (url form) makes while answering a signed-in user's request now
 carries that user's own access token and a DPoP proof for that one request, so a data server
-(CN's gateway) can verify who the user is instead of trusting a WebID the app names.
+(the host app's gateway) can verify who the user is instead of trusting a WebID the app names.
 
 ### Changes
 
@@ -58,7 +57,7 @@ $ git grep -n 'x-linked-end-user\|END_USER_HEADER\|forwardEndUser\|currentEndUse
 ```
 
 `npx changeset status --since=origin/dev`, in a plain clone of this branch (in the worktree,
-changesets finds Create Now's workspace root first):
+changesets finds the host app's workspace root first):
 
 ```
 Packages to be bumped:
@@ -66,7 +65,7 @@ Packages to be bumped:
   - @_linked/server
 ```
 
-CN's gateway spec and regular set with this checkout and auth's: CN report 151.
+The host app's gateway spec and regular set with this checkout and auth's: the host app's report.
 
 ### Deviations
 
@@ -74,15 +73,15 @@ None from the sub-plan.
 
 ### Follow-ups
 
-- Refresh of the user's token, sign-ins without an issuer token, guests → Create Now backlog 117.
+- Refresh of the user's token, sign-ins without an issuer token, guests → the host app's backlog.
 
 ## Details
 
 The hook is read from `globalThis`, as the call context is, so the store stays browser-safe and
 works with two copies of `@_linked/auth` in one process. `RemoteDataset`'s ping (`init`) goes
-through `post` and so carries the user token when a request context has one; CN's gateway ignores
+through `post` and so carries the user token when a request context has one; the host app's gateway ignores
 it there.
 
 ## Review addendum
 
-The review fixes of this step are in Create Now report 151 §Review addendum (`docs/reports/151-user-token-at-the-gateway.md`).
+The review fixes of this step are in the host app's report §Review addendum.

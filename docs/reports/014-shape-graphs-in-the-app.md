@@ -6,13 +6,13 @@ summary: >
   generated in process, in dev through Vite's loader; the app's single-owner shapes go in
   `{DATA_ROOT}/graph/shapes`. The boot logs the graphs written, a second boot skips them, and the
   route reports them as `shapeGraphs`. `graph-not-routed` and unknown graph refusal codes answer
-  400. CN plan 071, step V2.
+  400. The host app's plan, step V2.
 packages: [server]
 ---
 
 # 014 — Shape graphs in the app
 
-## Plan-mode detail (CN plan 071 §V2 is the sub-plan)
+## Plan-mode detail (the host app's plan §V2 is the sub-plan)
 
 **Contract:** §Shape graphs as landed in core report 052 (`syncShapeGraphs(ds, {turtleFor,
 appShapes: {graph, package?}, packages?, orphanScope?})`, `packageShapesTurtle(pkg)` is what `linked
@@ -33,7 +33,7 @@ this record, landing.
 **Pitfalls:** core's `turtleFor` returning `undefined` means "generate", so a package without the
 file is left out through `packages`, which turns off core's orphan pruning (backlog 003). The dev
 generator must be the core the SSR graph registered the source shapes on (`ssrLoadModule` of
-`@_linked/core/shapes/shapesToTurtle`). CN boots with `syncShapesOnBoot: false`, so `:4040` is
+`@_linked/core/shapes/shapesToTurtle`). The host app boots with `syncShapesOnBoot: false`, so `:4040` is
 unaffected.
 
 ## What
@@ -74,7 +74,7 @@ Worktree `~/web/wt/v2` (`npx linked doctor resolve`: `@_linked/server` overlay, 
 server-utils from the main checkouts, core `200037d`, cli `e75a12b`). Own Fuseki
 `ghcr.io/linked-fw/fuseki:6.2.0-2` on :3185, compose project `fuseki-071-v2`; env
 `FUSEKI_BASE_URL=FUSEKI_ADMIN_URL=http://localhost:3185`, `FUSEKI_TEST_PORT=3185`,
-`CN_TEST_PORT=4185`, exported from a sourced file before every run.
+exported from a sourced file before every run.
 
 Baseline `npm test`: `Test Suites: 17 failed, 15 passed, 32 total`, `Tests: 218 passed` — every
 failure is the typecheck of `queryPlane.ts:246` (`Property '"graph-not-routed"' is missing … in
@@ -124,7 +124,7 @@ route reports shape graphs.**
    `shapeGraphs`.
 
 2. **A real app process, in dev.** A clone of `linked-fw/app-template` (scratch directory), its
-   `node_modules` linked to CN's with `@_linked/server` overlaid by this worktree (built with the
+   `node_modules` linked to the host app's with `@_linked/server` overlaid by this worktree (built with the
    integration cli, so its `lib/esm/data/shapes.ttl` exists), plus a source-only workspace package
    `packages-local/v2check` (two shapes, one `contains` property, no `lib/`). `linked start` with
    `PORT=4285`, `FUSEKI_BASE_URL=FUSEKI_ADMIN_URL=http://localhost:3185`, `FUSEKI_DATASET=v2-boot`,
@@ -160,7 +160,7 @@ route reports shape graphs.**
    Note: a property added to `v2check`'s shape and `{packages: ["v2check"]}` gave `reloaded:
    ["v2check"]` but no new graph: the reload re-imports a package's `/backend` entry, which the
    fixture does not have, so its shape module was not re-evaluated. Existing behaviour of the
-   reload, unchanged here (a CN clone's packages load their shapes from their backend).
+   reload, unchanged here (a host app clone's packages load their shapes from their backend).
 
 ## Landing
 
@@ -184,7 +184,7 @@ npx linked build  10.55s user 1.05s system 178% cpu 6.503 total
 - R2: raise `@_linked/core` to the release with `shapes/syncShapeGraphs`; every package with shapes
   re-published so its tarball ships `data/shapes.ttl` (until then those packages get no shape
   graph in an app).
-- C4: CN's catalogs read `graphs.allShapes` plus the app graph `{DATA_ROOT}/graph/shapes`.
+- C4: the host app's catalogs read `graphs.allShapes` plus the app graph `{DATA_ROOT}/graph/shapes`.
 
 ## Review fixes
 
@@ -201,7 +201,7 @@ on :3195, `FUSEKI_TEST_PORT=3195`):
   default-graph sync is exempt, since it reports no packages. Tested in `boot-shape-sync`.
 - `materializeShapes` and `SyncShapesFn` are back as deprecated stubs (the old default-graph sync,
   unchanged). The changeset lists them as deprecated, not removed.
-- CN is no longer named in comments (`LinkedServer.tsx`, `RemoteDataset.ts`, `ontologySync.ts`).
+- The host app is no longer named in comments (`LinkedServer.tsx`, `RemoteDataset.ts`, `ontologySync.ts`).
 - Tests: `graphQueryCallError` answers 400 for an unknown code and for prototype keys
   (`constructor`, `__proto__`, `toString`, `hasOwnProperty`).
 

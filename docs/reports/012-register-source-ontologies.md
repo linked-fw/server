@@ -2,17 +2,17 @@
 summary: >
   The ontology registration before the sync and the shape check also covers the app's own
   workspace packages, and in dev an unbuilt one registers from `src/ontologies/*.register.ts`
-  through Vite's `ssrLoadModule` (core `registerInstalledOntologies`' `importModule`), so a Create
-  Now clone's `packages/<slug>-ont` is synced in dev. CN plan 070, §Installed packages' ontologies.
+  through Vite's `ssrLoadModule` (core `registerInstalledOntologies`' `importModule`), so a host
+  app clone's `packages/<slug>-ont` is synced in dev. The host app's plan, §Installed packages' ontologies.
 ---
 
 # 012 — Workspace packages register their ontologies, unbuilt ones through Vite
 
 ## Why
 
-A Create Now clone's ontology package `packages/<slug>-ont` has no `lib/` in dev, and nothing the
+A host app clone's ontology package `packages/<slug>-ont` has no `lib/` in dev, and nothing the
 app loads imports it, so the boot and `POST /admin/sync-shapes` never registered it: the
-ontology builder's writes could not reach the store (CN report 109, §Blocked). Two gaps: the
+ontology builder's writes could not reach the store (the host app's report, §Blocked). Two gaps: the
 dependency walk does not reach a workspace package no one depends on, and the registration
 (report 011) imported only built register modules.
 
@@ -74,7 +74,7 @@ Second boot:
 
 ## Notes for consumers
 
-- CN (C3): a clone's `packages/<slug>-ont` now registers at boot and on each re-sync in dev; its
+- The host app (C3): a clone's `packages/<slug>-ont` now registers at boot and on each re-sync in dev; its
   `loadData` re-reads the Turtle on every sync, so the builder's write reaches the store on the
   next `POST /admin/sync-shapes`.
 - Workspace packages are registered in a built app too (from their `lib/`), also when nothing

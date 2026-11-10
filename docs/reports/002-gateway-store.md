@@ -10,7 +10,7 @@ Superseded by [003](003-remote-dataset.md): `GatewayStore` is removed; `RemoteDa
 
 `src/shapes/quadstores/GatewayStore.ts`, exported at
 `@_linked/server/shapes/quadstores/GatewayStore`. A backend process selects it from
-`linked.backend.datasets.json` when the host that started it (Create Now) wants the process's
+`linked.backend.datasets.json` when the host that started it wants the process's
 queries to go through the host's gateway rather than to a triple store directly: the gateway then
 applies its own authorization, audit and copy-on-write branch forks to app traffic.
 

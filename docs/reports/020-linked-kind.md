@@ -4,7 +4,7 @@ summary: >
   Boot loading decides which installed packages are linked from `linked.kind` (any kind but
   `app`) through `linkedKind(json)`, a byte-identical twin of `@_linked/cli`'s; `linkedPackage`
   is no longer read. `discoverLinkedDependencies` takes an optional test for a linked package.
-  The server's own `package.json` says `"kind": "library"`. Step LK of CN master plan 057
+  The server's own `package.json` says `"kind": "library"`. Step LK of the host app's master plan
   (cli reports 032, 033). Minor.
 ---
 
@@ -44,13 +44,13 @@ it is given for both the walk and the app-copy choice.
 
 ### Deviations
 
-- The optional `isLinked` parameter is new: CN's reader of an app clone's npm-installed packages
-  passes a test that also accepts `linkedPackage: true` until the release (CN plan 057 master
-  decision). Nothing in the server passes one.
+- The optional `isLinked` parameter is new: the host app's reader of an app clone's npm-installed packages
+  passes a test that also accepts `linkedPackage: true` until the release (a decision of the host app's
+  master plan). Nothing in the server passes one.
 
 ### Follow-ups
 
-- None here. CN drops its `isLinked` argument after the release (CN plan 180 §WU).
+- None here. The host app drops its `isLinked` argument after the release (the host app's plan §WU).
 
 ## Details
 
