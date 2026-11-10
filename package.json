@@ -112,5 +112,11 @@
         "lib/esm/*"
       ]
     }
+  },
+  "linkedOntologies": {
+    "server": {
+      "namespace": "https://linked.cm/ont/server/",
+      "generated": false
+    }
   }
 }
