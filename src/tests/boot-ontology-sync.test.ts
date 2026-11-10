@@ -323,7 +323,7 @@ describe('loadOntologyCore', () => {
     );
   });
 
-  it("imports core's registration of installed packages, which imports each package's register modules", async () => {
+  it("imports core's registration of installed packages, which imports each package's ontology index", async () => {
     const core = await loadOntologyCore();
     expect(typeof core.registerInstalledOntologies).toBe('function');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'installed-'));
@@ -333,9 +333,9 @@ describe('loadOntologyCore', () => {
     fs.mkdirSync(without);
     fs.writeFileSync(path.join(withRegister, 'package.json'), JSON.stringify({ name: '@x/installed', type: 'module' }));
     fs.writeFileSync(path.join(without, 'package.json'), JSON.stringify({ name: '@x/plain', type: 'module' }));
-    // Stands in for `linkedOntology(...)`: records that the module ran.
+    // Stands in for the package's `registerOntologies(...)`: records that the module ran.
     fs.writeFileSync(
-      path.join(withRegister, 'lib/esm/ontologies/x.register.js'),
+      path.join(withRegister, 'lib/esm/ontologies/index.js'),
       "globalThis.__bootOntologySyncRegistered = (globalThis.__bootOntologySyncRegistered ?? 0) + 1;\n"
     );
     const g = globalThis as { __bootOntologySyncRegistered?: number };
@@ -368,19 +368,19 @@ describe('the directories and the loader the server registers with', () => {
       },
     };
     const importModule = sourceModuleImporter(vite);
-    await importModule!('/app/packages/b-ont/src/ontologies/b.register.ts');
-    expect(loaded).toEqual(['vite:/app/packages/b-ont/src/ontologies/b.register.ts']);
+    await importModule!('/app/packages/b-ont/src/ontologies/index.ts');
+    expect(loaded).toEqual(['vite:/app/packages/b-ont/src/ontologies/index.ts']);
     expect(sourceModuleImporter(undefined)).toBeUndefined();
     expect(sourceModuleImporter({})).toBeUndefined();
   });
 
-  it("registers a source package's register modules through the loader with the real core", async () => {
+  it("registers a source package's ontology index through the loader with the real core", async () => {
     const core = await loadOntologyCore();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'source-'));
     const source = path.join(root, 'b-ont');
     fs.mkdirSync(path.join(source, 'src/ontologies'), { recursive: true });
     fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ name: 'b-ont', type: 'module' }));
-    fs.writeFileSync(path.join(source, 'src/ontologies/b.register.ts'), '');
+    fs.writeFileSync(path.join(source, 'src/ontologies/index.ts'), '');
     const imported: string[] = [];
     try {
       expect(await core.registerInstalledOntologies!([source])).toEqual([]);
@@ -391,7 +391,7 @@ describe('the directories and the loader the server registers with', () => {
           },
         })
       ).toEqual(['b-ont']);
-      expect(imported).toEqual([path.join(fs.realpathSync(source), 'src/ontologies/b.register.ts')]);
+      expect(imported).toEqual([path.join(fs.realpathSync(source), 'src/ontologies/index.ts')]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

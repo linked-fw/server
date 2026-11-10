@@ -17,8 +17,8 @@
  *   is off; the sync loads it itself when it runs.
  * - Before either, every linked package directory the server discovered registers its ontologies
  *   (core `registerInstalledOntologies`): a package the app only deep-imports shape files from
- *   never evaluates its register modules, so its data would be missing from both. A source
- *   package without built register modules (a workspace package in dev) registers through
+ *   never evaluates its ontology index, so its data would be missing from both. A source
+ *   package without a built index (a workspace package in dev) registers through
  *   `importModule` (Vite's `ssrLoadModule`), when the caller passes one.
  *
  * The four core modules (`ontology/syncOntologies`, `shapes/checkShapeHierarchy`,
@@ -154,7 +154,7 @@ export function ontologyPackageDirs(
 }
 
 /**
- * In dev, the loader for source register modules: Vite's `ssrLoadModule`, so a workspace package
+ * In dev, the loader for a source ontology index: Vite's `ssrLoadModule`, so a workspace package
  * that was never built registers on the core the SSR graph uses. Undefined without Vite (a built
  * app), where source packages are skipped.
  */
@@ -202,8 +202,8 @@ export async function runOntologyPhase(
     /** Every linked package directory the server discovered (transitively). */
     packageDirs?: string[];
     /**
-     * Imports a source register module (`src/ontologies/*.register.ts`) of a package directory
-     * without built ones; in dev, Vite's `ssrLoadModule`.
+     * Imports the source ontology index (`src/ontologies/index.ts`) of a package directory
+     * without a built one; in dev, Vite's `ssrLoadModule`.
      */
     importModule?: (file: string) => Promise<unknown>;
     log?: (message: string) => void;

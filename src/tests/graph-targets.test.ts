@@ -71,9 +71,13 @@ const targetsCore = await import('@_linked/core/shapes/syncTargets');
 const line = (syncs: { shapeSync: boolean; ontologySync: boolean }) => syncTargetsLine(syncs, targetsCore);
 
 // An ontology package with data, so the ontology graphs have a package to place.
-const { linkedPackage } = await import('@_linked/core/utils/Package');
-const { createNameSpace } = await import('@_linked/core/utils/NameSpace');
-linkedPackage('gt-onto').linkedOntology({}, createNameSpace('https://example.org/gt-onto/'), 'gt-onto', async () => [''], '../data/gt-onto.ttl');
+const { registerTestOntology } = await import('./register-test-ontology.js');
+registerTestOntology('gt-onto', {
+  name: 'gt-onto',
+  namespace: 'https://example.org/gt-onto/',
+  load: async () => [''],
+  files: '../data/gt-onto.ttl',
+});
 
 describe('the sync targets line', () => {
   it('names the datasets when the shape shapes are pinned elsewhere, and is silent without a pin', () => {

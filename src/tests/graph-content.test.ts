@@ -15,7 +15,7 @@ const { SparqlDataset } = await import('@_linked/core/sparql/SparqlDataset');
 const { LinkedStorage } = await import('@_linked/core/utils/LinkedStorage');
 const { setGraphTargets } = await import('@_linked/core/utils/graphTargets');
 const { linkedPackage } = await import('@_linked/core/utils/Package');
-const { createNameSpace } = await import('@_linked/core/utils/NameSpace');
+const { registerTestOntology } = await import('./register-test-ontology.js');
 const { Shape } = await import('@_linked/core/shapes/Shape');
 const { objectProperty } = await import('@_linked/core/shapes/SHACL');
 const { ShapesGraph, OntologyGraph } = await import('@_linked/core/shapes/NamedGraph');
@@ -49,13 +49,12 @@ class GcsPart extends (Shape as any) {
   static targetClass = { id: 'https://example.org/gcs#Part' };
 }
 (app.linkedShape as any)(GcsPart);
-linkedPackage('gcs-onto').linkedOntology(
-  {},
-  createNameSpace(NS),
-  'gcs-onto',
-  async () => [`<${NS}Wheel> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${NS}Part> .`],
-  '../data/gcs-onto.ttl',
-);
+registerTestOntology('gcs-onto', {
+  name: 'gcs-onto',
+  namespace: NS,
+  load: async () => [`<${NS}Wheel> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${NS}Part> .`],
+  files: '../data/gcs-onto.ttl',
+});
 
 function server(): any {
   const s: any = Object.create(LinkedServer.prototype);

@@ -1,11 +1,4 @@
 import { createNameSpace } from '@_linked/core/utils/NameSpace';
-import { loadOntologyFiles } from '@_linked/core/ontology/loadOntologyFiles';
-
-/** This ontology's data files, relative to this module (`linked build` copies them to `lib/esm/data/`). */
-export const dataFiles = ['../data/server.ttl'];
-
-/** Read this ontology's Turtle data (server only). */
-export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
 
 /**
  * The namespace of this ontology.
@@ -14,8 +7,8 @@ export const loadData = () => loadOntologyFiles(import.meta.url, dataFiles);
  * package's own ontology takes the package's publicSlug (`@_linked/server` → `server`), the same
  * slug its shapes use under `https://linked.cm/shape/server/`.
  *
- * Its prefix label is the same slug, `server` (`server:LincdAPI`). It used to be `lincd-server`,
- * which is still registered as a deprecated alias so `lincd-server:` names keep expanding.
+ * The prefix its data suggests is the same slug, `server` (`server:LincdAPI`); `./index.ts`
+ * registers the ontology with its data, `../data/server.ttl`.
  *
  * Until an earlier release the namespace was `http://lincd.org/ont/lincd-server/`. No stored
  * data is typed with these terms; the only store triples that carried them were the synced shape descriptions of

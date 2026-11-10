@@ -163,15 +163,13 @@ describe('RemoteDataset.graphQuery', () => {
       if (methodOf(call) === 'readQuery') return jsonResponse(200, []);
       return jsonResponse(200, {});
     };
-    const { linkedPackage } = await import('@_linked/core/utils/Package');
-    const { createNameSpace } = await import('@_linked/core/utils/NameSpace');
-    linkedPackage('remote-graph-refused-test').linkedOntology(
-      {},
-      createNameSpace('http://example.org/refused/'),
-      'refused',
-      async () => ['<http://example.org/refused/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/refused/A> .'],
-      '../data/refused.ttl',
-    );
+    const { registerTestOntology } = await import('./register-test-ontology.js');
+    registerTestOntology('remote-graph-refused-test', {
+      name: 'refused',
+      namespace: 'http://example.org/refused/',
+      load: async () => ['<http://example.org/refused/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/refused/A> .'],
+      files: '../data/refused.ttl',
+    });
     await expect(
       syncOntologies(new RemoteDataset({ url: URL_BASE }), { packages: ['remote-graph-refused-test'] }),
     ).rejects.toThrow(/has no graph queries/);
