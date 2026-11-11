@@ -103,7 +103,7 @@ export interface OntologyPhaseResult {
 }
 
 /**
- * Whether the boot syncs the shapes and the ontologies into app data: off only when `linked.config`
+ * Whether the boot syncs the shapes and the ontologies into app data: off only when `linked.app.json`
  * sets `syncShapesOnBoot: false`. One switch for both syncs. It applies only to an app that writes
  * its own graphs (`appWritesGraphs`, utils/graphTargets): under `LINKED_GRAPH_WRITER=host` the boot
  * syncs nothing whatever it says.

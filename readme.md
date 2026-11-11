@@ -542,7 +542,7 @@ Side effects to expect:
 writes them) the app writes no shape or ontology graph: the boot registers the ontologies,
 loads the class hierarchy and runs the shape check but syncs nothing (it logs one line saying the
 host writes the graphs). Under `app` the boot syncs them (see [Ontology sync and the shape
-check](#ontology-sync-and-the-shape-check) and [Shape graphs](#shape-graphs)) unless `linked.config`
+check](#ontology-sync-and-the-shape-check) and [Shape graphs](#shape-graphs)) unless `linked.app.json`
 sets `syncShapesOnBoot: false`.
 
 The host reads the graphs from `POST /admin/graph-content`, body `{packages?: string[], reload?:
@@ -587,7 +587,7 @@ Before its shape sync at boot, the server:
 2. **Syncs the ontologies** (core `syncOntologiesRouted`): every registered package's ontology data is written into each dataset the storage routing needs it in (see [Which datasets the syncs write to](#which-datasets-the-syncs-write-to)), where `LINKED_ONTOLOGY_GRAPH` says (one graph per package by default; see [Ontology and shape graphs](#ontology-and-shape-graphs)), so the store's RDFS view infers the class hierarchy. The log line names a shared graph or the default graph when the sync wrote there. A package whose stored hash matches is skipped, so an unchanged sync writes nothing. The log line names the packages written and skipped (a package whose data cannot be read is skipped with core's warning). Sync nodes of packages no longer registered are pruned only with `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true`, the shape sync's orphan policy.
 3. **Checks the shapes** against that hierarchy (core `checkShapeHierarchy`, with every package's `dependencies` and `peerDependencies`). A running app is never stopped by it: each finding is logged, with a count by severity.
 
-The ontology sync and the shape sync have one switch: both run when the app writes its own graphs (`LINKED_GRAPH_WRITER` unset or `app`; see [Graph writer and graph content](#graph-writer-and-graph-content)) and `linked.config` does not set `syncShapesOnBoot: false`. With the sync off the boot still registers the packages' ontologies and runs the shape check, and `POST /admin/graph-content` with `reload` registers and checks again. The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded at boot either way. A failed ontology sync at boot is logged and the boot goes on.
+The ontology sync and the shape sync have one switch: both run when the app writes its own graphs (`LINKED_GRAPH_WRITER` unset or `app`; see [Graph writer and graph content](#graph-writer-and-graph-content)) and the app's `linked.app.json` does not set `syncShapesOnBoot: false`. With the sync off the boot still registers the packages' ontologies and runs the shape check, and `POST /admin/graph-content` with `reload` registers and checks again. The in-memory class hierarchy (core `loadOntologyHierarchy`) is loaded at boot either way. A failed ontology sync at boot is logged and the boot goes on.
 
 ### Shape graphs
 

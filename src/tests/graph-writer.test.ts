@@ -129,7 +129,7 @@ describe('LINKED_GRAPH_WRITER', () => {
     expect(received).toBeGreaterThan(0);
   });
 
-  it("the app writer with linked.config syncShapesOnBoot: false: the boot sends no graph query", async () => {
+  it("the app writer with linked.app.json syncShapesOnBoot: false: the boot sends no graph query", async () => {
     delete process.env[GRAPH_WRITER_ENV];
     const { sent, received } = await bootAndGraphContent({ syncShapesOnBoot: false });
     expect(sent).toBe(0);

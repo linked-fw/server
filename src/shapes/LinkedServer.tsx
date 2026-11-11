@@ -413,8 +413,8 @@ export class LinkedServer extends Shape {
   protected booting = false;
 
   /**
-   * yarn linked start sends the contents of linked.config.js as an object to this constructor
-   * @param n
+   * `linked start` passes the app's settings (from its `linked.app.json`) and its load hooks as an
+   * object to this constructor.
    */
   constructor(config?: LinkedConfig | string | { id?: string }) {
     super(
@@ -523,7 +523,7 @@ export class LinkedServer extends Shape {
    * Shape graphs of packages no longer registered stay unless the operator sets
    * `LINKED_SYNC_SHAPES_PRUNE_ORPHANS=true` — see `bootOrphanScope` in utils/syncShapes.
    *
-   * Runs when {@link bootSyncs}: the app writes its own graphs and `linked.config` does not set
+   * Runs when {@link bootSyncs}: the app writes its own graphs and `linked.app.json` does not set
    * `syncShapesOnBoot: false`. A host that writes the app's graphs (`LINKED_GRAPH_WRITER=host`)
    * reads their content through `POST /admin/graph-content` ({@link graphContent}).
    */
@@ -537,7 +537,7 @@ export class LinkedServer extends Shape {
 
   /**
    * Whether the boot syncs the shapes and the ontologies: the app writes its own graphs
-   * (`LINKED_GRAPH_WRITER` is `app`) and `linked.config` does not set `syncShapesOnBoot: false`.
+   * (`LINKED_GRAPH_WRITER` is `app`) and `linked.app.json` does not set `syncShapesOnBoot: false`.
    */
   private bootSyncs(): boolean {
     return appWritesGraphs(process.env) && shapeSyncOn((this.config as any)?.syncShapesOnBoot);

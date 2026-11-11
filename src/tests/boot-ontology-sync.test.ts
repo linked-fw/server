@@ -86,7 +86,7 @@ function fakeCore({
 const quiet = { log: () => {}, warn: () => {} };
 
 describe('the boot switch', () => {
-  it("is linked.config's syncShapesOnBoot, one switch for the shape and the ontology sync: off only when false", () => {
+  it("is linked.app.json's syncShapesOnBoot, one switch for the shape and the ontology sync: off only when false", () => {
     expect(shapeSyncOn(undefined)).toBe(true);
     expect(shapeSyncOn(true)).toBe(true);
     expect(shapeSyncOn(false)).toBe(false);
