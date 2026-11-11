@@ -6,7 +6,7 @@ import '../ontologies/index.js';
 import { lincdServer, ns, server } from '../ontologies/server.js';
 import * as oldModule from '../ontologies/lincd-server.js';
 
-// A first-party ontology's suggested prefix equals its ontologySlug, which for this
+// A first-party ontology's suggested prefix equals its name, which for this
 // package is its publicSlug: `server`, namespace https://linked.cm/ont/server/. The
 // ontology registers no prefix: an app's prefix map holds the prefixes.
 const NS = 'https://linked.cm/ont/server/';
