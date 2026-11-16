@@ -44,12 +44,13 @@ export function assertStoresHoldTransactions(): void {
 
 /**
  * Who a transaction is bound to: the session's user account in an HTTP call (a session is
- * required, as for a write without an access rule), `system` for work with no request behind it.
+ * required, as for a write without an access rule), the user a delegate acts for in a delegated
+ * call (`runAsDelegate`), `system` for work with no user behind it.
  */
 export function transactionCaller(): string {
   const ctx = getCallContext();
-  if (!ctx || ctx.kind !== 'http') return 'system';
-  const id = ctx.request?.linkedAuth?.userAccount?.id;
+  if (!ctx || (ctx.kind !== 'http' && ctx.kind !== 'delegated')) return 'system';
+  const id = ctx.kind === 'http' ? ctx.request?.linkedAuth?.userAccount?.id : ctx.userAccount?.id;
   if (typeof id !== 'string' || !id) throw new ServerCallError(401, 'Authentication required');
   return `user:${id}`;
 }
