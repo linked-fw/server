@@ -368,7 +368,7 @@ semantics are under [Error semantics](#error-semantics). `token` is ignored.
   `x-linked-user-token: <the user's Solid-OIDC access token>` (exported as `USER_TOKEN_HEADER`) and
   `DPoP: <a proof for this one request>`, beside the bearer. auth answers for a session signed in
   through an issuer that gave a DPoP-bound JWT access token (webid.email does), while the token has
-  more than 30 seconds left; other sessions, a system context (`runAsSystem`), an anonymous request
+  more than 30 seconds left; other sessions, a system context (`runAsSystem`), a delegated call (`runAsDelegate`: it has a user but no session token), an anonymous request
   and code outside any call send neither. A hook that throws or answers something else sends
   neither (one warning per process) and the query still goes. The token still decides which data
   the store reaches; the data server verifies the user's token and proof (`@_linked/auth`'s
@@ -448,7 +448,9 @@ POST /call/@_linked/server/<x>Query          {"args": [<query.toJSON(), with "tx
   if it were sent alone; a refused or failed one rolls the transaction back in every store. An
   idle transaction is rolled back after 30 seconds.
 - **The caller.** A transaction needs a session (401 without one) and is bound to the session's
-  user account; a backend-to-backend call with no request behind it is `system`. Anyone else's
+  user account; a delegated call (`runAsDelegate` in `@_linked/server-utils`) is bound to the user
+  the delegate acts for, the same identity as that user's own request; a backend-to-backend call
+  with no user behind it is `system`. Anyone else's
   request with that txId is refused and leaves the transaction as it was.
 - **Refusals** (`{error, code}`): 501 `transactions-unsupported`, 409 `transaction-unknown` (never
   begun, ended, failed or expired; a `rollback` of one resolves), 403 `transaction-not-yours`. A
