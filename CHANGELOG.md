@@ -1,5 +1,17 @@
 # @\_linked/server
 
+## 4.0.0
+
+### Major Changes
+
+- [#235](https://github.com/linked-fw/server/pull/235) [`6307b9f`](https://github.com/linked-fw/server/commit/6307b9f39ba38cdf2bd05b7044505be564aaa309) Thanks [@flyon](https://github.com/flyon)! - The ontology is registered by `src/ontologies/index.ts` (core's `registerOntologies`), which the package entry imports; the package registers no prefix (an app's prefix map, `linked.app.json`, holds the prefixes; the ontology's data suggests one). `src/package.ts` exports `registerOntologies` instead of `linkedOntology`. Requires the `@_linked/core` major with `registerOntologies`. Removed: `ontologies/server.register`, `ontologies/lincd-server.register`, the `dataFiles` and `loadData` exports of `ontologies/server`, and the deprecated `lincd-server` prefix. The boot sync's source-package loader imports `src/ontologies/index.ts`.
+
+### Patch Changes
+
+- [#235](https://github.com/linked-fw/server/pull/235) [`723350d`](https://github.com/linked-fw/server/commit/723350db62241ca4dfa992a91ea0dc72abc0b806) Thanks [@flyon](https://github.com/flyon)! - Comments and the readme name `linked.app.json` as the file that holds `syncShapesOnBoot` (the app settings `linked start` passes to `LinkedServer`), and the ontology's name as the last segment of a first-party ontology namespace.
+
+- [#235](https://github.com/linked-fw/server/pull/235) [`d10d6a1`](https://github.com/linked-fw/server/commit/d10d6a1068cd463071b0ffa81882ad54cbda0450) Thanks [@flyon](https://github.com/flyon)! - The ontology is declared in `package.json` `"linkedOntologies"` and its data states its suggested prefix and namespace (`vann:preferredNamespacePrefix`, `vann:preferredNamespaceUri`); the module stays hand-written (`"generated": false`). No import path or export changes.
+
 ## 3.14.1
 
 ### Patch Changes
