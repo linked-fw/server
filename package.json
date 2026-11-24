@@ -38,7 +38,7 @@
     "web3"
   ],
   "dependencies": {
-    "@_linked/cli": "^1.58.0",
+    "@_linked/cli": "^2.0.0",
     "@_linked/core": "^3.0.0",
     "@_linked/server-utils": "^2.0.0",
     "autoprefixer": "^10.4.18",
