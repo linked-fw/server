@@ -90,8 +90,8 @@ describe('readShapesTurtle', () => {
 
 describe('appShapesGraph', () => {
   it('is {DATA_ROOT}/graph/shapes', () => {
-    expect(appShapesGraph({ DATA_ROOT: 'https://create.now/data' })).toBe('https://create.now/data/graph/shapes');
-    expect(appShapesGraph({ DATA_ROOT: 'https://shop.id.create.now/' })).toBe('https://shop.id.create.now/graph/shapes');
+    expect(appShapesGraph({ DATA_ROOT: 'https://example.org/data' })).toBe('https://example.org/data/graph/shapes');
+    expect(appShapesGraph({ DATA_ROOT: 'https://shop.id.example.org/' })).toBe('https://shop.id.example.org/graph/shapes');
   });
 
   it('is undefined without an absolute DATA_ROOT', () => {

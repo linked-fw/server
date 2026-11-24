@@ -8,7 +8,7 @@ packages: [server]
 
 # 016 — One name for the admin secret
 
-Source: CN plan 071 follow-ups; the owner's rules of 2026-10-24 (no legacy apps, one way to state
+Source: the host app's plan follow-ups; the owner's rules of 2026-10-24 (no legacy apps, one way to state
 things).
 
 ## What
@@ -24,8 +24,8 @@ things).
 
 ## Verification
 
-Worktree `~/web/wt/cngen`, own Fuseki `ghcr.io/linked-fw/fuseki:6.2.0-2` on :3315 (compose
-project `fuseki-cngen`), `FUSEKI_TEST_PORT=3315`.
+A separate worktree, own Fuseki `ghcr.io/linked-fw/fuseki:6.2.0-2` on :3315 (compose
+project `fuseki-gen`), `FUSEKI_TEST_PORT=3315`.
 
 ```
 FAIL src/tests/two-copies.test.ts        (backlog 002 item 4, as before)
@@ -52,5 +52,5 @@ Time:        25.236 s
   ✔ Build successful
   ```
 - Deviations: none.
-- Follow-ups: CN stops stamping `CN_APP_ADMIN_SECRET` and sending `x-cn-admin-secret` (CN's own
+- Follow-ups: the host app stops stamping `CN_APP_ADMIN_SECRET` and sending `x-cn-admin-secret` (the host app's own
   PR, recorded in its report).

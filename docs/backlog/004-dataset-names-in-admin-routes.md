@@ -9,7 +9,7 @@ packages: [server, core]
 
 # 004 — Dataset names in `GET /admin/routes`
 
-Source: CN plan 071, server report 015.
+Source: server report 015.
 
 ## The gap
 
@@ -19,7 +19,7 @@ first, then in pin order) with `store` (the class name), `id` when the store has
 alias → store to the app's storage file and records nothing, and a storage file may build stores
 by hand. Two `FusekiStore`s are told apart only by their position and their routes.
 
-Today that is enough for an app with one routed dataset (the default one, as CN's apps are), and a
+Today that is enough for an app with one routed dataset (the default one, as a typical host's apps have), and a
 host can match a route by its shape IRI in whichever dataset holds it.
 
 ## Open questions
@@ -31,6 +31,6 @@ host can match a route by its shape IRI in whichever dataset holds it.
 
 ## Also: the routing-pin warning reads a private field
 
-`syncPinWarning` names a store without an `id` by its dataset (`FusekiStore "cn-main"`), and it gets
+`syncPinWarning` names a store without an `id` by its dataset (`FusekiStore "main"`), and it gets
 that name from FusekiStore's private `dataset` field (`datasetName()` in `src/utils/graphTargets.ts`).
 The same public store name would replace that read.

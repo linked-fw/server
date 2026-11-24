@@ -2,7 +2,7 @@
 summary: >
   The host control channel gained `POST /admin/sync-shapes`: the app re-syncs its registered
   shapes into its app data exactly as its boot does and answers with the count. A host that
-  changed the app's shape code (Create Now's code-first shape edit) calls it so that the app,
+  changed the app's shape code (the host app's code-first shape edit) calls it so that the app,
   the only process that loads that code, writes its own shapes and hashes. Source reloads
   are serialized; a source reload alone does not sync shapes.
 ---
@@ -55,7 +55,7 @@ An older comment on the boot sync said it re-ran on shape-file HMR; it did not.
 ## Verification
 
 Unit: `src/tests/admin-channel.test.ts` (routes, secret, body parsing, error mapping, the
-module-graph invalidation). Live, on a copy of a Create Now project app with this build
+module-graph invalidation). Live, on a copy of a host app's project app with this build
 installed and `appData` on a scratch Fuseki dataset: boot wrote 20 shapes; after writing
 `Task.ts` and its barrel line, `POST /admin/sync-shapes {"packages":["…-assets"]}` answered
 `{"written":2,"orphanScope":"none"}` (Task and Thing); a second call answered

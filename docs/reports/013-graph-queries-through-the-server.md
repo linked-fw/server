@@ -5,13 +5,13 @@ summary: >
   for `.from(graphs.allOntologies)` reads, the generic plane's `graphQuery` arm checked by
   `QueryAccess`'s `graph` rule with refusal codes on the wire, the control channel's
   `POST /admin/graph-registry-changed`, and an ontology phase that reports the graphs it wrote.
-  CN plan 071, step V1.
+  The host app's plan, step V1.
 packages: [server]
 ---
 
 # 013 — Graph queries through the server
 
-## Plan-mode detail (CN plan 071 §V1 is the sub-plan)
+## Plan-mode detail (the host app's plan §V1 is the sub-plan)
 
 **Files:** `src/shapes/quadstores/RemoteDataset.ts` (graphQuery, registry cache, read expansion),
 `src/utils/queryPlane.ts` (`toGraphQuery`, `authorizeGraphQuery`, `graphQueryCallError`),
@@ -24,7 +24,7 @@ error bodies; doc lines), `src/utils/adminChannel.ts` (the route), `src/utils/on
 codes, the control route. 3. The ontology phase's graphs, the live test, changeset, backlog,
 review, landing.
 
-**Wire for C1** (CN's gateway arm should answer the same way): method `graphQuery`, body
+**Wire for C1** (the host app's gateway arm should answer the same way): method `graphQuery`, body
 `{args: [GraphQuery]}`, result `GraphResult`; a refusal `{error, code}` with code ∈
 `graph-exists` (409), `graph-not-registered` (409), `graph-name-read-only` (400),
 `unsupported-query-kind` (501). `RemoteDataset` reads any graph code at any status as that

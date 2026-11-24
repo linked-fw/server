@@ -71,9 +71,13 @@ const targetsCore = await import('@_linked/core/shapes/syncTargets');
 const line = (syncs: { shapeSync: boolean; ontologySync: boolean }) => syncTargetsLine(syncs, targetsCore);
 
 // An ontology package with data, so the ontology graphs have a package to place.
-const { linkedPackage } = await import('@_linked/core/utils/Package');
-const { createNameSpace } = await import('@_linked/core/utils/NameSpace');
-linkedPackage('gt-onto').linkedOntology({}, createNameSpace('https://example.org/gt-onto/'), 'gt-onto', async () => [''], '../data/gt-onto.ttl');
+const { registerTestOntology } = await import('./register-test-ontology.js');
+registerTestOntology('gt-onto', {
+  name: 'gt-onto',
+  namespace: 'https://example.org/gt-onto/',
+  load: async () => [''],
+  files: '../data/gt-onto.ttl',
+});
 
 describe('the sync targets line', () => {
   it('names the datasets when the shape shapes are pinned elsewhere, and is silent without a pin', () => {
@@ -124,12 +128,12 @@ describe('the sync targets line', () => {
   it('names a store without an id by the dataset of its endpoint', () => {
     const appData = new (Store as any)();
     const shapes = new (Other as any)();
-    shapes.dataset = 'cn-main';
+    shapes.dataset = 'my-app';
     const before = LinkedStorage.getDefaultDataset();
     LinkedStorage.setDefaultDataset(appData);
     try {
       LinkedStorage.setDatasetForShapes(shapes, NodeShape);
-      expect(line(BOTH)).toContain('Other "cn-main" (every package)');
+      expect(line(BOTH)).toContain('Other "my-app" (every package)');
     } finally {
       LinkedStorage.unsetDatasetForShape?.(NodeShape);
       if (before) LinkedStorage.setDefaultDataset(before);

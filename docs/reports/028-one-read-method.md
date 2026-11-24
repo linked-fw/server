@@ -46,7 +46,7 @@ packages: [server]
   root entry).
 
 **Verification** (worktree `one-read-method--s1`, against the master's core at `344065c`; no
-server, no Fuseki; cn-main untouched)
+server, no Fuseki; app-main untouched)
 
 - `linked build` (the main checkout's binary), 5 s: `✔ Build successful`
 - `npm test`:
@@ -82,7 +82,7 @@ server, no Fuseki; cn-main untouched)
 - Backlog 006: triples and terms reads over `/call` (owner decision 4).
 - Release (plan 111): the lockfile's resolved `@_linked/core` is still 2.45.0; it is refreshed when
   the server's release PR installs core 2.46 from npm.
-- CN N1 rebases on this, rebuilds the server checkout and relinks.
+- The host app's step N1 rebases on this, rebuilds the server checkout and relinks.
 
 ## Details
 

@@ -96,8 +96,8 @@ describe('LINKED_GRAPH_WRITER', () => {
     expect(graphWriterFromEnv({ LINKED_GRAPH_WRITER: '' })).toBe('app');
     expect(graphWriterFromEnv({ LINKED_GRAPH_WRITER: 'app' })).toBe('app');
     expect(graphWriterFromEnv({ LINKED_GRAPH_WRITER: 'host' })).toBe('host');
-    expect(() => graphWriterFromEnv({ LINKED_GRAPH_WRITER: 'cn' })).toThrow(
-      `LINKED_GRAPH_WRITER must be 'app' or 'host' (who writes the app's shape and ontology graphs), not "cn"`,
+    expect(() => graphWriterFromEnv({ LINKED_GRAPH_WRITER: 'other' })).toThrow(
+      `LINKED_GRAPH_WRITER must be 'app' or 'host' (who writes the app's shape and ontology graphs), not "other"`,
     );
     expect(appWritesGraphs({ LINKED_GRAPH_WRITER: 'host' })).toBe(false);
     expect(appWritesGraphs({})).toBe(true);
@@ -129,7 +129,7 @@ describe('LINKED_GRAPH_WRITER', () => {
     expect(received).toBeGreaterThan(0);
   });
 
-  it("the app writer with linked.config syncShapesOnBoot: false: the boot sends no graph query", async () => {
+  it("the app writer with linked.app.json syncShapesOnBoot: false: the boot sends no graph query", async () => {
     delete process.env[GRAPH_WRITER_ENV];
     const { sent, received } = await bootAndGraphContent({ syncShapesOnBoot: false });
     expect(sent).toBe(0);

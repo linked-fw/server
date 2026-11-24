@@ -72,4 +72,4 @@ parent. Not applied: warning about graph routes on the default dataset (outside 
 ### Follow-ups
 
 - Core backlog 076: the sync follows routing (option 2).
-- CN reads `graphTargets` (CN report on the global graph targets).
+- The host app reads `graphTargets` (its report on the global graph targets).

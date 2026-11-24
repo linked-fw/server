@@ -15,7 +15,7 @@ Source: core master plan 111 (one read method), owner decision 4; step S1 (repor
 `src/utils/queryPlane.ts`) answers select, count and ask. A body of kind `triples` or
 `triples_terms` answers 400 ("This server's readQuery does not answer triples reads"), and
 `RemoteDataset.readQuery` refuses both kinds without sending them; its `supports` lists `ask` only
-(plus `transactions`). CN's gateway answers triples and terms reads on its own `readQuery`, under
+(plus `transactions`). A host's gateway can answer triples and terms reads on its own `readQuery`, under
 its `triples` operation.
 
 To do:

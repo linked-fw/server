@@ -4,18 +4,18 @@ summary: >
   and the `x-app-admin-secret` header (`x-cn-admin-secret` as a deprecated fallback), each old
   name logged once per process; without a secret every `/admin/*` route still answers 404. New
   `GET /admin/routes` answers the effective graph routes per dataset (shape IRI → graph IRI) and
-  each dataset's default-graph shapes, read through core's public routing accessors. CN plan 071,
+  each dataset's default-graph shapes, read through core's public routing accessors. The host app's plan,
   step V3.
 packages: [server]
 ---
 
 # 015 — Admin secret and effective routes
 
-## Plan-mode detail (CN plan 071 §V3 is the sub-plan)
+## Plan-mode detail (the host app's plan §V3 is the sub-plan)
 
-**Contract:** §Graph routing (routes are written only in the app's storage file; CN checks what
+**Contract:** §Graph routing (routes are written only in the app's storage file; the host app checks what
 runs through `GET /admin/routes`); open question 5, "1b" and "Admin secret rename" (the
-open-source server never names CN; `APP_ADMIN_SECRET`, `CN_APP_ADMIN_SECRET` read as a deprecated
+open-source server never names the host app; `APP_ADMIN_SECRET`, `CN_APP_ADMIN_SECRET` read as a deprecated
 fallback).
 
 **Core accessors used (all public, `@_linked/core/utils/*`):** `LinkedStorage.getDatasets()`,
@@ -31,7 +31,7 @@ deprecation warnings, the route), `src/utils/effectiveRoutes.ts` (new), `src/sha
 **Phases:** 1. Rename, fallback, route, tests. 2. Full gate, live check on a booted app, changeset,
 backlog, this record, landing.
 
-**Pitfalls:** CN sends `x-cn-admin-secret` and sets `CN_APP_ADMIN_SECRET` until C6, so both old
+**Pitfalls:** the host app sends `x-cn-admin-secret` and sets `CN_APP_ADMIN_SECRET` until C6, so both old
 names must keep working. The server never sees the storage config's aliases, so a dataset in the
 body cannot be named by its alias (backlog 004). A module that evaluates twice must still warn
 once (the warned set lives on the shared global).
@@ -44,8 +44,8 @@ once (the warned set lives on the shared global).
   route answers 404, as before. Exported constants `ADMIN_SECRET_ENV`, `LEGACY_ADMIN_SECRET_ENV`,
   `ADMIN_SECRET_HEADER`, `LEGACY_ADMIN_SECRET_HEADER`.
 - **Header**: `x-app-admin-secret`, else `x-cn-admin-secret` with one warning per process. The
-  header rename is not in §V3's text; it follows the same owner rule (the server must not name CN)
-  and keeps the old header working, so CN is unaffected until it switches (C6).
+  header rename is not in §V3's text; it follows the same owner rule (the server must not name the host app)
+  and keeps the old header working, so the host app is unaffected until it switches (C6).
 - **`GET /admin/routes`** → 200:
 
   ```json
@@ -59,8 +59,8 @@ once (the warned set lives on the shared global).
   sorted. A sub-shape that inherits a super-shape's route appears in neither list. A thrown read
   answers 500 `{error}`. A handler override `routes` exists for tests and hosts embedding the
   channel.
-- Comments and readme in the admin-channel area no longer name CN ("a host"). Elsewhere (ontology
-  sync's "a CN clone's packages", `RemoteDataset`'s "CN's gateway", `syncShapesOnBoot`'s "CN sets")
+- Comments and readme in the admin-channel area no longer name the host app ("a host"). Elsewhere (ontology
+  sync's "a host app clone's packages", `RemoteDataset`'s "the host app's gateway", `syncShapesOnBoot`'s "the host app sets")
   are examples outside the channel, left as they are.
 
 ## Deviations
@@ -108,14 +108,14 @@ npx linked build  11.05s user 1.30s system 174% cpu 7.095 total
    `resolveAdminSecret` reads `APP_ADMIN_SECRET` without a warning, prefers it over the old name,
    falls back to `CN_APP_ADMIN_SECRET` with one warning (a later call warns no more); a channel
    opened with either name answers the route.
-2. **A booted app.** The worktree's CN (an app on this server) on :4291 against an own Fuseki
+2. **A booted app.** The worktree's host app (an app on this server) on :4291 against an own Fuseki
    (`ghcr.io/linked-fw/fuseki:6.2.0-2`, container `fuseki-071-v3` on :3192, since :3191 was held by
    another run's `linked-core-test-fuseki-1`; removed afterwards), `FUSEKI_BASE_URL` and
-   `FUSEKI_ADMIN_URL` both at it, `FUSEKI_DATASET=cn-wt-v3`:
+   `FUSEKI_ADMIN_URL` both at it, `FUSEKI_DATASET=app-wt-v3`:
    - `APP_ADMIN_SECRET=v3-live-secret`: no header → 401; with `x-app-admin-secret` → 200,
-     `{"datasets":[{"store":"AppDataRouter","default":true,"routes":{},"defaultGraphShapes":["https://id.create.now/shape/create-now/BridgeShape", …`;
+     `{"datasets":[{"store":"AppDataRouter","default":true,"routes":{},"defaultGraphShapes":["https://example.org/shape/my-app/BridgeShape", …`;
      per dataset `[('AppDataRouter', True, 0, 84), ('FusekiStore', False, 0, 24), ('FusekiStore', False, 0, 7), ('FusekiStore', False, 0, 4), ('Object', False, 0, 1)]`
-     (store, default, routes, default-graph shapes). CN's process routes nothing through
+     (store, default, routes, default-graph shapes). The host app's process routes nothing through
      `LinkedStorage` (its per-branch routes live on the branch stores), so `routes` is empty.
    - `CN_APP_ADMIN_SECRET=v3-legacy-secret` only: `x-app-admin-secret 200`, `x-cn-admin-secret 200`
      twice; the log has each warning once:
@@ -144,7 +144,7 @@ npx linked build  10.60s user 1.09s system 176% cpu 6.623 total
 
 - Backlog [004](../backlog/004-dataset-names-in-admin-routes.md): datasets in the route are told
   apart by class, `id` and `default`; naming them by the storage config's alias needs core.
-- C6 (CN plan 071): CN sets `APP_ADMIN_SECRET` for apps and sends `x-app-admin-secret`; then the
+- C6 (the host app's plan): the host app sets `APP_ADMIN_SECRET` for apps and sends `x-app-admin-secret`; then the
   deprecation warnings stop.
 - R2: raise `@_linked/core` to the release with `getShapeGraphs` / `graphRoutingFor`.
 

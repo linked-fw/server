@@ -9,7 +9,7 @@ summary: >
 
 # 010 — Ontology sync and the shape check in the server
 
-Part of CN plan 070 (the store infers; ontology data in every app dataset), §Control route.
+Part of the host app's plan (the store infers; ontology data in every app dataset), §Control route.
 
 ## Why
 
@@ -185,7 +185,7 @@ imports the real core).
 
 ## Notes for consumers
 
-- CN's host calls `/admin/sync-shapes` with a 60 s timeout (`ChildProcessProvisioner.ts`)
+- The host app calls `/admin/sync-shapes` with a 60 s timeout (`ChildProcessProvisioner.ts`)
   against the app's 120 s; the ontology sync adds a parse of every package's Turtle and, for a
   changed package, its writes (C3 owns the host side).
 - Until N1, N2 and P1 land, every unconverted JSON package is skipped with core's warning,

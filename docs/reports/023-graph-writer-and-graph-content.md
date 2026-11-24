@@ -1,6 +1,6 @@
 ---
 summary: >
-  Step SY of CN master plan 282, server half: the boot syncs and POST /admin/sync-shapes follow
+  Step SY of the host app's master plan, server half: the boot syncs and POST /admin/sync-shapes follow
   the storage routing through core's routed syncs; LINKED_GRAPH_WRITER=app|host (under host the
   app writes no graph); POST /admin/graph-content answers each graph's exact text and hash without
   writing (K3). Core half and the decision ledger: core report 084.
@@ -15,7 +15,7 @@ summary: >
 The server's boot ontology and shape syncs, and `POST /admin/sync-shapes`, now write each package's
 graphs into every dataset the app's routing needs them in (core's routed syncs, K4; core report
 084). A hosted app can be told to write no shape or ontology graph (`LINKED_GRAPH_WRITER=host`) and
-to answer their content instead (`POST /admin/graph-content`, K3), so CN can become the only
+to answer their content instead (`POST /admin/graph-content`, K3), so the host app can become the only
 writer (step HS). `/admin/sync-shapes` and `LINKED_SYNC_*_ON_BOOT` stay (M5).
 
 ### Changes
@@ -58,7 +58,7 @@ From `/Users/rene/web/wt/hub-imports--sy/packages-local/_linked-server`, after c
   `Tests: 2 passed, 2 total`.
 - `tsc -p tsconfig-tests.json --noEmit`: one error, `src/shapes/LincdWebApp.ts:23` (two core
   copies in the worktree install), the same as before the change.
-- CN typecheck and Vitest: see core report 084 (0 errors with one core copy; 15/15 Vitest).
+- The host app's typecheck and Vitest: see core report 084 (0 errors with one core copy; 15/15 Vitest).
 
 ### Deviations
 
@@ -68,7 +68,7 @@ From `/Users/rene/web/wt/hub-imports--sy/packages-local/_linked-server`, after c
 
 ### Follow-ups
 
-- Step HS: CN sets `LINKED_GRAPH_WRITER=host`, reads `POST /admin/graph-content`, and removes
+- Step HS: the host app sets `LINKED_GRAPH_WRITER=host`, reads `POST /admin/graph-content`, and removes
   `/admin/sync-shapes` and the boot flags (server plan 001 §HS, M5).
 - The rest: core report 084 §Follow-ups.
 

@@ -45,11 +45,11 @@ Core report 103's forwarding contract on the server side:
 
 ### Review
 
-Reviewed with CN's report 381 (independent review, two rounds); the server's findings fixed:
+Reviewed with the host app's report (independent review, two rounds); the server's findings fixed:
 refusals before the transaction left it open; a graph query with a txId ran outside; unsupported
 answered after unknown; an unresolved query context ended the transaction; expiry while a query ran.
 
 ### Follow-ups
 
-- `ForwardedTransactions` is duplicated in `@semantu/execution-gateway` (CN): move it into core.
+- `ForwardedTransactions` is duplicated in the host app's execution gateway: move it into core.
 - No per-caller cap on open transactions.

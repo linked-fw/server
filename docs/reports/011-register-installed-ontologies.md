@@ -3,7 +3,7 @@ summary: >
   Before the ontology sync and the shape check, at boot and on `POST /admin/sync-shapes`, every
   linked package the server discovered in the app's dependency tree registers its ontologies
   (core `registerInstalledOntologies`), so a package the app only deep-imports shape files from
-  (`@_linked/schema/shapes/Person`) is synced and checked. CN plan 070, §Installed packages'
+  (`@_linked/schema/shapes/Person`) is synced and checked. The host app's plan, §Installed packages'
   ontologies.
 ---
 
@@ -101,7 +101,7 @@ stored: false
 
 ## Notes for consumers
 
-- CN (C2) syncs cn-main itself with boot shape sync off; it calls core's
+- The host app (C2) syncs app-main itself with boot shape sync off; it calls core's
   `registerInstalledOntologies` with its own package directories before its `syncOntologies`.
 - In dev (`linked start`) the register modules are imported by Node; for a package the SSR runner
   bundles that is a second evaluation, whose registration replaces the runner's (core report 045).

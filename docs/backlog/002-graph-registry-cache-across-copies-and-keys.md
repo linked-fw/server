@@ -9,7 +9,7 @@ packages: [server, core]
 
 # 002 — Graph registry cache: copies of core and targeted invalidation
 
-Source: CN plan 071, server report 013.
+Source: server report 013.
 
 ## 1. Two copies of core keep two caches
 
@@ -54,8 +54,8 @@ in `two-copies-built.test.ts` (core backlog 060). Fix with core's.
   for every user of the process. Records name graphs and packages, not data; whether the read
   should run as the service (no end user) is a design choice. A refused read leaves the names
   unexpanded, so nothing breaks.
-- **Fork staleness of the key.** `RemoteDataset` memoizes its `ping`, so after CN forks a branch
-  the key still names main's dataset. Harmless while the route drops every entry (item 2).
+- **Fork staleness of the key.** `RemoteDataset` memoizes its `ping`, so after a host forks a
+  branch the key still names main's dataset. Harmless while the route drops every entry (item 2).
 - **Bad record fields answer 500.** `parseGraphQuery` does not check `record` fields or the
   record class; core's record builder (`graphRecords.ts`) throws a plain `Error`, so the plane
   answers 500, not 400. Needs core to brand those errors (`GraphQueryError` with a new code) or

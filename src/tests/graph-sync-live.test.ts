@@ -16,8 +16,7 @@ const DATASET = `server-graph-sync-${process.pid}-${Date.now()}`;
 process.env.SITE_ROOT ??= 'http://app.test:4000';
 const { LinkedStorage } = await import('@_linked/core/utils/LinkedStorage');
 const { SparqlDataset } = await import('@_linked/core/sparql/SparqlDataset');
-const { linkedPackage } = await import('@_linked/core/utils/Package');
-const { createNameSpace } = await import('@_linked/core/utils/NameSpace');
+const { registerTestOntology } = await import('./register-test-ontology.js');
 const { OntologyGraph } = await import('@_linked/core/shapes/NamedGraph');
 const { withAccess } = await import('@_linked/server-utils/utils/QueryAccess');
 const { LinkedServer, registerCallRoutes } = await import('../shapes/LinkedServer.js');
@@ -53,13 +52,21 @@ class LiveFuseki extends (SparqlDataset as any) {
 
 const EX = 'http://example.org/server-graph-sync/';
 const PACKAGES = ['server-graph-sync-a', 'server-graph-sync-b'];
-linkedPackage(PACKAGES[0]).linkedOntology({}, createNameSpace(`${EX}a/`), 'gsa', async () => [
-  `<${EX}a/Dog> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${EX}a/Animal> .\n` +
-    `<${EX}a/Dog> <http://www.w3.org/2000/01/rdf-schema#label> "Dog" .`,
-], '../data/a.ttl');
-linkedPackage(PACKAGES[1]).linkedOntology({}, createNameSpace(`${EX}b/`), 'gsb', async () => [
-  `<${EX}b/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${EX}a/Animal> .`,
-], '../data/b.ttl');
+registerTestOntology(PACKAGES[0], {
+  name: 'gsa',
+  namespace: `${EX}a/`,
+  load: async () => [
+    `<${EX}a/Dog> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${EX}a/Animal> .\n` +
+      `<${EX}a/Dog> <http://www.w3.org/2000/01/rdf-schema#label> "Dog" .`,
+  ],
+  files: '../data/a.ttl',
+});
+registerTestOntology(PACKAGES[1], {
+  name: 'gsb',
+  namespace: `${EX}b/`,
+  load: async () => [`<${EX}b/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <${EX}a/Animal> .`],
+  files: '../data/b.ttl',
+});
 
 const servers: any[] = [];
 let base = '';
