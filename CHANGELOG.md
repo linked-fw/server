@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 4.0.1
+
+### Patch Changes
+
+- [#237](https://github.com/linked-fw/server/pull/237) [`99c0013`](https://github.com/linked-fw/server/commit/99c0013ca23f625b97b5fbbc26794d8dd31c6c44) Thanks [@flyon](https://github.com/flyon)! - Depends on @_linked/cli ^2.0.0 (was ^1.58.0)
+
 ## 4.0.0
 
 ### Major Changes
